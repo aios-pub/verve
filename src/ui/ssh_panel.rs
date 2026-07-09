@@ -1,0 +1,951 @@
+//! SSH management panel — the full-bleed "SSH 管理" view.
+//!
+//! Two layouts:
+//! - **HostList**: a responsive card grid of saved SSH hosts + "new host" button.
+//! - **Terminal**: (planned) multi-tab terminal sessions.
+//!
+//! The panel is an exclusive view (`SideView::Ssh`), replacing the entire
+//! workbench — just like `ProjectManage` and `Share`.
+
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use gpui_component::{
+    ActiveTheme, IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex, WindowExt as _,
+};
+
+use crate::ssh::host_store;
+use crate::ssh::models::{SshHost, SshHostType};
+use crate::ssh::terminal::TerminalView;
+
+/// Events the SSH panel emits upward.
+#[derive(Clone, Debug)]
+pub enum SshEvent {
+    NewHost,
+    EditHost(String),
+    Connect(String),
+}
+
+/// Messages from the SSH pump thread back to GPUI's executor.
+enum PumpMsg {
+    Data(Vec<u8>),
+    InputTx(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
+    ResizeTx(tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>),
+    Closed(Option<u32>),
+    Error(String),
+    Disconnected,
+}
+
+/// One active terminal session.
+pub struct TerminalSession {
+    pub host_name: String,
+    pub terminal: Entity<TerminalView>,
+    /// Input sender for writing keystrokes to SSH.
+    pub input_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    /// Resize sender for terminal size changes.
+    pub resize_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>,
+    /// Status of the connection.
+    pub status: SessionStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionStatus {
+    Connecting,
+    Connected,
+    Reconnecting(usize),  // attempt number
+    Error(String),
+    Closed,
+}
+
+pub struct SshPanel {
+    /// Cached host list, reloaded on render when stale.
+    pub hosts: Vec<SshHost>,
+    /// Set true when the data may have changed; triggers a reload on render.
+    pub stale: bool,
+    /// Expanded bastion card ids.
+    pub expanded_bastions: std::collections::HashSet<String>,
+    /// Active terminal sessions (one per tab).
+    pub sessions: Vec<TerminalSession>,
+    /// Index of the active tab.
+    pub active_tab: usize,
+    /// Pending connection requests (processed in render where a Window exists).
+    pub pending_connect: Option<SshHost>,
+    /// When true, show the host picker overlay (for starting new connections
+    /// without closing existing sessions).
+    pub show_host_picker: bool,
+    focus_handle: FocusHandle,
+    _subs: Vec<gpui::Subscription>,
+}
+
+impl EventEmitter<SshEvent> for SshPanel {}
+
+impl SshPanel {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+        let hosts = host_store::load_hosts();
+        Self {
+            hosts,
+            stale: false,
+            expanded_bastions: std::collections::HashSet::new(),
+            sessions: Vec::new(),
+            active_tab: 0,
+            pending_connect: None,
+            show_host_picker: false,
+            focus_handle,
+            _subs: Vec::new(),
+        }
+    }
+
+    /// Reload the cached hosts from disk.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.hosts = host_store::load_hosts();
+        self.stale = false;
+        cx.notify();
+    }
+}
+
+impl Render for SshPanel {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.stale {
+            self.reload(cx);
+        }
+        // Reload hosts if the picker is about to be shown (ensure fresh list).
+        if self.show_host_picker && self.hosts.is_empty() {
+            self.hosts = host_store::load_hosts();
+        }
+        // Process pending connection.
+        if let Some(host) = self.pending_connect.take() {
+            self.start_session(host, cx);
+        }
+        let theme = cx.theme().clone();
+        let bg = theme.background;
+        let border = theme.border;
+        let muted = theme.muted_foreground;
+        let fg = theme.foreground;
+        let accent = theme.accent;
+
+        // Two modes: terminal sessions (if any) or host card grid.
+        // When show_host_picker is true and we have sessions, show the host
+        // picker as an overlay on top of the terminal view.
+        let has_sessions = !self.sessions.is_empty();
+        let show_picker = self.show_host_picker;
+
+        if has_sessions {
+            let terminal_view = self.render_terminal_view(cx, theme.clone());
+
+            if show_picker {
+                // Overlay: dimmed background + host card grid on top.
+                return v_flex()
+                    .size_full()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .bg(bg)
+                    .text_color(fg)
+                    .child(terminal_view)
+                    .child(self.render_host_picker_overlay(cx, theme))
+                    .into_any_element();
+            }
+            return terminal_view.into_any_element();
+        }
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .bg(bg)
+            .text_color(fg)
+            // Header bar — sits at the very top, SAME LINE as traffic-light
+            // buttons. Left padding (78px) clears them (like the API title bar).
+            .child(
+                h_flex()
+                    .h(px(44.))
+                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+                    .when(!cfg!(target_os = "macos"), |this| this.pl_4())
+                    .pr_4()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("SSH 管理"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(muted)
+                            .text_sm()
+                            .pl_3()
+                            .child(format!("{} 台主机", self.hosts.len())),
+                    )
+                    .child(
+                        Button::new("ssh-new-host")
+                            .primary()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("新建主机")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_host_dialog(None, window, cx);
+                            })),
+                    ),
+            )
+            // Body: host card grid.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .id("ssh-host-scroll")
+                    .overflow_y_scroll()
+                    .p_4()
+                    .child(self.render_card_grid(cx, theme.clone())),
+            )
+            .into_any_element()
+    }
+}
+
+impl SshPanel {
+    fn render_card_grid(&self, cx: &mut Context<Self>, theme: gpui_component::Theme) -> impl IntoElement {
+        let panel = cx.entity();
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let fg = theme.foreground;
+        let accent = theme.accent;
+        let danger = theme.danger;
+
+        if self.hosts.is_empty() {
+            return v_flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .gap_3()
+                .child(
+                    div()
+                        .text_2xl()
+                        .child("🖥️"),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child("还没有 SSH 主机。点击右上角「新建主机」添加一台。"),
+                )
+                .into_any_element();
+        }
+
+        // Build a lookup for jump host names.
+        let host_name_of = |id: &str| -> String {
+            self.hosts
+                .iter()
+                .find(|h| h.id == id)
+                .map(|h| h.name.clone())
+                .unwrap_or_else(|| "(已删除)".into())
+        };
+
+        let grid = h_flex()
+            .flex_wrap()
+            .gap_3()
+            .children(self.hosts.iter().enumerate().map(|(ix, host)| {
+                let theme_c = theme.clone();
+                let theme_c2 = theme.clone();
+                let theme_c3 = theme.clone();
+                let host_id = host.id.clone();
+                let panel_c = panel.clone();
+                let host_id_edit = host.id.clone();
+                let host_id_del = host.id.clone();
+                let jump_name = host.bastion_id.as_ref().map(|jid| host_name_of(jid));
+
+                // Card: 200px wide, auto height.
+                v_flex()
+                    .id(("ssh-card", ix))
+                    .w(px(220.))
+                    .gap_2()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .bg(theme_c.background)
+                    .hover(|d| d.border_color(accent))
+                    // Top row: icon + name.
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .child("🖥️"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child(host.name.clone()),
+                            ),
+                    )
+                    // Address.
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(host.address_summary()),
+                    )
+                    // Auth type badge.
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .px_2()
+                                    .py(px(1.))
+                                    .rounded(px(3.))
+                                    .bg(theme_c.muted)
+                                    .child(host.auth_type.label().to_string()),
+                            )
+                            .when_some(jump_name.as_ref(), |row, name| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .px_2()
+                                        .py(px(1.))
+                                        .rounded(px(3.))
+                                        .bg(accent.opacity(0.2))
+                                        .text_color(accent)
+                                        .child(format!("🔗 {}", name)),
+                                )
+                            }),
+                    )
+                    // Actions.
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .mt_1()
+                            .child(
+                                Button::new(("ssh-connect", ix))
+                                    .primary()
+                                    .xsmall()
+                                    .label("连接")
+                                    .on_click(move |_, _window, cx: &mut App| {
+                                        let _ = panel_c.update(cx, |this, cx| {
+                                            // Find the host and start a session.
+                                            if let Some(host) = this.hosts.iter().find(|h| h.id == host_id).cloned() {
+                                                this.pending_connect = Some(host);
+                                                cx.notify();
+                                            }
+                                        });
+                                    }),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                Button::new(("ssh-edit", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Settings)
+                                    .tooltip("编辑")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_host_dialog(Some(&host_id_edit), window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(("ssh-delete", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Delete)
+                                    .text_color(danger)
+                                    .tooltip("删除")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.confirm_delete(&host_id_del, window, cx);
+                                    })),
+                            ),
+                    )
+            }))
+            // "New host" card.
+            .child(
+                v_flex()
+                    .id("ssh-new-card")
+                    .w(px(220.))
+                    .h(px(120.))
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_dashed()
+                    .border_color(border)
+                    .cursor_pointer()
+                    .hover(|d| d.border_color(accent).bg(accent.opacity(0.05)))
+                    .child(div().text_2xl().child("＋"))
+                    .child(div().text_sm().text_color(muted).child("新建主机"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_host_dialog(None, window, cx);
+                    })),
+            );
+
+        grid.into_any_element()
+    }
+
+    /// Open the host dialog for new or editing.
+    fn open_host_dialog(
+        &mut self,
+        editing: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editing_host = editing.and_then(|id| host_store::find_host(id));
+        let available = self.hosts.clone();
+        let panel = cx.entity();
+        crate::ui::ssh_host_dialog::open_dialog(
+            editing_host.as_ref(),
+            available,
+            move |_host, _window, cx: &mut App| {
+                let _ = panel.update(cx, |this, cx| {
+                    this.reload(cx);
+                });
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Confirm-then-delete a host.
+    fn confirm_delete(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let host_name = host_store::find_host(id)
+            .map(|h| h.name)
+            .unwrap_or_else(|| id.to_string());
+        let id_del = id.to_string();
+        let panel = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let host_name = host_name.clone();
+            dialog.title("确认删除").content(move |content, _, _| {
+                content.child(
+                    v_flex()
+                        .p_4()
+                        .w(px(360.))
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
+                                .child(format!(
+                                    "确定要删除主机「{}」吗？保存的密码/密钥也会一并删除。",
+                                    host_name
+                                )),
+                        ),
+                )
+            }).footer({
+                let id = id_del.clone();
+                let panel = panel.clone();
+                Button::new("confirm-ssh-delete")
+                    .primary()
+                    .small()
+                    .label("确认删除")
+                    .on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        host_store::remove_host(&id);
+                        let _ = panel.update(cx, |this, cx| {
+                            this.reload(cx);
+                        });
+                    })
+            })
+        });
+    }
+
+    /// Start a new SSH session.
+    fn start_session(&mut self, host: SshHost, cx: &mut Context<Self>) {
+        let host_name = host.name.clone();
+
+        // Force-switch to English input method on macOS when opening a new
+        // SSH session. Uses AppleScript to select the ABC/US keyboard layout.
+        // After this initial switch, the user can manually toggle to Chinese
+        // — we only force English at init, not block later IME changes.
+        #[cfg(target_os = "macos")]
+        {
+            std::thread::spawn(|| {
+                let _ = std::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(r#"tell application "System Events" to key code 102"#)
+                    .output();
+            });
+        }
+
+        // Create a terminal view with a wider initial size so ls uses multi-column.
+        let terminal = cx.new(|cx| TerminalView::new(180, 50, cx));
+
+        // Spawn the SSH connection on a background Tokio task.
+        let terminal_for_task = terminal.clone();
+        let host_for_task = host.clone();
+
+        cx.spawn(async move |_this, cx| {
+            let mut attempt = 0usize;
+            let max_attempts = 5;
+
+            loop {
+                attempt += 1;
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<
+                    crate::ssh::client::SshOutput,
+                >();
+
+                // For each (re)connect, create a fresh input_tx + resize_tx channel.
+                let (input_tx_tx, mut input_tx_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<
+                        tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+                    >();
+                let (resize_tx_tx, mut resize_tx_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<
+                        tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>,
+                    >();
+
+                // Show connecting / reconnecting status.
+                let status_msg = if attempt == 1 {
+                    None
+                } else {
+                    Some(format!("\r\n⟳ 正在重连（第 {} 次）…\r\n", attempt))
+                };
+                if let Some(msg) = status_msg {
+                    let _ = terminal_for_task.update(cx, |tv, cx| {
+                        tv.feed(msg.as_bytes());
+                        cx.notify();
+                    });
+                }
+
+                let host_connect = host_for_task.clone();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                    rt.block_on(async move {
+                        match crate::ssh::client::connect(&host_connect, 180, 50).await {
+                            Ok(mut session) => {
+                                let _ = input_tx_tx.send(session.input_tx);
+                                let _ = resize_tx_tx.send(session.resize_tx);
+                                while let Some(msg) = session.output_rx.recv().await {
+                                    if tx.send(msg).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("SSH connect attempt {}: {e}", attempt);
+                                let _ = tx.send(crate::ssh::client::SshOutput::Error(e));
+                            }
+                        }
+                    });
+                });
+
+                // Pump output to the terminal — run the select loop on a
+                // dedicated OS thread with its own Tokio runtime, since
+                // tokio::select! and mpsc::recv() require a Tokio context.
+                // Results are forwarded back to GPUI via channels.
+                let (pump_tx, mut pump_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    PumpMsg,
+                >();
+                let pump_tx_clone = pump_tx.clone();
+                let terminal_clone = terminal_for_task.clone();
+
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                    rt.block_on(async move {
+                        let mut disconnected = false;
+                        loop {
+                            tokio::select! {
+                                Some(tx) = input_tx_rx.recv() => {
+                                    let _ = pump_tx_clone.send(PumpMsg::InputTx(tx));
+                                }
+                                Some(rtx) = resize_tx_rx.recv() => {
+                                    let _ = pump_tx_clone.send(PumpMsg::ResizeTx(rtx));
+                                }
+                                msg = rx.recv() => {
+                                    let Some(msg) = msg else {
+                                        let _ = pump_tx_clone.send(PumpMsg::Disconnected);
+                                        break;
+                                    };
+                                    match msg {
+                                        crate::ssh::client::SshOutput::Data(data) => {
+                                            let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                        }
+                                        crate::ssh::client::SshOutput::Closed(code) => {
+                                            let _ = pump_tx_clone.send(PumpMsg::Closed(code));
+                                            disconnected = false;
+                                            break;
+                                        }
+                                        crate::ssh::client::SshOutput::Error(e) => {
+                                            let _ = pump_tx_clone.send(PumpMsg::Error(e));
+                                            disconnected = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if disconnected {
+                            let _ = pump_tx_clone.send(PumpMsg::Disconnected);
+                        }
+                    });
+                });
+
+                // Receive pump messages on GPUI's executor and update the terminal.
+                let mut got_disconnected = false;
+                while let Some(msg) = pump_rx.recv().await {
+                    match msg {
+                        PumpMsg::Data(data) => {
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.feed(&data);
+                                cx.notify();
+                            });
+                        }
+                        PumpMsg::InputTx(tx) => {
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.set_input_tx(tx);
+                                tv.status_connected();
+                                cx.notify();
+                            });
+                        }
+                        PumpMsg::ResizeTx(rtx) => {
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.set_resize_tx(rtx);
+                                tv.send_window_change(tv.cols, tv.rows);
+                                cx.notify();
+                            });
+                        }
+                        PumpMsg::Closed(code) => {
+                            let m = format!("\r\n[会话结束，退出码: {:?}]\r\n", code);
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.feed(m.as_bytes());
+                                cx.notify();
+                            });
+                            got_disconnected = false;
+                            break;
+                        }
+                        PumpMsg::Error(e) => {
+                            log::warn!("SSH session error (attempt {}): {}", attempt, e);
+                            let m = format!("\r\n连接错误: {}\r\n", e);
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.feed(m.as_bytes());
+                                cx.notify();
+                            });
+                            got_disconnected = true;
+                            break;
+                        }
+                        PumpMsg::Disconnected => {
+                            got_disconnected = true;
+                            break;
+                        }
+                    }
+                }
+
+                if !got_disconnected {
+                    break;
+                }
+
+                if attempt >= max_attempts {
+                    let msg = format!(
+                        "\r\n✕ 重连失败（已尝试 {} 次）。请检查网络后重新连接。\r\n",
+                        max_attempts
+                    );
+                    let _ = terminal_for_task.update(cx, |tv, cx| {
+                        tv.feed(msg.as_bytes());
+                        cx.notify();
+                    });
+                    break;
+                }
+
+                // Exponential backoff: 1s, 2s, 4s, 8s, 16s.
+                let delay = std::time::Duration::from_secs(1 << (attempt - 1).min(4));
+                let _ = terminal_for_task.update(cx, |tv, cx| {
+                    tv.feed(format!("\r\n⏳ {} 秒后重连…\r\n", delay.as_secs()).as_bytes());
+                    cx.notify();
+                });
+                // Use smol::Timer (GPUI's executor) instead of tokio::time::sleep
+                // — we're on GPUI's async executor, NOT a Tokio runtime.
+                cx.background_executor().timer(delay).await;
+            }
+        })
+        .detach();
+
+        // Add the session tab.
+        self.sessions.push(TerminalSession {
+            host_name,
+            terminal,
+            input_tx: None,
+            resize_tx: None,
+            status: SessionStatus::Connecting,
+        });
+        self.active_tab = self.sessions.len() - 1;
+        cx.notify();
+    }
+
+    /// Render the multi-tab terminal view.
+    fn render_terminal_view(
+        &mut self,
+        cx: &mut Context<Self>,
+        theme: gpui_component::Theme,
+    ) -> impl IntoElement {
+        let bg = theme.background;
+        let border = theme.border;
+        let muted = theme.muted_foreground;
+        let fg = theme.foreground;
+        let accent = theme.accent;
+        let active = self.active_tab;
+
+        // Safety: we know sessions is non-empty (checked in render).
+        let active_terminal = self
+            .sessions
+            .get(active)
+            .map(|s| s.terminal.clone())
+            .unwrap_or_else(|| {
+                self.sessions
+                    .first()
+                    .map(|s| s.terminal.clone())
+                    .expect("sessions non-empty")
+            });
+
+        let active_status = self
+            .sessions
+            .get(active)
+            .map(|s| s.status.clone())
+            .unwrap_or(SessionStatus::Closed);
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .bg(bg)
+            .text_color(fg)
+            // Tab bar — sits at the very top, SAME LINE as the macOS
+            // traffic-light buttons. Left padding (78px) clears them.
+            // No top spacing — the bar IS the top bar (like Safari tabs).
+            .child(
+                h_flex()
+                    .h(px(38.))
+                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+                    .when(!cfg!(target_os = "macos"), |this| this.pl_2())
+                    .pr_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(border)
+                    .bg(theme.muted)
+                    .children(self.sessions.iter().enumerate().map(|(i, s)| {
+                        let is_active = i == active;
+                        let host_name = s.host_name.clone();
+                        let tc = theme.clone();
+                        h_flex()
+                            .id(("ssh-tab", i))
+                            .px_3()
+                            .h(px(28.))
+                            .items_center()
+                            .gap_2()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .when(is_active, |d| {
+                                d.bg(tc.accent.opacity(0.5))
+                                    .text_color(tc.foreground)
+                            })
+                            .when(!is_active, |d| {
+                                d.text_color(tc.muted_foreground)
+                                    .hover(|s| s.bg(tc.muted))
+                            })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(host_name.clone()),
+                            )
+                            .child(
+                                gpui_component::button::Button::new(("ssh-tab-close", i))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_session(i, cx);
+                                    })),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.active_tab = i;
+                                cx.notify();
+                            }))
+                    }))
+                    // "+" button to open host list and start a new connection.
+                    .child(
+                        gpui_component::button::Button::new("ssh-new-conn")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .tooltip("新建连接")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                // Show host list overlay — keep existing sessions alive.
+                                this.show_host_picker = true;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            // Terminal area — scrollable so all content is visible.
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .id("ssh-terminal-area")
+                    .overflow_y_scroll()
+                    .child(active_terminal.clone()),
+            )
+            // Status bar.
+            .child(
+                h_flex()
+                    .h(px(24.))
+                    .px_3()
+                    .items_center()
+                    .border_t_1()
+                    .border_color(border)
+                    .bg(theme.muted)
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(match &active_status {
+                                SessionStatus::Connected => gpui::hsla(0.33, 0.6, 0.4, 1.0),
+                                SessionStatus::Connecting => accent,
+                                SessionStatus::Reconnecting(_) => accent,
+                                SessionStatus::Error(_) => theme.danger,
+                                SessionStatus::Closed => muted,
+                            })
+                            .child(match &active_status {
+                                SessionStatus::Connected => "● 已连接".to_string(),
+                                SessionStatus::Connecting => "○ 连接中…".to_string(),
+                                SessionStatus::Reconnecting(n) => format!("⟳ 重连中（第 {} 次）", n),
+                                SessionStatus::Error(e) => format!("✕ {e}"),
+                                SessionStatus::Closed => "○ 已断开".to_string(),
+                            }),
+                    )
+                    .child(div().flex_1()),
+            )
+    }
+
+    /// Close a terminal session by tab index.
+    fn close_session(&mut self, idx: usize, cx: &mut Context<Self>) {
+        // Drop the input sender to signal the background task to stop.
+        if idx < self.sessions.len() {
+            self.sessions[idx].input_tx.take();
+            self.sessions.remove(idx);
+            if self.active_tab >= self.sessions.len() && !self.sessions.is_empty() {
+                self.active_tab = self.sessions.len() - 1;
+            }
+            if self.sessions.is_empty() {
+                self.active_tab = 0;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Render a host-picker overlay for starting new connections.
+    fn render_host_picker_overlay(
+        &mut self,
+        cx: &mut Context<Self>,
+        theme: gpui_component::Theme,
+    ) -> impl IntoElement {
+        let bg = theme.background;
+        let border = theme.border;
+        let muted = theme.muted_foreground;
+        let panel = cx.entity();
+
+        v_flex()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(gpui::black().opacity(0.4))
+            .items_start()
+            .pt(px(50.))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                this.show_host_picker = false;
+                cx.notify();
+            }))
+            .child(
+                v_flex()
+                    .id("host-picker-panel")
+                    .mt(px(44.))
+                    .ml(px(80.))
+                    .w(px(360.))
+                    .max_h(px(500.))
+                    .bg(bg)
+                    .border_1()
+                    .border_color(border)
+                    .rounded_md()
+                    .shadow_md()
+                    .overflow_y_scroll()
+                    .on_mouse_down(MouseButton::Left, |_event, _window, cx: &mut App| {
+                        // Prevent the backdrop's on_mouse_down from closing the picker
+                        // when the user clicks inside the panel.
+                        cx.stop_propagation();
+                    })
+                    .child(
+                        h_flex()
+                            .h(px(36.))
+                            .px_3()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(border)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("选择主机连接"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                gpui_component::button::Button::new("picker-close")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.show_host_picker = false;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .children(self.hosts.iter().enumerate().map(|(i, host)| {
+                        let host_id = host.id.clone();
+                        let host_name = host.name.clone();
+                        let host_addr = host.address_summary();
+                        let tc = theme.clone();
+                        let panel_c = panel.clone();
+
+                        h_flex()
+                            .id(("picker-host", i))
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .gap_2()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|d| d.bg(tc.muted))
+                            .child(div().text_lg().child("🖥️"))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(host_name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(host_addr),
+                                    ),
+                            )
+                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx: &mut App| {
+                                cx.stop_propagation();
+                                let _ = panel_c.update(cx, |this, cx| {
+                                    if let Some(h) = this.hosts.iter().find(|h| h.id == host_id).cloned() {
+                                        this.pending_connect = Some(h);
+                                    }
+                                    this.show_host_picker = false;
+                                    cx.notify();
+                                });
+                            })
+                    })),
+            )
+    }
+}

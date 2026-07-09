@@ -1,0 +1,204 @@
+view:
+  api: API
+  autotest: Automated Testing
+  share: Documentation
+  project_manage: Project
+  environments: Environments
+  mock: Mock Server
+  history: History
+  ssh: SSH
+
+title:
+  brand: V
+  share_project: Share Project Docs
+  share_single: Share API Docs
+  sync: Sync
+  import: Import
+  export_md: Export Markdown
+
+settings:
+  title: Settings
+  general: General
+  environments: Environments
+  about: About
+  close: Close
+  home_view: Home View
+  home_view_desc: Choose which module the brand mark "V" opens. The selected module is hidden from the activity rail.
+  current: Current
+  language: Interface Language
+  language_desc: Switch the application interface language.
+
+update:
+  title: Check for Updates
+  desc: Check GitHub for a newer release. If available, open the download page to get the installer for your platform.
+  check_now: Check Now
+  checking: Checking…
+  download: Download
+  up_to_date: You're on the latest version
+  found: Update available
+  error: Update check failed
+
+req_tab:
+  headers: Headers
+  query: Params
+  path: Path Variables
+  body: Body
+  auth: Auth
+  cookie: Cookies
+  pre_request: Pre-request Script
+  post_request: Tests
+
+common:
+  send: Send
+  cancel: Cancel
+  confirm: Confirm
+  delete: Delete
+  save: Save
+  create: Create
+  close: Close
+  copy: Copy
+  open: Open
+  search: Search APIs…
+  locate: Locate in Tree
+  add: Add
+  yes: Yes
+  no: No
+  ok: OK
+
+share:
+  title: Share Document
+  confirm: Create Share
+  result_title: Share Created
+  doc_title: Document Title
+  expire: Expiration
+  forever: Forever
+  days: "%{count} days"
+  method: Share Method
+  link: Link
+  qrcode: QR Code
+  export_html: Export HTML
+  access: Access Control
+  public: Public
+  password: Password
+  env: Environment
+  no_env: No Environment
+  field_display: Field Display
+  logo: Document Logo
+  pick_image: Choose Image
+  no_logo: No logo selected (optional)
+  selected: Selected
+  no_projects_env: This project has no environment variables
+  scan_qr: Scan QR code to access
+  view_link: "Access the document at the following link:"
+  expire_label: "Expires: %{expire}  ·  Access: %{access}"
+  doc_success: "Document \"%{title}\" shared successfully"
+
+share_panel:
+  title: Documentation
+  new_share: New Share
+  empty: No shared documents yet. Click "New Share" to create one.
+  col_status: Status
+  col_title: Title
+  col_scope: Scope
+  col_expire: Expires
+  col_access: Access
+  col_visits: Visits
+  col_created: Created
+  col_actions: Actions
+  status_active: Active
+  status_expired: Expired
+  confirm_delete: Confirm Delete
+  confirm_delete_msg: Are you sure you want to delete this share? This cannot be undone.
+  count_suffix: "%{count} share(s) in current project"
+  delete_in_server: Delete Share
+
+doc:
+  no_content: No shareable API documents
+  select_prompt: Select an API from the left to view its documentation
+  public_params: "📋 Public Parameters"
+  public_params_desc: These parameters apply to all APIs in this project
+  global_query: Global Query Parameters
+  global_header: Global Headers
+  env_vars: Environment Variables
+  default_module: Default Module
+  description: Description
+  path_params: Path Parameters
+  query_params: Query Parameters
+  headers: Headers
+  auth: Authentication
+  cookie: Cookies
+  body: Request Body
+  fields: Field Descriptions
+  params: Parameters
+  example: Response Example
+  mock: Mock
+  empty_detail: This API has no parameter descriptions, request body, or response examples yet.
+  empty_sub: Open this API in Verve, fill in request parameters, body, and description, then re-share.
+  col_name: Name
+  col_type: Type
+  col_required: Required
+  col_desc: Description
+  col_value: Example
+  col_var: Variable
+  col_initial: Initial Value
+  created_by: "Created by: %{name}"
+  created_at: "Created: %{name}"
+  updated_by: "Updated by: %{name}"
+  updated_at: "Updated: %{name}"
+  status: "Status: %{code}"
+  time_ms: "Time: %{count} ms"
+  size_b: "Size: %{count} B"
+  delay_ms: "Delay: %{count} ms"
+  scan_qr: Scan QR code to access
+
+field_type:
+  text: string
+  file: file
+  number: number
+  bool: bool
+  array: array
+  decimal: decimal
+  object: object
+
+server:
+  landing_title: Verve Server
+  landing_body: "Document sharing server is running (%{count} shares)"
+  admin_link: Visit the admin panel to upload projects and create shares.
+  not_found_404: The shared document does not exist or has been deleted.
+  expired: Document Expired
+  expired_msg: "The sharing period for \"%{title}\" has ended."
+  project_gone: Project Unavailable
+  project_gone_msg: "The project \"%{name}\" for this share is currently unavailable."
+  password_title: Password Required
+  password_desc: This document requires a password to access
+  password_placeholder: Enter password
+  password_submit: Access Document
+  password_wrong: Wrong password, please try again.
+
+admin:
+  title: "🗂️ Verve Documentation"
+  subtitle: Upload projects · Create shares · Browse API docs online
+  upload: 📤 Upload Project
+  upload_placeholder: Paste a Verve/Postman/Apipost exported project JSON (a single Project object).
+  upload_btn: Upload Project
+  create_share: 🔗 Create Share
+  share_title_label: Document Title
+  share_title_ph: Optional
+  access_label: Access Control
+  pw_label: Password
+  create_btn: Create Share
+  projects: "📋 Projects (%{count})"
+  col_name: Name
+  col_id: ID
+  col_action: Action
+  shares: "🌐 Shares (%{count})"
+  col_title: Title
+  col_project: Project
+  col_scope: Scope
+  col_expire: Expires
+  col_status: Status
+  upload_ok: "Upload succeeded: %{name}, refresh page to apply"
+  upload_fail: Upload failed
+  create_ok: Created successfully, refresh page to view
+  create_fail: Create failed
+  confirm_delete: Confirm delete? This action cannot be undone.

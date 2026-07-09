@@ -1,0 +1,204 @@
+view:
+  api: API 管理
+  autotest: 自动化测试
+  share: 文档管理
+  project_manage: 项目管理
+  environments: 环境变量
+  mock: Mock 服务
+  history: 历史记录
+  ssh: SSH 管理
+
+title:
+  brand: V
+  share_project: 分享当前项目文档
+  share_single: 分享当前接口文档
+  sync: 同步
+  import: 导入
+  export_md: 导出 Markdown
+
+settings:
+  title: 设置
+  general: 通用设置
+  environments: 环境管理
+  about: 关于
+  close: 关闭
+  home_view: 首页指向
+  home_view_desc: 选择品牌标识「V」点击后打开的模块。被选中的模块将自动从活动栏隐藏。
+  current: 当前
+  language: 界面语言
+  language_desc: 切换应用界面语言。
+
+update:
+  title: 检查更新
+  desc: 检查 GitHub 上是否有新版本发布。如有新版本，可前往下载页面获取对应平台的安装包。
+  check_now: 检查更新
+  checking: 正在检查…
+  download: 前往下载
+  up_to_date: 当前已是最新版本
+  found: 发现新版本
+  error: 检查更新失败
+
+req_tab:
+  headers: 请求头
+  query: 请求参数
+  path: 路径参数
+  body: 请求体
+  auth: 认证
+  cookie: Cookie
+  pre_request: 前置脚本
+  post_request: 后置脚本
+
+common:
+  send: 发送
+  cancel: 取消
+  confirm: 确认
+  delete: 删除
+  save: 保存
+  create: 创建
+  close: 关闭
+  copy: 复制
+  open: 打开
+  search: 搜索接口…
+  locate: 在树中定位
+  add: 添加
+  yes: 是
+  no: 否
+  ok: 确定
+
+share:
+  title: 分享文档
+  confirm: 创建分享
+  result_title: 分享已创建
+  doc_title: 文档标题
+  expire: 有效期
+  forever: 永久有效
+  days: "%{count} 天"
+  method: 分享方式
+  link: 链接
+  qrcode: 二维码
+  export_html: 导出 HTML
+  access: 访问限制
+  public: 公开
+  password: 密码
+  env: 开发环境
+  no_env: 无环境
+  field_display: 字段展示控制
+  logo: 文档 logo
+  pick_image: 选择图片
+  no_logo: 未选择 logo（可选）
+  selected: 已选
+  no_projects_env: 当前项目没有环境变量
+  scan_qr: 扫描二维码访问
+  view_link: 访问以下链接查看文档：
+  expire_label: "有效期：%{expire}  ·  访问限制：%{access}"
+  doc_success: "文档「%{title}」分享成功"
+
+share_panel:
+  title: 文档管理
+  new_share: 新建分享
+  empty: 还没有分享文档。点击右上角「新建分享」创建一个。
+  col_status: 状态
+  col_title: 标题
+  col_scope: 范围
+  col_expire: 有效期
+  col_access: 访问
+  col_visits: 访问次数
+  col_created: 创建时间
+  col_actions: 操作
+  status_active: 生效中
+  status_expired: 已过期
+  confirm_delete: 确认删除
+  confirm_delete_msg: 确定要删除分享吗？该操作不可撤销。
+  count_suffix: "当前项目共 %{count} 个分享"
+  delete_in_server: 删除分享
+
+doc:
+  no_content: 暂无可分享的接口文档
+  select_prompt: 选择左侧接口查看文档
+  public_params: "📋 公共参数说明"
+  public_params_desc: 以下参数将应用于本项目下所有接口
+  global_query: 全局请求参数
+  global_header: 全局请求头
+  env_vars: 环境变量
+  default_module: 默认模块
+  description: 接口描述
+  path_params: 路径参数
+  query_params: 请求参数
+  headers: 请求头
+  auth: 认证
+  cookie: Cookie
+  body: 请求体
+  fields: 字段说明
+  params: 参数
+  example: 返回示例
+  mock: Mock
+  empty_detail: 该接口暂未填写参数说明、请求体或响应示例。
+  empty_sub: 在 Verve 中打开此接口，补充请求参数、请求体、描述等信息后重新分享即可。
+  col_name: 参数名
+  col_type: 类型
+  col_required: 必填
+  col_desc: 说明
+  col_value: 示例值
+  col_var: 变量名
+  col_initial: 初始值
+  created_by: "创建者：%{name}"
+  created_at: "创建于：%{name}"
+  updated_by: "更新者：%{name}"
+  updated_at: "更新于：%{name}"
+  status: "状态：%{code}"
+  time_ms: "耗时：%{count} ms"
+  size_b: "大小：%{count} B"
+  delay_ms: "延迟：%{count} ms"
+  scan_qr: 扫描二维码访问
+
+field_type:
+  text: string
+  file: file
+  number: number
+  bool: bool
+  array: array
+  decimal: decimal
+  object: object
+
+server:
+  landing_title: Verve Server
+  landing_body: "文档分享服务运行中（%{count} 个分享）"
+  admin_link: 访问 管理后台 上传项目并创建分享。
+  not_found_404: 分享文档不存在或已被删除。
+  expired: 文档已过期
+  expired_msg: "「%{title}」的分享有效期已结束。"
+  project_gone: 项目不可用
+  project_gone_msg: "分享对应的项目「%{name}」当前无法访问。"
+  password_title: 密码访问
+  password_desc: 该文档需要密码访问
+  password_placeholder: 请输入密码
+  password_submit: 访问文档
+  password_wrong: 密码错误，请重试。
+
+admin:
+  title: "🗂️ Verve 文档管理"
+  subtitle: 上传项目 · 创建分享 · 在线浏览 API 文档
+  upload: 📤 上传项目
+  upload_placeholder: 粘贴 Verve/Postman/Apipost 导出的项目 JSON（单个 Project 对象）。
+  upload_btn: 上传项目
+  create_share: 🔗 创建分享
+  share_title_label: 文档标题
+  share_title_ph: 可选
+  access_label: 访问限制
+  pw_label: 密码
+  create_btn: 创建分享
+  projects: "📋 项目列表（%{count}）"
+  col_name: 名称
+  col_id: ID
+  col_action: 操作
+  shares: "🌐 分享列表（%{count}）"
+  col_title: 标题
+  col_project: 项目
+  col_scope: 范围
+  col_expire: 有效期
+  col_status: 状态
+  upload_ok: "上传成功：%{name}，刷新页面生效"
+  upload_fail: 上传失败
+  create_ok: 创建成功，刷新页面查看
+  create_fail: 创建失败
+  confirm_delete: 确认删除？此操作不可撤销。

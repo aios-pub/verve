@@ -1,0 +1,283 @@
+# Verve — cross-platform release pipeline.
+#
+# Triggers on version tags (v*) or manual dispatch. Builds native packages for
+# macOS (universal .dmg), Linux (.deb + tarball), and Windows (.msi + .zip),
+# then creates a GitHub Release with all artifacts + a latest.json update
+# manifest that the in-app auto-updater fetches.
+#
+# Tagging a release:
+#   git tag v0.2.0 && git push origin v0.2.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (without leading v)"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Determine version ─────────────────────────────────────────────────────
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "tag=v$V" >> $GITHUB_OUTPUT
+          echo "Release version: $V"
+
+  # ─── macOS ─────────────────────────────────────────────────────────────────
+  build-macos:
+    needs: meta
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build universal binary (aarch64 + x86_64)
+        run: |
+          cargo build --release --target aarch64-apple-darwin --bin verve
+          cargo build --release --target x86_64-apple-darwin --bin verve
+          # Lipo the two architectures into a single fat binary.
+          lipo -create -output target/verve-universal \
+            target/aarch64-apple-darwin/release/verve \
+            target/x86_64-apple-darwin/release/verve
+
+      - name: Build verve-server
+        run: cargo build --release --bin verve-server
+
+      - name: Create .app bundle
+        run: |
+          # Place the universal binary where cargo-bundle expects it.
+          cp target/verve-universal target/release/verve
+          cargo bundle --release --format app
+
+      - name: Create .dmg
+        run: |
+          hdiutil create -volname "Verve" \
+            -srcfolder target/release/bundle/osx/Verve.app \
+            -ov -format UDZO \
+            target/Verve-${{ needs.meta.outputs.version }}-macos.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            target/Verve-${{ needs.meta.outputs.version }}-macos.dmg
+            target/release/verve-server
+
+  # ─── Linux ────────────────────────────────────────────────────────────────
+  build-linux:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --bin verve
+
+      - name: Build verve-server
+        run: cargo build --release --bin verve-server
+
+      - name: Create .deb package
+        run: |
+          cargo deb --no-strip --output target/verve-${{ needs.meta.outputs.version }}-amd64.deb
+
+      - name: Create tarball
+        run: |
+          mkdir -p target/dist
+          cp target/release/verve target/dist/
+          cp assets/icons/verve.png target/dist/
+          cp assets/verve.desktop target/dist/
+          cp target/release/verve-server target/dist/
+          cd target/dist
+          tar czf ../verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            target/verve-${{ needs.meta.outputs.version }}-amd64.deb
+            target/verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz
+
+  # ─── Windows ──────────────────────────────────────────────────────────────
+  build-windows:
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --bin verve
+
+      - name: Build verve-server
+        run: cargo build --release --bin verve-server
+
+      - name: Create .msi installer
+        run: |
+          cargo wix --no-build -o target/Verve-${{ needs.meta.outputs.version }}-windows.msi
+
+      - name: Create .zip
+        run: |
+          mkdir -p target/dist
+          cp target/release/verve.exe target/dist/
+          cp assets/icons/verve.ico target/dist/
+          cp target/release/verve-server.exe target/dist/
+          cd target/dist
+          7z a ../Verve-${{ needs.meta.outputs.version }}-windows.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            target/Verve-${{ needs.meta.outputs.version }}-windows.msi
+            target/Verve-${{ needs.meta.outputs.version }}-windows.zip
+
+  # ─── Create GitHub Release + latest.json manifest ──────────────────────────
+  release:
+    needs: [meta, build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.msi" -o -name "*.zip" \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate latest.json update manifest
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}"
+          cat > release/latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "url": "${REPO_URL}/releases/tag/${TAG}",
+            "notes": "Verve ${VERSION}",
+            "platforms": {
+              "macos": {
+                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-macos.dmg"
+              },
+              "linux": {
+                "url": "${REPO_URL}/releases/download/${TAG}/verve-${VERSION}-amd64.deb"
+              },
+              "windows": {
+                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-windows.msi"
+              }
+            }
+          }
+          EOF
+          cat release/latest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: Verve ${{ needs.meta.outputs.version }}
+          body: |
+            ## Verve ${{ needs.meta.outputs.version }}
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS (Universal) | `Verve-${{ needs.meta.outputs.version }}-macos.dmg` |
+            | Linux (deb) | `verve-${{ needs.meta.outputs.version }}-amd64.deb` |
+            | Linux (tarball) | `verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz` |
+            | Windows (msi) | `Verve-${{ needs.meta.outputs.version }}-windows.msi` |
+            | Windows (zip) | `Verve-${{ needs.meta.outputs.version }}-windows.zip` |
+
+            `latest.json` is the auto-update manifest used by the in-app updater.
+          files: |
+            release/*.dmg
+            release/*.deb
+            release/*.tar.gz
+            release/*.msi
+            release/*.zip
+            release/latest.json
+          draft: false
+          prerelease: false

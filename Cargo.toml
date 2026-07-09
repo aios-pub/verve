@@ -1,0 +1,133 @@
+[package]
+name = "verve"
+version = "0.1.0"
+edition = "2021"
+description = "Verve — an offline-first API co-development platform built with gpui-component."
+publish = false
+authors = ["Verve"]
+license = "MIT"
+homepage = "https://github.com/lijingrs/verve"
+
+# macOS app bundle metadata (used by cargo-bundle).
+[package.metadata.bundle]
+name = "Verve"
+identifier = "com.verve.app"
+icon = ["assets/icons/verve.icns"]
+version = "0.1.0"
+resources = []
+copyright = "Copyright (c) 2026 Verve. All rights reserved."
+category = "Developer Tool"
+short_description = "API co-development platform"
+long_description = """
+Verve is an offline-first API co-development platform with HTTP debugging,
+SSH terminal, document sharing, and git sync — built with Rust + GPUI.
+"""
+
+# macOS bundle settings
+[package.metadata.bundle.osx]
+frameworks = []
+exception_domain = ""
+minimum_system_version = "11.0"
+# Use the dark mode-aware appearance.
+style = "dark"
+
+# Linux desktop entry metadata
+[package.metadata.deb]
+name = "verve"
+maintainer = "Verve"
+copyright = "2026, Verve"
+depends = ["libssl3 | libssl1.1"]
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/verve", "usr/bin/", "755"],
+    ["assets/icons/verve.png", "usr/share/icons/hicolor/512x512/apps/verve.png", "644"],
+    ["assets/verve.desktop", "usr/share/applications/verve.desktop", "644"],
+]
+
+# Windows installer metadata (cargo-wix / cargo-bundle)
+[package.metadata.wix]
+name = "Verve"
+manufacturer = "Verve"
+upgrade-guid = "12345678-1234-1234-1234-123456789012"
+license = "MIT"
+icon = "assets/icons/verve.ico"
+
+# Standalone document-sharing server binary for cloud/headless deployment.
+[[bin]]
+name = "verve-server"
+path = "src/bin/verve_server.rs"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = [
+    "font-kit",
+    "x11",
+    "wayland",
+    "runtime_shaders",
+] }
+gpui-component = { path = "../gpui-component/crates/ui" }
+gpui-component-assets = { path = "../gpui-component/crates/assets" }
+reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+futures = "0.3"
+url = "2"
+# Pure-Rust ECMAScript engine for pre/post-request scripts (PRD §5.2 `apt` API).
+boa_engine = "0.20"
+
+anyhow = "1"
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+# QR code generation for the document-sharing "二维码" share method (pure Rust).
+qrcode = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+rust-i18n = "=4.0.0"
+# Pin to match rust-i18n 4.0.0's non-feature-gated try_load_locales API.
+rust-i18n-support = "=4.0.0"
+
+# WebSocket (real) + a dedicated tokio runtime for it.
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "macros"] }
+futures-util = "0.3"
+
+# Pure-Rust git (gitoxide). Local ops + blocking network client (HTTPS via
+# reqwest/rustls, reusing the project's TLS backend). Network calls run on a
+# background executor so they never block the UI thread.
+gix = { version = "0.69", default-features = false, features = [
+    "worktree-mutation",
+    "tree-editor",
+    "status",
+    "blocking-network-client",
+    "blocking-http-transport-reqwest-rust-tls",
+    "credentials",
+] }
+
+# SSH client: russh (pure-Rust, no C deps) + terminal model + secure storage.
+russh = "0.60"
+alacritty_terminal = "0.24"
+aes-gcm = "0.10"
+argon2 = "0.5"
+zeroize = "1"
+secrecy = "0.8"
+bincode = "1"
+# Semantic version comparison for the auto-update check.
+semver = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+
+[lints.clippy]
+dbg_macro = "deny"
+style = { level = "allow", priority = -1 }
+module_inception = "allow"

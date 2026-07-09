@@ -1,0 +1,154 @@
+//! Central application state, shared across all panels via a single GPUI entity.
+
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global};
+
+use super::models::*;
+
+/// Events broadcast by [`AppState`] so panels can react to changes.
+#[derive(Clone, Debug)]
+pub enum AppEvent {
+    /// The workspace data changed structurally (projects/folders/requests) and
+    /// should be persisted + the tree refreshed.
+    WorkspaceChanged,
+    /// The active workspace was switched — the in-memory `data` was reloaded
+    /// from a different git branch's `workspace.json`. Panels should fully
+    /// re-seed (tree, switchers, inputs).
+    WorkspaceSwitched,
+    /// The selected request changed.
+    SelectionChanged,
+    /// A request's editable fields changed (debounced persist).
+    RequestEdited,
+    /// A response arrived for a request (payload = request id).
+    ResponseUpdated(String),
+    /// The active environment changed.
+    EnvironmentChanged,
+    /// Theme should toggle.
+    ToggleTheme,
+    /// Request to locate/scroll-to the active request in the tree.
+    LocateActive,
+    /// Request to share a single API document (payload = request id). Emitted
+    /// by the request panel's "share single API" button; handled by VerveApp.
+    ShareRequest(String),
+    /// A persist-to-disk just completed successfully. Git auto-sync hooks off
+    /// this so commits coalesce with the debounced save.
+    Persisted,
+}
+
+pub struct AppState {
+    pub data: WorkspaceData,
+    /// Index of the active project in `data.projects`.
+    pub active_project: usize,
+    /// Id of the active workspace (from `workspaces.json`). Tracked here so
+    /// the UI knows which workspace is current; the source of truth lives in
+    /// `workspaces.json` on disk.
+    pub active_workspace_id: Option<String>,
+    /// Currently selected request id (across the active project).
+    pub selected_request: Option<String>,
+    /// Currently selected folder id (when a directory node is clicked).
+    /// Mutually exclusive with `selected_request` (clicking a request clears
+    /// this, and vice-versa).
+    pub selected_folder: Option<String>,
+    /// Pending request id that is currently sending (drives the Send button spinner).
+    pub sending: Option<String>,
+    /// Dirty flag; cleared on persist.
+    pub dirty: bool,
+    /// Outstanding debounced-save timer; replaced on each edit so saves
+    /// coalesce ~1s after the last keystroke.
+    pub save_timer: Option<gpui::Task<()>>,
+}
+
+/// Global wrapper holding the single shared [`AppState`] entity.
+#[derive(Clone)]
+pub struct AppStateGlobal(pub Entity<AppState>);
+
+impl Global for AppStateGlobal {}
+
+impl AppState {
+    /// Create, register, and return the global app state entity.
+    pub fn init(cx: &mut App) -> Entity<Self> {
+        // Load the active workspace id from the cross-branch index, then load
+        // that workspace's data (workspace.json on the checked-out branch).
+        let ws_idx = super::persistence::load_workspaces_index();
+        let active_workspace_id = ws_idx.active.clone();
+        let data = super::persistence::load_or_default();
+        let entity: Entity<Self> = cx.new(|_| Self {
+            data,
+            active_project: 0,
+            active_workspace_id,
+            selected_request: None,
+            selected_folder: None,
+            sending: None,
+            dirty: false,
+            save_timer: None,
+        });
+        cx.set_global(AppStateGlobal(entity.clone()));
+        entity
+    }
+
+    /// Access the shared state entity registered with the app.
+    pub fn global(cx: &App) -> Entity<Self> {
+        cx.global::<AppStateGlobal>().0.clone()
+    }
+
+    pub fn active_project(&self) -> Option<&Project> {
+        self.data.projects.get(self.active_project)
+    }
+
+    /// Borrow the active project mutably.
+    pub fn active_project_mut(&mut self) -> Option<&mut Project> {
+        self.data.projects.get_mut(self.active_project)
+    }
+
+    /// Reload `workspace.json` from disk into `self.data`, resetting selection.
+    /// Called after a workspace branch switch (git checkout rewrites
+    /// `workspace.json` to the target workspace's content).
+    pub fn reload_from_disk(&mut self, active_workspace_id: Option<String>) {
+        self.data = super::persistence::load_or_default();
+        self.active_workspace_id = active_workspace_id;
+        // Clamp the project index; a different workspace may have fewer projects.
+        if self.active_project >= self.data.projects.len() {
+            self.active_project = self.data.projects.len().saturating_sub(1);
+        }
+        self.selected_request = None;
+        self.selected_folder = None;
+        self.sending = None;
+        self.dirty = false;
+    }
+
+    /// Mark the workspace dirty and emit a [`AppEvent::WorkspaceChanged`].
+    pub fn notify_workspace(&mut self, cx: &mut Context<Self>) {
+        self.dirty = true;
+        cx.emit(AppEvent::WorkspaceChanged);
+    }
+
+    pub fn notify_edited(&mut self, cx: &mut Context<Self>) {
+        self.dirty = true;
+        cx.emit(AppEvent::RequestEdited);
+        self.schedule_save(cx);
+    }
+
+    /// Schedule a debounced save ~1s out, replacing any pending one so rapid
+    /// edits coalesce into a single write.
+    pub fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        let weak = cx.weak_entity();
+        self.save_timer = Some(cx.spawn(async move |_this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            let _ = weak.update(cx, |this, cx| this.persist(cx));
+        }));
+    }
+
+    /// Persist to disk.
+    pub fn persist(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = super::persistence::save(&self.data) {
+            log::error!("persist failed: {e:?}");
+        } else {
+            self.dirty = false;
+            cx.emit(AppEvent::Persisted);
+        }
+        let _ = cx;
+    }
+}
+
+impl EventEmitter<AppEvent> for AppState {}

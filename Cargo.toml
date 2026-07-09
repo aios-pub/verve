@@ -66,8 +66,8 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee3
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = { path = "../gpui-component/crates/ui" }
-gpui-component-assets = { path = "../gpui-component/crates/assets" }
+gpui-component = {version = "0.5.1"}
+gpui-component-assets = {version = "0.5.1"}
 reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 futures = "0.3"

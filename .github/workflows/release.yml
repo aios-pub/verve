@@ -1,9 +1,11 @@
 # Verve — cross-platform release pipeline.
 #
-# Triggers on version tags (v*) or manual dispatch. Builds native packages for
-# macOS (universal .dmg), Linux (.deb + tarball), and Windows (.msi + .zip),
-# then creates a GitHub Release with all artifacts + a latest.json update
-# manifest that the in-app auto-updater fetches.
+# Triggers on version tags (v*) or manual dispatch. Runs clippy + tests first
+# (gating), then builds native packages for macOS (universal .dmg), Linux
+# (.deb + tarball for x86_64 + aarch64), and Windows (.msi + .zip for x86_64 +
+# aarch64), then creates a GitHub Release with all artifacts, SHA256 checksums,
+# auto-generated release notes, and a latest.json update manifest for the
+# in-app auto-updater.
 #
 # Tagging a release:
 #   git tag v0.2.0 && git push origin v0.2.0
@@ -26,11 +28,18 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+# Prevent concurrent releases for the same tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ─── Determine version ─────────────────────────────────────────────────────
   meta:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
@@ -46,10 +55,71 @@ jobs:
           echo "tag=v$V" >> $GITHUB_OUTPUT
           echo "Release version: $V"
 
-  # ─── macOS ─────────────────────────────────────────────────────────────────
-  build-macos:
+  # ─── Clippy (gate: no warnings before release) ─────────────────────────────
+  clippy:
     needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: clippy-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # ─── Tests (gate: all tests must pass before release) ──────────────────────
+  tests:
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: cargo test --lib --no-fail-fast
+
+  # ─── macOS (universal binary: aarch64 + x86_64) ────────────────────────────
+  build-macos:
+    needs: [meta, clippy, tests]
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,18 +166,26 @@ jobs:
             -ov -format UDZO \
             target/Verve-${{ needs.meta.outputs.version }}-macos.dmg
 
+      - name: Generate SHA256 checksum
+        run: |
+          cd target
+          shasum -a 256 Verve-${{ needs.meta.outputs.version }}-macos.dmg \
+            > Verve-${{ needs.meta.outputs.version }}-macos.dmg.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
           path: |
             target/Verve-${{ needs.meta.outputs.version }}-macos.dmg
+            target/Verve-${{ needs.meta.outputs.version }}-macos.dmg.sha256
             target/release/verve-server
 
-  # ─── Linux ────────────────────────────────────────────────────────────────
-  build-linux:
-    needs: meta
+  # ─── Linux x86_64 ──────────────────────────────────────────────────────────
+  build-linux-x86_64:
+    needs: [meta, clippy, tests]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,7 +208,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: linux-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
         run: cargo build --release --bin verve
@@ -140,7 +218,8 @@ jobs:
 
       - name: Create .deb package
         run: |
-          cargo deb --no-strip --output target/verve-${{ needs.meta.outputs.version }}-amd64.deb
+          cargo deb --no-strip \
+            --output target/verve-${{ needs.meta.outputs.version }}-amd64.deb
 
       - name: Create tarball
         run: |
@@ -150,20 +229,90 @@ jobs:
           cp assets/verve.desktop target/dist/
           cp target/release/verve-server target/dist/
           cd target/dist
-          tar czf ../verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz .
+          tar czf ../verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz .
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd target
+          shasum -a 256 verve-${{ needs.meta.outputs.version }}-amd64.deb \
+            > verve-${{ needs.meta.outputs.version }}-amd64.deb.sha256
+          shasum -a 256 verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz \
+            > verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-artifacts
+          name: linux-x86_64-artifacts
           path: |
             target/verve-${{ needs.meta.outputs.version }}-amd64.deb
-            target/verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz
+            target/verve-${{ needs.meta.outputs.version }}-amd64.deb.sha256
+            target/verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz
+            target/verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz.sha256
 
-  # ─── Windows ──────────────────────────────────────────────────────────────
-  build-windows:
-    needs: meta
+  # ─── Linux aarch64 (ARM64) ─────────────────────────────────────────────────
+  build-linux-aarch64:
+    needs: [meta, clippy, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          cargo install cross
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary (cross-compile)
+        run: cross build --release --target aarch64-unknown-linux-gnu --bin verve
+
+      - name: Build verve-server (cross-compile)
+        run: cross build --release --target aarch64-unknown-linux-gnu --bin verve-server
+
+      - name: Create tarball
+        run: |
+          mkdir -p target/dist
+          cp target/aarch64-unknown-linux-gnu/release/verve target/dist/
+          cp assets/icons/verve.png target/dist/
+          cp assets/verve.desktop target/dist/
+          cp target/aarch64-unknown-linux-gnu/release/verve-server target/dist/
+          cd target/dist
+          tar czf ../verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz .
+
+      - name: Generate SHA256 checksum
+        run: |
+          cd target
+          shasum -a 256 verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz \
+            > verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64-artifacts
+          path: |
+            target/verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz
+            target/verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz.sha256
+
+  # ─── Windows x86_64 ────────────────────────────────────────────────────────
+  build-windows-x86_64:
+    needs: [meta, clippy, tests]
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -181,7 +330,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: windows-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
         run: cargo build --release --bin verve
@@ -191,29 +340,167 @@ jobs:
 
       - name: Create .msi installer
         run: |
-          cargo wix --no-build -o target/Verve-${{ needs.meta.outputs.version }}-windows.msi
+          cargo wix --no-build \
+            -o target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi
 
       - name: Create .zip
+        shell: pwsh
         run: |
-          mkdir -p target/dist
-          cp target/release/verve.exe target/dist/
-          cp assets/icons/verve.ico target/dist/
-          cp target/release/verve-server.exe target/dist/
+          New-Item -ItemType Directory -Path target/dist -Force
+          Copy-Item target/release/verve.exe target/dist/
+          Copy-Item assets/icons/verve.ico target/dist/
+          Copy-Item target/release/verve-server.exe target/dist/
           cd target/dist
-          7z a ../Verve-${{ needs.meta.outputs.version }}-windows.zip .
+          7z a ../Verve-${{ needs.meta.outputs.version }}-windows-x86_64.zip .
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          cd target
+          $msi = "Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi"
+          $zip = "Verve-${{ needs.meta.outputs.version }}-windows-x86_64.zip"
+          (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower() + "  $msi" |
+            Out-File -Encoding ascii "$msi.sha256"
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  $zip" |
+            Out-File -Encoding ascii "$zip.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-artifacts
+          name: windows-x86_64-artifacts
           path: |
-            target/Verve-${{ needs.meta.outputs.version }}-windows.msi
-            target/Verve-${{ needs.meta.outputs.version }}-windows.zip
+            target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi
+            target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi.sha256
+            target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.zip
+            target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.zip.sha256
+
+  # ─── Windows aarch64 (ARM64) ───────────────────────────────────────────────
+  build-windows-aarch64:
+    needs: [meta, clippy, tests]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary (aarch64)
+        run: cargo build --release --target aarch64-pc-windows-msvc --bin verve
+
+      - name: Build verve-server (aarch64)
+        run: cargo build --release --target aarch64-pc-windows-msvc --bin verve-server
+
+      - name: Create .zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path target/dist -Force
+          Copy-Item target/aarch64-pc-windows-msvc/release/verve.exe target/dist/
+          Copy-Item assets/icons/verve.ico target/dist/
+          Copy-Item target/aarch64-pc-windows-msvc/release/verve-server.exe target/dist/
+          cd target/dist
+          7z a ../Verve-${{ needs.meta.outputs.version }}-windows-aarch64.zip .
+
+      - name: Generate SHA256 checksum
+        shell: pwsh
+        run: |
+          cd target
+          $zip = "Verve-${{ needs.meta.outputs.version }}-windows-aarch64.zip"
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() + "  $zip" |
+            Out-File -Encoding ascii "$zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-aarch64-artifacts
+          path: |
+            target/Verve-${{ needs.meta.outputs.version }}-windows-aarch64.zip
+            target/Verve-${{ needs.meta.outputs.version }}-windows-aarch64.zip.sha256
+
+  # ─── Generate release notes from git log ───────────────────────────────────
+  generate-notes:
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      notes: ${{ steps.notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog from git log
+        id: notes
+        run: |
+          # Get the previous tag (or first commit if none).
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # Generate a changelog from commit messages (max 50 entries).
+          CHANGELOG=$(git log ${RANGE} --pretty=format:"- %s" --no-merges 2>/dev/null | head -50)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="- Initial release"
+          fi
+
+          V="${{ needs.meta.outputs.version }}"
+
+          # Build the full release notes.
+          cat > /tmp/release-notes.md << NOTESEOF
+          ## Verve ${V}
+
+          ### Downloads
+
+          | Platform | File |
+          |----------|------|
+          | macOS (Universal) | \`Verve-${V}-macos.dmg\` |
+          | Linux x86_64 (deb) | \`verve-${V}-amd64.deb\` |
+          | Linux x86_64 (tarball) | \`verve-${V}-linux-x86_64.tar.gz\` |
+          | Linux aarch64 (tarball) | \`verve-${V}-linux-aarch64.tar.gz\` |
+          | Windows x86_64 (msi) | \`Verve-${V}-windows-x86_64.msi\` |
+          | Windows x86_64 (zip) | \`Verve-${V}-windows-x86_64.zip\` |
+          | Windows aarch64 (zip) | \`Verve-${V}-windows-aarch64.zip\` |
+
+          SHA256 checksums are provided as \`.sha256\` files alongside each asset.
+          The \`latest.json\` file is the auto-update manifest used by the in-app updater.
+
+          ### Changes
+
+          ${CHANGELOG}
+          NOTESEOF
+
+          # Store in output using a heredoc delimiter for multi-line strings.
+          echo "body<<DELIMITER" >> $GITHUB_OUTPUT
+          cat /tmp/release-notes.md >> $GITHUB_OUTPUT
+          echo "DELIMITER" >> $GITHUB_OUTPUT
 
   # ─── Create GitHub Release + latest.json manifest ──────────────────────────
   release:
-    needs: [meta, build-macos, build-linux, build-windows]
+    needs:
+      - meta
+      - generate-notes
+      - build-macos
+      - build-linux-x86_64
+      - build-linux-aarch64
+      - build-windows-x86_64
+      - build-windows-aarch64
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -225,7 +512,11 @@ jobs:
       - name: Organize artifacts
         run: |
           mkdir -p release
-          find artifacts -type f \( -name "*.dmg" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.msi" -o -name "*.zip" \) -exec cp {} release/ \;
+          find artifacts -type f \
+            \( -name "*.dmg" -o -name "*.deb" -o -name "*.tar.gz" \
+               -o -name "*.msi" -o -name "*.zip" -o -name "*.sha256" \
+               -o -name "verve-server" -o -name "verve-server.exe" \) \
+            -exec cp {} release/ \;
           ls -la release/
 
       - name: Generate latest.json update manifest
@@ -247,7 +538,7 @@ jobs:
                 "url": "${REPO_URL}/releases/download/${TAG}/verve-${VERSION}-amd64.deb"
               },
               "windows": {
-                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-windows.msi"
+                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-windows-x86_64.msi"
               }
             }
           }
@@ -259,25 +550,58 @@ jobs:
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: Verve ${{ needs.meta.outputs.version }}
-          body: |
-            ## Verve ${{ needs.meta.outputs.version }}
-
-            ### Downloads
-            | Platform | File |
-            |----------|------|
-            | macOS (Universal) | `Verve-${{ needs.meta.outputs.version }}-macos.dmg` |
-            | Linux (deb) | `verve-${{ needs.meta.outputs.version }}-amd64.deb` |
-            | Linux (tarball) | `verve-${{ needs.meta.outputs.version }}-linux-amd64.tar.gz` |
-            | Windows (msi) | `Verve-${{ needs.meta.outputs.version }}-windows.msi` |
-            | Windows (zip) | `Verve-${{ needs.meta.outputs.version }}-windows.zip` |
-
-            `latest.json` is the auto-update manifest used by the in-app updater.
+          body: ${{ needs.generate-notes.outputs.notes }}
           files: |
             release/*.dmg
             release/*.deb
             release/*.tar.gz
             release/*.msi
             release/*.zip
+            release/*.sha256
             release/latest.json
+            release/verve-server
+            release/verve-server.exe
           draft: false
           prerelease: false
+
+  # ─── Validate release assets ───────────────────────────────────────────────
+  validate:
+    needs: [meta, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all expected assets are present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          V: ${{ needs.meta.outputs.version }}
+        run: |
+          EXPECTED='[
+            "Verve-'"$V"'-macos.dmg",
+            "Verve-'"$V"'-macos.dmg.sha256",
+            "verve-'"$V"'-amd64.deb",
+            "verve-'"$V"'-amd64.deb.sha256",
+            "verve-'"$V"'-linux-x86_64.tar.gz",
+            "verve-'"$V"'-linux-x86_64.tar.gz.sha256",
+            "verve-'"$V"'-linux-aarch64.tar.gz",
+            "verve-'"$V"'-linux-aarch64.tar.gz.sha256",
+            "Verve-'"$V"'-windows-x86_64.msi",
+            "Verve-'"$V"'-windows-x86_64.msi.sha256",
+            "Verve-'"$V"'-windows-x86_64.zip",
+            "Verve-'"$V"'-windows-x86_64.zip.sha256",
+            "Verve-'"$V"'-windows-aarch64.zip",
+            "Verve-'"$V"'-windows-aarch64.zip.sha256",
+            "latest.json"
+          ]'
+
+          ACTUAL=$(gh release view "$TAG" --repo ${{ github.repository }} \
+            --json assets -q '[.assets[].name]')
+          MISSING=$(echo "$EXPECTED" | jq -r --argjson actual "$ACTUAL" '. - $actual | .[]')
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::The following assets are missing from the release:"
+            echo "$MISSING"
+            exit 1
+          fi
+
+          echo "✅ All expected assets are present in the release."

@@ -1,7 +1,7 @@
 # Verve — continuous integration.
 #
-# Runs on every push to main and on pull requests. Builds + tests on all three
-# platforms to catch platform-specific compilation issues early.
+# Runs on every push to main and on pull requests. Builds + tests + clippy on
+# all three platforms to catch platform-specific compilation issues early.
 
 name: CI
 
@@ -13,6 +13,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -21,12 +26,15 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -53,3 +61,32 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-clippy-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings

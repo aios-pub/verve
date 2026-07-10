@@ -272,10 +272,10 @@ jobs:
             target/verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz
             target/verve-${{ needs.meta.outputs.version }}-linux-x86_64.tar.gz.sha256
 
-  # ─── Linux aarch64 (ARM64) — uses native ARM64 runner ─────────────────────
+  # ─── Linux aarch64 (ARM64) — cross-compile on x86_64 ──────────────────────
   build-linux-aarch64:
     needs: [meta, clippy, tests]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     continue-on-error: true
     steps:
@@ -283,11 +283,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install system dependencies
+      - name: Add cross-compile target
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             gcc g++ clang \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libssl-dev pkg-config \
             libfontconfig-dev \
             libgtk-3-dev libwebkit2gtk-4.1-dev \
@@ -305,19 +309,27 @@ jobs:
             target
           key: linux-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build release binary
-        run: cargo build --release --bin verve
+      - name: Build release binary (cross-compile)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_LIBDIR: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: cargo build --release --target aarch64-unknown-linux-gnu --bin verve
 
-      - name: Build verve-server
-        run: cargo build --release --bin verve-server
+      - name: Build verve-server (cross-compile)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_LIBDIR: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: cargo build --release --target aarch64-unknown-linux-gnu --bin verve-server
 
       - name: Create tarball
         run: |
           mkdir -p target/dist
-          cp target/release/verve target/dist/
+          cp target/aarch64-unknown-linux-gnu/release/verve target/dist/
           cp assets/icons/verve.png target/dist/
           cp assets/verve.desktop target/dist/
-          cp target/release/verve-server target/dist/
+          cp target/aarch64-unknown-linux-gnu/release/verve-server target/dist/
           cd target/dist
           tar czf ../verve-${{ needs.meta.outputs.version }}-linux-aarch64.tar.gz .
 

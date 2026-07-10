@@ -28,7 +28,9 @@ pub struct Html {
 
 impl Html {
     pub fn new() -> Self {
-        Self { buf: String::with_capacity(4096) }
+        Self {
+            buf: String::with_capacity(4096),
+        }
     }
 
     /// Append pre-escaped raw HTML (CSS, JS, already-escaped fragments).
@@ -183,9 +185,7 @@ pub fn render_request_fragment(req: &ApiRequest, fd: &FieldDisplay) -> String {
 fn render_head(h: &mut Html, title: &str) {
     h.tag("head", &[], |h| {
         h.raw("<meta charset=\"utf-8\">\n");
-        h.raw(
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n",
-        );
+        h.raw("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
         h.raw(
             "<meta http-equiv=\"Cache-Control\" content=\"no-cache, no-store, must-revalidate\">\n",
         );
@@ -239,28 +239,32 @@ fn render_header(
         // Right: environment selector.
         h.tag("div", &[("class", "topbar-right")], |h| {
             if !project.environments.is_empty() {
-                h.tag("select", &[("id", "env-select"), ("class", "env-select")], |h| {
-                    h.tag("option", &[("value", "")], |h| {
-                        h.text("无环境");
-                    });
-                    for env in &project.environments {
-                        let selected = config.environment_id.as_deref()
-                            == Some(env.id.as_str());
-                        if selected {
-                            h.tag(
-                                "option",
-                                &[("value", env.id.as_str()), ("selected", "selected")],
-                                |h| {
+                h.tag(
+                    "select",
+                    &[("id", "env-select"), ("class", "env-select")],
+                    |h| {
+                        h.tag("option", &[("value", "")], |h| {
+                            h.text("无环境");
+                        });
+                        for env in &project.environments {
+                            let selected =
+                                config.environment_id.as_deref() == Some(env.id.as_str());
+                            if selected {
+                                h.tag(
+                                    "option",
+                                    &[("value", env.id.as_str()), ("selected", "selected")],
+                                    |h| {
+                                        h.text(&env.name);
+                                    },
+                                );
+                            } else {
+                                h.tag("option", &[("value", env.id.as_str())], |h| {
                                     h.text(&env.name);
-                                },
-                            );
-                        } else {
-                            h.tag("option", &[("value", env.id.as_str())], |h| {
-                                h.text(&env.name);
-                            });
+                                });
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }
         });
     });
@@ -280,7 +284,6 @@ fn render_sidebar(h: &mut Html, requests: &[ScopedRequest<'_>]) {
                     // Close previous group.
                     if group_open {
                         h.close_tag("div"); // tree-group
-                        group_open = false;
                     }
                     // Folder header.
                     let folder_name = match path.rsplit_once('>') {
@@ -314,7 +317,8 @@ fn render_sidebar(h: &mut Html, requests: &[ScopedRequest<'_>]) {
                         ("data-name", &data_name),
                     ],
                     |h| {
-                        let badge_class = format!("method-badge method-{}", method_class(&req.method));
+                        let badge_class =
+                            format!("method-badge method-{}", method_class(&req.method));
                         h.tag("span", &[("class", &badge_class)], |h| {
                             h.text(req.method.badge_label());
                         });
@@ -411,9 +415,7 @@ fn render_global_context(h: &mut Html, project: &Project, fd: &FieldDisplay) {
                     h.text("环境变量");
                 });
                 h.tag("table", &[("class", "kv-table")], |h| {
-                    h.raw(
-                        "<thead><tr><th>变量名</th><th>说明</th><th>初始值</th></tr></thead>\n",
-                    );
+                    h.raw("<thead><tr><th>变量名</th><th>说明</th><th>初始值</th></tr></thead>\n");
                     h.tag("tbody", &[], |h| {
                         for kv in project.global_variables.iter().filter(|k| k.enabled) {
                             h.tag("tr", &[], |h| {
@@ -449,7 +451,11 @@ fn render_module_banner(h: &mut Html, path: &str, is_default: bool) {
         Some((p, leaf)) => (leaf.trim(), Some(p.trim())),
         None => (path.trim(), None),
     };
-    let display_name = if name.is_empty() { "默认模块" } else { name };
+    let display_name = if name.is_empty() {
+        "默认模块"
+    } else {
+        name
+    };
     h.open_tag("div", &[("class", class), ("id", &module_id)]);
     h.tag("div", &[("class", "module-header")], |h| {
         h.tag("span", &[("class", "module-icon")], |h| {
@@ -661,38 +667,66 @@ fn render_auth_block(h: &mut Html, auth: &AuthConfig) {
             h.raw("<thead><tr><th>项目</th><th>值</th></tr></thead>\n");
             h.tag("tbody", &[], |h| {
                 h.tag("tr", &[], |h| {
-                    h.tag("td", &[], |h| { h.text("类型"); });
-                    h.tag("td", &[], |h| { h.text(auth.auth_type.as_str()); });
+                    h.tag("td", &[], |h| {
+                        h.text("类型");
+                    });
+                    h.tag("td", &[], |h| {
+                        h.text(auth.auth_type.as_str());
+                    });
                 });
                 match auth.auth_type {
                     AuthType::Bearer => {
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("Token"); });
-                            h.tag("td", &[("class", "var-subst")], |h| { h.text(&auth.token); });
+                            h.tag("td", &[], |h| {
+                                h.text("Token");
+                            });
+                            h.tag("td", &[("class", "var-subst")], |h| {
+                                h.text(&auth.token);
+                            });
                         });
                     }
                     AuthType::Basic => {
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("用户名"); });
-                            h.tag("td", &[("class", "var-subst")], |h| { h.text(&auth.username); });
+                            h.tag("td", &[], |h| {
+                                h.text("用户名");
+                            });
+                            h.tag("td", &[("class", "var-subst")], |h| {
+                                h.text(&auth.username);
+                            });
                         });
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("密码"); });
-                            h.tag("td", &[], |h| { h.text("••••••"); });
+                            h.tag("td", &[], |h| {
+                                h.text("密码");
+                            });
+                            h.tag("td", &[], |h| {
+                                h.text("••••••");
+                            });
                         });
                     }
                     AuthType::ApiKey => {
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("Key 名"); });
-                            h.tag("td", &[], |h| { h.text(&auth.key); });
+                            h.tag("td", &[], |h| {
+                                h.text("Key 名");
+                            });
+                            h.tag("td", &[], |h| {
+                                h.text(&auth.key);
+                            });
                         });
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("Key 值"); });
-                            h.tag("td", &[("class", "var-subst")], |h| { h.text(&auth.value); });
+                            h.tag("td", &[], |h| {
+                                h.text("Key 值");
+                            });
+                            h.tag("td", &[("class", "var-subst")], |h| {
+                                h.text(&auth.value);
+                            });
                         });
                         h.tag("tr", &[], |h| {
-                            h.tag("td", &[], |h| { h.text("添加到"); });
-                            h.tag("td", &[], |h| { h.text(auth_target_label(auth.add_to)); });
+                            h.tag("td", &[], |h| {
+                                h.text("添加到");
+                            });
+                            h.tag("td", &[], |h| {
+                                h.text(auth_target_label(auth.add_to));
+                            });
                         });
                     }
                     AuthType::None => {}
@@ -714,7 +748,9 @@ fn auth_target_label(t: crate::state::models::AuthTarget) -> &'static str {
 
 fn render_body_block(h: &mut Html, body: &crate::state::models::RequestBody) {
     h.tag("div", &[("class", "doc-section")], |h| {
-        h.tag("h2", &[], |h| { h.text("请求体"); });
+        h.tag("h2", &[], |h| {
+            h.text("请求体");
+        });
         match body.body_type {
             BodyType::Raw => {
                 // If the body has visual field descriptions (raw_parameter),
@@ -725,7 +761,9 @@ fn render_body_block(h: &mut Html, body: &crate::state::models::RequestBody) {
                 }
                 let lang = body.raw_language.lower_name();
                 h.tag("div", &[("class", "code-block")], |h| {
-                    h.tag("div", &[("class", "code-lang")], |h| { h.text(lang); });
+                    h.tag("div", &[("class", "code-lang")], |h| {
+                        h.text(lang);
+                    });
                     h.tag("pre", &[], |h| {
                         h.tag("code", &[("class", "var-subst")], |h| {
                             h.text(&body.raw);
@@ -752,7 +790,9 @@ fn render_body_block(h: &mut Html, body: &crate::state::models::RequestBody) {
 
 fn render_example_block(h: &mut Html, resp: &crate::state::models::Response) {
     h.tag("div", &[("class", "doc-section")], |h| {
-        h.tag("h2", &[], |h| { h.text("返回示例"); });
+        h.tag("h2", &[], |h| {
+            h.text("返回示例");
+        });
         h.tag("div", &[("class", "resp-meta")], |h| {
             h.raw(&format!(
                 "<span class=\"resp-status\">状态：{}</span>\n",
@@ -763,7 +803,9 @@ fn render_example_block(h: &mut Html, resp: &crate::state::models::Response) {
         });
         h.tag("div", &[("class", "code-block")], |h| {
             h.tag("pre", &[], |h| {
-                h.tag("code", &[], |h| { h.text(&resp.body); });
+                h.tag("code", &[], |h| {
+                    h.text(&resp.body);
+                });
             });
         });
     });
@@ -773,7 +815,9 @@ fn render_example_block(h: &mut Html, resp: &crate::state::models::Response) {
 
 fn render_mock_block(h: &mut Html, mock: &crate::state::models::MockRule) {
     h.tag("div", &[("class", "doc-section")], |h| {
-        h.tag("h2", &[], |h| { h.text("Mock"); });
+        h.tag("h2", &[], |h| {
+            h.text("Mock");
+        });
         h.tag("div", &[("class", "resp-meta")], |h| {
             h.raw(&format!(
                 "<span class=\"resp-status\">状态：{}</span>\n",
@@ -783,7 +827,9 @@ fn render_mock_block(h: &mut Html, mock: &crate::state::models::MockRule) {
         });
         h.tag("div", &[("class", "code-block")], |h| {
             h.tag("pre", &[], |h| {
-                h.tag("code", &[], |h| { h.text(&mock.body); });
+                h.tag("code", &[], |h| {
+                    h.text(&mock.body);
+                });
             });
         });
     });
@@ -977,7 +1023,12 @@ fn logo_data_url(path: &std::path::Path) -> Option<String> {
 }
 
 fn mime_from_ext(path: &std::path::Path) -> Option<&'static str> {
-    match path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
@@ -988,9 +1039,8 @@ fn mime_from_ext(path: &std::path::Path) -> Option<&'static str> {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b = [
             chunk[0],
@@ -1302,7 +1352,7 @@ const JS: &str = r#"
 mod tests {
     use super::*;
     use crate::share::models::ShareScope;
-    use crate::state::models::{RequestBody, RequestMethod, RawLanguage};
+    use crate::state::models::{RawLanguage, RequestBody, RequestMethod};
 
     fn sample_project() -> Project {
         let mut p = Project::new("Demo");
@@ -1396,7 +1446,9 @@ mod tests {
     #[test]
     fn scope_request_only_shows_target() {
         let mut project = Project::new("P");
-        project.requests.push(ApiRequest::new("A", RequestMethod::Get, "/a"));
+        project
+            .requests
+            .push(ApiRequest::new("A", RequestMethod::Get, "/a"));
         let req_b = ApiRequest::new("B", RequestMethod::Get, "/b");
         let target_id = req_b.id.clone();
         project.requests.push(req_b);
@@ -1414,7 +1466,7 @@ mod tests {
     fn default_shows_first_content_rich_request() {
         let mut project = Project::new("P");
         let empty = ApiRequest::new("空接口", RequestMethod::Get, "/ping");
-        let empty_id = empty.id.clone();
+        let _empty_id = empty.id.clone();
         project.requests.push(empty);
         let mut rich = ApiRequest::new("有参数", RequestMethod::Post, "/submit");
         let rich_id = rich.id.clone();
@@ -1471,7 +1523,9 @@ mod tests {
     #[test]
     fn environment_vars_are_injected() {
         let mut project = Project::new("P");
-        project.requests.push(ApiRequest::new("A", RequestMethod::Get, "{{baseUrl}}/a"));
+        project
+            .requests
+            .push(ApiRequest::new("A", RequestMethod::Get, "{{baseUrl}}/a"));
         let env = crate::state::models::Environment {
             id: "env1".into(),
             name: "Prod".into(),
@@ -1509,7 +1563,7 @@ mod tests {
 
     #[test]
     fn required_params_have_red_star_in_docs() {
-        let mut project = sample_project();
+        let project = sample_project();
         // The sample project's param "from" is required by default (new() sets
         // required=true). Verify the doc renders a red `*` after its name.
         let cfg = ShareConfig::new(&project.id, &project.name);

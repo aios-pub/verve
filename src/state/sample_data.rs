@@ -35,8 +35,7 @@ pub fn demo_workspace() -> WorkspaceData {
     }))
     .unwrap();
     login.description =
-        "用户登录接口。\n\n请求成功后将 `token` 写入全局变量 `token` 供后续接口使用。"
-            .to_string();
+        "用户登录接口。\n\n请求成功后将 `token` 写入全局变量 `token` 供后续接口使用。".to_string();
     login.mock = Some(MockRule {
         enabled: true,
         status: 200,
@@ -97,7 +96,6 @@ pub fn demo_workspace() -> WorkspaceData {
     let mut verify = ApiRequest::new("校验验证码", RequestMethod::Get, "{{baseUrl}}/auth/verify");
     verify.status = "开发中".to_string();
     verify.tags = vec!["鉴权".to_string()];
-
 
     auth.requests = vec![login, get_info, logout, refresh, reset, send_code, verify];
     // Folder-level metadata: a description, a shared query param, a header,

@@ -30,8 +30,8 @@ pub fn keyring_key(host_id: &str, kind: &str) -> String {
 /// Store a secret in the OS keychain.
 pub fn store_keychain(host_id: &str, kind: &str, secret: &str) -> Result<(), String> {
     let key = keyring_key(host_id, kind);
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("keyring entry: {e}"))?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
     entry
         .set_password(secret)
         .map_err(|e| format!("keyring store: {e}"))
@@ -40,8 +40,8 @@ pub fn store_keychain(host_id: &str, kind: &str, secret: &str) -> Result<(), Str
 /// Load a secret from the OS keychain.
 pub fn load_keychain(host_id: &str, kind: &str) -> Result<String, String> {
     let key = keyring_key(host_id, kind);
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("keyring entry: {e}"))?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
     entry
         .get_password()
         .map_err(|e| format!("keyring load: {e}"))
@@ -50,8 +50,8 @@ pub fn load_keychain(host_id: &str, kind: &str) -> Result<String, String> {
 /// Delete a secret from the OS keychain (silently succeeds if not found).
 pub fn delete_keychain(host_id: &str, kind: &str) -> Result<(), String> {
     let key = keyring_key(host_id, kind);
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("keyring entry: {e}"))?;
+    let entry =
+        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
     let _ = entry.delete_credential();
     Ok(())
 }

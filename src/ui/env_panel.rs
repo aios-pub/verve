@@ -4,7 +4,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::{v_flex, ActiveTheme};
 
 use crate::state::{AppEvent, AppState};
 
@@ -44,10 +44,16 @@ impl Render for EnvPanel {
                         .rounded(theme.radius)
                         .p_3()
                         .gap_1()
-                        .child(format!("{} {}", e.name, if active { "(active)" } else { "" }))
-                        .children(e.variables.iter().map(|kv| {
-                            v_flex().child(format!("{} = {}", kv.key, kv.value))
-                        }))
+                        .child(format!(
+                            "{} {}",
+                            e.name,
+                            if active { "(active)" } else { "" }
+                        ))
+                        .children(
+                            e.variables
+                                .iter()
+                                .map(|kv| v_flex().child(format!("{} = {}", kv.key, kv.value))),
+                        )
                 }))
             })
     }

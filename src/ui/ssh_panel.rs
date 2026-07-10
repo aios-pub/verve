@@ -10,13 +10,12 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, WindowExt as _,
+    h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
 
 use crate::ssh::host_store;
-use crate::ssh::models::{SshHost, SshHostType};
+use crate::ssh::models::SshHost;
 use crate::ssh::terminal::TerminalView;
 
 /// Events the SSH panel emits upward.
@@ -53,7 +52,7 @@ pub struct TerminalSession {
 pub enum SessionStatus {
     Connecting,
     Connected,
-    Reconnecting(usize),  // attempt number
+    Reconnecting(usize), // attempt number
     Error(String),
     Closed,
 }
@@ -81,7 +80,7 @@ pub struct SshPanel {
 impl EventEmitter<SshEvent> for SshPanel {}
 
 impl SshPanel {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let hosts = host_store::load_hosts();
         Self {
@@ -123,7 +122,7 @@ impl Render for SshPanel {
         let border = theme.border;
         let muted = theme.muted_foreground;
         let fg = theme.foreground;
-        let accent = theme.accent;
+        let _accent = theme.accent;
 
         // Two modes: terminal sessions (if any) or host card grid.
         // When show_host_picker is true and we have sessions, show the host
@@ -206,11 +205,15 @@ impl Render for SshPanel {
 }
 
 impl SshPanel {
-    fn render_card_grid(&self, cx: &mut Context<Self>, theme: gpui_component::Theme) -> impl IntoElement {
+    fn render_card_grid(
+        &self,
+        cx: &mut Context<Self>,
+        theme: gpui_component::Theme,
+    ) -> impl IntoElement {
         let panel = cx.entity();
         let muted = theme.muted_foreground;
         let border = theme.border;
-        let fg = theme.foreground;
+        let _fg = theme.foreground;
         let accent = theme.accent;
         let danger = theme.danger;
 
@@ -220,11 +223,7 @@ impl SshPanel {
                 .justify_center()
                 .size_full()
                 .gap_3()
-                .child(
-                    div()
-                        .text_2xl()
-                        .child("🖥️"),
-                )
+                .child(div().text_2xl().child("🖥️"))
                 .child(
                     div()
                         .text_color(muted)
@@ -247,8 +246,8 @@ impl SshPanel {
             .gap_3()
             .children(self.hosts.iter().enumerate().map(|(ix, host)| {
                 let theme_c = theme.clone();
-                let theme_c2 = theme.clone();
-                let theme_c3 = theme.clone();
+                let _theme_c2 = theme.clone();
+                let _theme_c3 = theme.clone();
                 let host_id = host.id.clone();
                 let panel_c = panel.clone();
                 let host_id_edit = host.id.clone();
@@ -271,11 +270,7 @@ impl SshPanel {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .child("🖥️"),
-                            )
+                            .child(div().text_lg().child("🖥️"))
                             .child(
                                 div()
                                     .flex_1()
@@ -331,7 +326,9 @@ impl SshPanel {
                                     .on_click(move |_, _window, cx: &mut App| {
                                         let _ = panel_c.update(cx, |this, cx| {
                                             // Find the host and start a session.
-                                            if let Some(host) = this.hosts.iter().find(|h| h.id == host_id).cloned() {
+                                            if let Some(host) =
+                                                this.hosts.iter().find(|h| h.id == host_id).cloned()
+                                            {
                                                 this.pending_connect = Some(host);
                                                 cx.notify();
                                             }
@@ -419,13 +416,11 @@ impl SshPanel {
         let panel = cx.entity();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let host_name = host_name.clone();
-            dialog.title("确认删除").content(move |content, _, _| {
-                content.child(
-                    v_flex()
-                        .p_4()
-                        .w(px(360.))
-                        .gap_2()
-                        .child(
+            dialog
+                .title("确认删除")
+                .content(move |content, _, _| {
+                    content.child(
+                        v_flex().p_4().w(px(360.)).gap_2().child(
                             div()
                                 .text_sm()
                                 .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
@@ -434,22 +429,23 @@ impl SshPanel {
                                     host_name
                                 )),
                         ),
-                )
-            }).footer({
-                let id = id_del.clone();
-                let panel = panel.clone();
-                Button::new("confirm-ssh-delete")
-                    .primary()
-                    .small()
-                    .label("确认删除")
-                    .on_click(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        host_store::remove_host(&id);
-                        let _ = panel.update(cx, |this, cx| {
-                            this.reload(cx);
-                        });
-                    })
-            })
+                    )
+                })
+                .footer({
+                    let id = id_del.clone();
+                    let panel = panel.clone();
+                    Button::new("confirm-ssh-delete")
+                        .primary()
+                        .small()
+                        .label("确认删除")
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            host_store::remove_host(&id);
+                            let _ = panel.update(cx, |this, cx| {
+                                this.reload(cx);
+                            });
+                        })
+                })
         });
     }
 
@@ -484,19 +480,16 @@ impl SshPanel {
 
             loop {
                 attempt += 1;
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<
-                    crate::ssh::client::SshOutput,
-                >();
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::unbounded_channel::<crate::ssh::client::SshOutput>();
 
                 // For each (re)connect, create a fresh input_tx + resize_tx channel.
-                let (input_tx_tx, mut input_tx_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<
-                        tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-                    >();
-                let (resize_tx_tx, mut resize_tx_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<
-                        tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>,
-                    >();
+                let (input_tx_tx, mut input_tx_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+                >();
+                let (resize_tx_tx, mut resize_tx_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>,
+                >();
 
                 // Show connecting / reconnecting status.
                 let status_msg = if attempt == 1 {
@@ -537,9 +530,7 @@ impl SshPanel {
                 // dedicated OS thread with its own Tokio runtime, since
                 // tokio::select! and mpsc::recv() require a Tokio context.
                 // Results are forwarded back to GPUI via channels.
-                let (pump_tx, mut pump_rx) = tokio::sync::mpsc::unbounded_channel::<
-                    PumpMsg,
-                >();
+                let (pump_tx, mut pump_rx) = tokio::sync::mpsc::unbounded_channel::<PumpMsg>();
                 let pump_tx_clone = pump_tx.clone();
                 let terminal_clone = terminal_for_task.clone();
 
@@ -738,18 +729,12 @@ impl SshPanel {
                             .rounded(px(4.))
                             .cursor_pointer()
                             .when(is_active, |d| {
-                                d.bg(tc.accent.opacity(0.5))
-                                    .text_color(tc.foreground)
+                                d.bg(tc.accent.opacity(0.5)).text_color(tc.foreground)
                             })
                             .when(!is_active, |d| {
-                                d.text_color(tc.muted_foreground)
-                                    .hover(|s| s.bg(tc.muted))
+                                d.text_color(tc.muted_foreground).hover(|s| s.bg(tc.muted))
                             })
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(host_name.clone()),
-                            )
+                            .child(div().text_sm().child(host_name.clone()))
                             .child(
                                 gpui_component::button::Button::new(("ssh-tab-close", i))
                                     .ghost()
@@ -810,7 +795,9 @@ impl SshPanel {
                             .child(match &active_status {
                                 SessionStatus::Connected => "● 已连接".to_string(),
                                 SessionStatus::Connecting => "○ 连接中…".to_string(),
-                                SessionStatus::Reconnecting(n) => format!("⟳ 重连中（第 {} 次）", n),
+                                SessionStatus::Reconnecting(n) => {
+                                    format!("⟳ 重连中（第 {} 次）", n)
+                                }
                                 SessionStatus::Error(e) => format!("✕ {e}"),
                                 SessionStatus::Closed => "○ 已断开".to_string(),
                             }),
@@ -854,10 +841,13 @@ impl SshPanel {
             .bg(gpui::black().opacity(0.4))
             .items_start()
             .pt(px(50.))
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                this.show_host_picker = false;
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _event, _window, cx| {
+                    this.show_host_picker = false;
+                    cx.notify();
+                }),
+            )
             .child(
                 v_flex()
                     .id("host-picker-panel")
@@ -928,23 +918,23 @@ impl SshPanel {
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(host_name),
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(host_addr),
-                                    ),
+                                    .child(div().text_xs().text_color(muted).child(host_addr)),
                             )
-                            .on_mouse_down(MouseButton::Left, move |_event, _window, cx: &mut App| {
-                                cx.stop_propagation();
-                                let _ = panel_c.update(cx, |this, cx| {
-                                    if let Some(h) = this.hosts.iter().find(|h| h.id == host_id).cloned() {
-                                        this.pending_connect = Some(h);
-                                    }
-                                    this.show_host_picker = false;
-                                    cx.notify();
-                                });
-                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |_event, _window, cx: &mut App| {
+                                    cx.stop_propagation();
+                                    let _ = panel_c.update(cx, |this, cx| {
+                                        if let Some(h) =
+                                            this.hosts.iter().find(|h| h.id == host_id).cloned()
+                                        {
+                                            this.pending_connect = Some(h);
+                                        }
+                                        this.show_host_picker = false;
+                                        cx.notify();
+                                    });
+                                },
+                            )
                     })),
             )
     }

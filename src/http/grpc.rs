@@ -10,11 +10,10 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
 use futures::AsyncReadExt as _;
-use http_client::{AsyncBody, Builder, HttpRequestExt as _, HttpClient, Method, RedirectPolicy};
+use http_client::{AsyncBody, Builder, HttpClient, HttpRequestExt as _, Method, RedirectPolicy};
 
-use crate::state::models::{KeyValue, RequestMethod, Response};
+use crate::state::models::{KeyValue, Response};
 
 /// Build the gRPC-Web URL from the base URL + method path.
 /// The request URL should be like: `grpc://host:port/package.Service/Method`
@@ -42,10 +41,7 @@ pub async fn execute_grpc_web(
 
     // Build headers: gRPC-Web JSON content type.
     let mut out_headers: Vec<(String, String)> = vec![
-        (
-            "Content-Type".into(),
-            "application/grpc-web+json".into(),
-        ),
+        ("Content-Type".into(), "application/grpc-web+json".into()),
         ("X-Grpc-Web".into(), "1".into()),
         ("X-User-Agent".into(), "grpc-web-rust/0.1".into()),
     ];
@@ -112,7 +108,10 @@ pub async fn execute_grpc_web(
     let status_text = if status == 200 {
         "gRPC OK".to_string()
     } else {
-        format!("gRPC HTTP {}", resp.status().canonical_reason().unwrap_or(""))
+        format!(
+            "gRPC HTTP {}",
+            resp.status().canonical_reason().unwrap_or("")
+        )
     };
 
     // Read and decode the gRPC-Web response body.
@@ -163,12 +162,8 @@ fn decode_grpc_web_response(buf: &[u8]) -> (String, Option<u32>) {
 
     while pos + 5 <= buf.len() {
         let compressed = buf[pos];
-        let len = u32::from_be_bytes([
-            buf[pos + 1],
-            buf[pos + 2],
-            buf[pos + 3],
-            buf[pos + 4],
-        ]) as usize;
+        let len =
+            u32::from_be_bytes([buf[pos + 1], buf[pos + 2], buf[pos + 3], buf[pos + 4]]) as usize;
         pos += 5;
 
         if pos + len > buf.len() {

@@ -27,13 +27,13 @@ impl RequestMethod {
         // Hue, saturation, lightness chosen to read well at small sizes on
         // both light and dark backgrounds.
         let (h, s) = match self {
-            RequestMethod::Get => (0.33, 0.62),   // green
-            RequestMethod::Post => (0.10, 0.78),  // amber/orange
-            RequestMethod::Put => (0.58, 0.62),   // blue
-            RequestMethod::Patch => (0.13, 0.65), // yellow-amber
-            RequestMethod::Delete => (0.00, 0.72),// red
-            RequestMethod::Head => (0.72, 0.18),  // gray-purple
-            RequestMethod::Options => (0.78, 0.45),// purple
+            RequestMethod::Get => (0.33, 0.62),     // green
+            RequestMethod::Post => (0.10, 0.78),    // amber/orange
+            RequestMethod::Put => (0.58, 0.62),     // blue
+            RequestMethod::Patch => (0.13, 0.65),   // yellow-amber
+            RequestMethod::Delete => (0.00, 0.72),  // red
+            RequestMethod::Head => (0.72, 0.18),    // gray-purple
+            RequestMethod::Options => (0.78, 0.45), // purple
         };
         MethodColor {
             // Badge text: deeper/lighter depending on theme (caller adjusts).

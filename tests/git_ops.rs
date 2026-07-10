@@ -112,7 +112,10 @@ fn ensure_askpass_writes_executable_helper() {
 
     // First call creates the helper.
     let path = ops::ensure_askpass(&dir).expect("ensure_askpass");
-    assert!(path.exists(), "askpass helper should exist after first call");
+    assert!(
+        path.exists(),
+        "askpass helper should exist after first call"
+    );
     let body = std::fs::read_to_string(&path).unwrap();
     assert!(
         body.contains("VERVE_GIT_USER") && body.contains("VERVE_GIT_TOKEN"),
@@ -163,7 +166,10 @@ fn delete_branch_works_after_switching_off() {
     ops::checkout(&repo, "main", &no_auth).unwrap();
     ops::delete_branch(&repo, "feature", &no_auth).expect("delete after switching off");
     let branches = ops::branches(&repo).unwrap();
-    assert!(!branches.contains(&"feature".to_string()), "feature should be gone");
+    assert!(
+        !branches.contains(&"feature".to_string()),
+        "feature should be gone"
+    );
 
     // Refuses to delete the last branch.
     let err = ops::delete_branch(&repo, "main", &no_auth);
@@ -234,7 +240,10 @@ fn status_on_unborn_branch_does_not_hang() {
 
     // status() must complete (not hang) and report dirty > 0 for the untracked file.
     let st = ops::status(&repo).expect("status on unborn branch must not hang");
-    assert!(st.dirty > 0, "untracked file on unborn branch should be dirty");
+    assert!(
+        st.dirty > 0,
+        "untracked file on unborn branch should be dirty"
+    );
 
     // And commit() must create the first commit (parents = []).
     let id = ops::commit(&repo, "initial").expect("first commit on unborn branch");
@@ -276,7 +285,10 @@ fn real_verve_status_does_not_hang() {
     };
     eprintln!("open 成功，调用 status()...");
     match ops::status(&repo) {
-        Ok(st) => eprintln!("status 成功: branch={:?} dirty={} ahead={}", st.branch, st.dirty, st.ahead),
+        Ok(st) => eprintln!(
+            "status 成功: branch={:?} dirty={} ahead={}",
+            st.branch, st.dirty, st.ahead
+        ),
         Err(e) => eprintln!("status 失败: {e}"),
     }
     eprintln!("remote = {:?}", ops::get_remote(&repo));

@@ -13,14 +13,12 @@
 use std::fs;
 use std::path::PathBuf;
 
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, KeyInit, OsRng as AeadOsRng};
 use aes_gcm::{Aes256Gcm, KeyInit as _, Nonce};
-use aes_gcm::aead::rand_core::RngCore;
 use argon2::Argon2;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
-
-use aes_gcm::aead::AeadCore;
 
 /// The salt length for Argon2 key derivation.
 const SALT_LEN: usize = 16;
@@ -120,8 +118,7 @@ pub fn load_vault(master_pw: &str) -> Result<SecretMap, String> {
             if plaintext.is_empty() {
                 Ok(SecretMap::new())
             } else {
-                serde_json::from_slice(&plaintext)
-                    .map_err(|e| format!("parse vault JSON: {e}"))
+                serde_json::from_slice(&plaintext).map_err(|e| format!("parse vault JSON: {e}"))
             }
         }
         Err(_) => Ok(SecretMap::new()),
@@ -165,7 +162,9 @@ mod tests {
 
     #[test]
     fn vault_load_save_round_trip() {
-        let _guard = crate::ssh::TEST_HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::ssh::TEST_HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         let tmp = std::env::temp_dir().join(format!(
             "verve-vault-test-{}",

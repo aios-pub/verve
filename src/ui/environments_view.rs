@@ -9,12 +9,10 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
-use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
-    WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
 
 use crate::state::models::{Environment, KeyValue};
@@ -50,11 +48,7 @@ pub struct EnvironmentsView {
 }
 
 impl EnvironmentsView {
-    pub fn new(
-        state: Entity<AppState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Build the env-name options from the active project.
         let names: Vec<String> = state
             .read(cx)
@@ -66,7 +60,12 @@ impl EnvironmentsView {
             })
             .unwrap_or_default();
         let env_select = cx.new(|cx| {
-            SelectState::new(names, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                names,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Environment name"));
         let mut view = Self {
@@ -91,7 +90,10 @@ impl EnvironmentsView {
             view.load_env(Some(id.clone()), window, cx);
             // Reflect in the select.
             if let Some(name) = state.read(cx).active_project().and_then(|p| {
-                p.environments.iter().find(|e| e.id == id).map(|e| e.name.clone())
+                p.environments
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.name.clone())
             }) {
                 view.env_select
                     .update(cx, |s, cx| s.set_selected_value(&name, window, cx));
@@ -125,9 +127,12 @@ impl EnvironmentsView {
         }
         // Find the env id by name.
         let id = self.state.read(cx).active_project().and_then(|p| {
-            chosen
-                .as_deref()
-                .and_then(|n| p.environments.iter().find(|e| e.name == n).map(|e| e.id.clone()))
+            chosen.as_deref().and_then(|n| {
+                p.environments
+                    .iter()
+                    .find(|e| e.name == n)
+                    .map(|e| e.id.clone())
+            })
         });
         if let Some(id) = id {
             self.selected_env_id = Some(id.clone());
@@ -154,8 +159,12 @@ impl EnvironmentsView {
                 .read(cx)
                 .active_project()
                 .and_then(|p| {
-                    id.as_ref()
-                        .and_then(|i| p.environments.iter().find(|e| e.id == *i).map(|e| e.name.clone()))
+                    id.as_ref().and_then(|i| {
+                        p.environments
+                            .iter()
+                            .find(|e| e.id == *i)
+                            .map(|e| e.name.clone())
+                    })
                 })
                 .unwrap_or_default();
             s.set_value(name, window, cx);
@@ -258,58 +267,59 @@ impl EnvironmentsView {
     }
 
     /// Request deletion of the given env — opens a real confirmation dialog.
-    fn request_delete_env(
-        &mut self,
-        id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn request_delete_env(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         // Resolve the env name for the prompt.
-        let env_name = self.state.read(cx).active_project().and_then(|p| {
-            p.environments.iter().find(|e| e.id == id).map(|e| e.name.clone())
-        }).unwrap_or_else(|| "该环境".to_string());
+        let env_name = self
+            .state
+            .read(cx)
+            .active_project()
+            .and_then(|p| {
+                p.environments
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.name.clone())
+            })
+            .unwrap_or_else(|| "该环境".to_string());
         let state = self.state.clone();
         let id_for_confirm = id.clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let state_footer = state.clone();
             let id_footer = id_for_confirm.clone();
             let name_for_prompt = env_name.clone();
-            dialog.title("确认删除").content(move |content, _, _| {
-                // Clone per-render (content is a Fn).
-                let name = name_for_prompt.clone();
-                content.child(
-                    v_flex()
-                        .p_4()
-                        .w(px(360.))
-                        .gap_2()
-                        .child(
+            dialog
+                .title("确认删除")
+                .content(move |content, _, _| {
+                    // Clone per-render (content is a Fn).
+                    let name = name_for_prompt.clone();
+                    content.child(
+                        v_flex().p_4().w(px(360.)).gap_2().child(
                             div()
                                 .text_sm()
                                 .child(format!("确定要删除环境「{}」吗？此操作不可撤销。", name)),
                         ),
-                )
-            })
-            .footer({
-                let state_del = state_footer.clone();
-                let id_del = id_footer.clone();
-                gpui_component::button::Button::new("confirm-env-delete")
-                    .primary()
-                    .small()
-                    .label("删除")
-                    .on_click(move |_, window, cx| {
-                        let id_del = id_del.clone();
-                        let _ = state_del.update(cx, |s, cx| {
-                            if let Some(p) = s.active_project_mut() {
-                                p.environments.retain(|e| e.id != id_del);
-                                if p.active_environment.as_deref() == Some(&id_del) {
-                                    p.active_environment = None;
+                    )
+                })
+                .footer({
+                    let state_del = state_footer.clone();
+                    let id_del = id_footer.clone();
+                    gpui_component::button::Button::new("confirm-env-delete")
+                        .primary()
+                        .small()
+                        .label("删除")
+                        .on_click(move |_, window, cx| {
+                            let id_del = id_del.clone();
+                            let _ = state_del.update(cx, |s, cx| {
+                                if let Some(p) = s.active_project_mut() {
+                                    p.environments.retain(|e| e.id != id_del);
+                                    if p.active_environment.as_deref() == Some(&id_del) {
+                                        p.active_environment = None;
+                                    }
+                                    s.notify_workspace(cx);
                                 }
-                                s.notify_workspace(cx);
-                            }
-                        });
-                        window.close_dialog(cx);
-                    })
-            })
+                            });
+                            window.close_dialog(cx);
+                        })
+                })
         });
     }
 
@@ -421,24 +431,43 @@ impl Render for EnvironmentsView {
             on_file_pick: Arc::new(|_, _, _| {}),
         };
 
-        let active_env = self.state.read(cx).active_project().and_then(|p| {
-            p.active_environment.clone()
-        });
+        let active_env = self
+            .state
+            .read(cx)
+            .active_project()
+            .and_then(|p| p.active_environment.clone());
         // Snapshot the environment list (id, name) for the left sidebar.
         let env_list: Vec<(String, String)> = self
             .state
             .read(cx)
             .active_project()
-            .map(|p| p.environments.iter().map(|e| (e.id.clone(), e.name.clone())).collect())
+            .map(|p| {
+                p.environments
+                    .iter()
+                    .map(|e| (e.id.clone(), e.name.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         let active_section = self.active_section.clone();
 
         // The global entries shown below the env list in the sidebar.
         let global_entries = [
-            (crate::ui::kv_manager_view::KvScope::GlobalVariables, "全局变量"),
-            (crate::ui::kv_manager_view::KvScope::GlobalParams, "全局参数"),
-            (crate::ui::kv_manager_view::KvScope::GlobalHeaders, "全局请求头"),
-            (crate::ui::kv_manager_view::KvScope::GlobalCookies, "Cookie 管理器"),
+            (
+                crate::ui::kv_manager_view::KvScope::GlobalVariables,
+                "全局变量",
+            ),
+            (
+                crate::ui::kv_manager_view::KvScope::GlobalParams,
+                "全局参数",
+            ),
+            (
+                crate::ui::kv_manager_view::KvScope::GlobalHeaders,
+                "全局请求头",
+            ),
+            (
+                crate::ui::kv_manager_view::KvScope::GlobalCookies,
+                "Cookie 管理器",
+            ),
         ];
 
         // Helper: is a given section the active one?
@@ -518,9 +547,7 @@ impl Render for EnvironmentsView {
                                         d.bg(theme.primary.opacity(0.18))
                                             .text_color(theme.foreground)
                                     })
-                                    .when(!is_selected, |d| {
-                                        d.text_color(theme.muted_foreground)
-                                    })
+                                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
                                     .hover(|d| d.bg(theme.accent.opacity(0.4)))
                                     .child(div().flex_1().child(name.clone()))
                                     .when(is_active_env, |d| {
@@ -543,9 +570,7 @@ impl Render for EnvironmentsView {
                                             .rounded(px(4.))
                                             .text_color(theme_r.danger.opacity(0.8))
                                             .opacity(0.0)
-                                            .group_hover(group.clone(), |d| {
-                                                d.opacity(1.0)
-                                            })
+                                            .group_hover(group.clone(), |d| d.opacity(1.0))
                                             .hover(|d| d.bg(theme_r.danger.opacity(0.2)))
                                             .child(IconName::Delete)
                                             .on_mouse_down(
@@ -553,7 +578,11 @@ impl Render for EnvironmentsView {
                                                 move |_, window, cx: &mut App| {
                                                     cx.stop_propagation();
                                                     let _ = view_del.update(cx, |this, cx| {
-                                                        this.request_delete_env(id_del.clone(), window, cx);
+                                                        this.request_delete_env(
+                                                            id_del.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
                                                     });
                                                 },
                                             ),
@@ -565,13 +594,7 @@ impl Render for EnvironmentsView {
                                     })
                             }))
                             // Separator between environments and global entries.
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(px(1.))
-                                    .my(px(4.))
-                                    .bg(theme.border),
-                            )
+                            .child(div().w_full().h(px(1.)).my(px(4.)).bg(theme.border))
                             .children(global_entries.iter().map(|(scope, label)| {
                                 let scope = *scope;
                                 let label = (*label).to_string();
@@ -591,9 +614,7 @@ impl Render for EnvironmentsView {
                                         d.bg(theme.primary.opacity(0.18))
                                             .text_color(theme.foreground)
                                     })
-                                    .when(!is_selected, |d| {
-                                        d.text_color(theme.muted_foreground)
-                                    })
+                                    .when(!is_selected, |d| d.text_color(theme.muted_foreground))
                                     .hover(|d| d.bg(theme.accent.opacity(0.4)))
                                     .child(div().flex_1().child(label))
                                     .on_click(move |_, window, cx: &mut App| {
@@ -606,13 +627,8 @@ impl Render for EnvironmentsView {
             )
             // --- Right detail panel: switches by active_section.
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .p_3()
-                    .gap_2()
-                    .child(match active_section.clone() {
+                v_flex().flex_1().min_w_0().h_full().p_3().gap_2().child(
+                    match active_section.clone() {
                         None => v_flex()
                             .size_full()
                             .items_center()
@@ -621,9 +637,11 @@ impl Render for EnvironmentsView {
                             .child("选择左侧的环境或全局项进行编辑，或点击「新建」创建一个环境。")
                             .into_any_element(),
                         Some(SettingsSection::Env(id)) => {
-                            let is_env = self.state.read(cx).active_project().map_or(false, |p| {
-                                p.environments.iter().any(|e| e.id == id)
-                            });
+                            let is_env = self
+                                .state
+                                .read(cx)
+                                .active_project()
+                                .map_or(false, |p| p.environments.iter().any(|e| e.id == id));
                             if !is_env {
                                 v_flex()
                                     .size_full()
@@ -663,11 +681,17 @@ impl Render for EnvironmentsView {
                                                     .small()
                                                     .icon(IconName::Delete)
                                                     .tooltip("删除环境")
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        if let Some(id) = this.selected_env_id.clone() {
-                                                            this.request_delete_env(id, window, cx)
-                                                        }
-                                                    })),
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            if let Some(id) =
+                                                                this.selected_env_id.clone()
+                                                            {
+                                                                this.request_delete_env(
+                                                                    id, window, cx,
+                                                                )
+                                                            }
+                                                        },
+                                                    )),
                                             ),
                                     )
                                     // Variables section (scrollable).
@@ -690,14 +714,15 @@ impl Render for EnvironmentsView {
                                                     .min_h_0()
                                                     .overflow_y_scroll()
                                                     .child(
-                                                        div()
-                                                            .w_full()
-                                                            .min_w(px(640.))
-                                                            .child(crate::ui::kv_table::KvTable::new(
+                                                        div().w_full().min_w(px(640.)).child(
+                                                            crate::ui::kv_table::KvTable::new(
                                                                 "env-vars",
                                                                 self.rows.clone(),
                                                                 handlers,
-                                                            ).show_description(true).show_required(true)),
+                                                            )
+                                                            .show_description(true)
+                                                            .show_required(true),
+                                                        ),
                                                     ),
                                             ),
                                     )
@@ -712,18 +737,21 @@ impl Render for EnvironmentsView {
                                 .size_full()
                                 .min_h_0()
                                 .child(
-                                    v_flex().gap_1().child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.foreground)
-                                            .child(title),
-                                    ).child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(desc),
-                                    ),
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(theme.foreground)
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(desc),
+                                        ),
                                 )
                                 .child(
                                     div()
@@ -732,19 +760,21 @@ impl Render for EnvironmentsView {
                                         .min_h_0()
                                         .overflow_y_scroll()
                                         .child(
-                                            div()
-                                                .w_full()
-                                                .min_w(px(640.))
-                                                .child(crate::ui::kv_table::KvTable::new(
+                                            div().w_full().min_w(px(640.)).child(
+                                                crate::ui::kv_table::KvTable::new(
                                                     "global-vars",
                                                     self.rows.clone(),
                                                     handlers,
-                                                ).show_description(true).show_required(true)),
+                                                )
+                                                .show_description(true)
+                                                .show_required(true),
+                                            ),
                                         ),
                                 )
                                 .into_any_element()
                         }
-                    }),
+                    },
+                ),
             )
     }
 }
@@ -785,12 +815,13 @@ fn open_global_dialog(
     cx: &mut App,
 ) {
     let title = scope.title().to_string();
-    let view = cx.new(|cx| crate::ui::kv_manager_view::KvManagerView::new(state, scope, window, cx));
+    let view =
+        cx.new(|cx| crate::ui::kv_manager_view::KvManagerView::new(state, scope, window, cx));
     window.open_dialog(cx, move |dialog, _, _| {
         let view = view.clone();
-        dialog.title(title.clone()).content(move |content, _, _| {
-            content.child(div().p_4().child(view.clone()))
-        })
+        dialog
+            .title(title.clone())
+            .content(move |content, _, _| content.child(div().p_4().child(view.clone())))
     });
 }
 

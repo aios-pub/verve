@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 /// A request method. Ordered so the common methods appear first in pickers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[derive(Default)]
 pub enum RequestMethod {
+    #[default]
     Get,
     Post,
     Put,
@@ -19,12 +21,6 @@ pub enum RequestMethod {
     Patch,
     Head,
     Options,
-}
-
-impl Default for RequestMethod {
-    fn default() -> Self {
-        RequestMethod::Get
-    }
 }
 
 impl RequestMethod {
@@ -76,7 +72,9 @@ impl std::fmt::Display for RequestMethod {
 /// executed; the rest are selectable placeholders (PRD roadmap).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Protocol {
+    #[default]
     Http,
     Sse,
     WebSocket,
@@ -89,12 +87,6 @@ pub enum Protocol {
     Markdown,
     /// A directory/folder node.
     Directory,
-}
-
-impl Default for Protocol {
-    fn default() -> Self {
-        Protocol::Http
-    }
 }
 
 impl Protocol {
@@ -277,8 +269,10 @@ impl std::fmt::Display for IfaceColumn {
 /// The body type selected for a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum BodyType {
     /// No body.
+    #[default]
     None,
     /// `multipart/form-data`, may include file parts.
     FormData,
@@ -288,16 +282,12 @@ pub enum BodyType {
     Raw,
 }
 
-impl Default for BodyType {
-    fn default() -> Self {
-        BodyType::None
-    }
-}
-
 /// Language/format for a raw body. Maps to code-editor highlighter language names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RawLanguage {
+    #[default]
     Json,
     Xml,
     Text,
@@ -359,12 +349,6 @@ impl RawLanguage {
             "javascript" => Some(Self::Javascript),
             _ => None,
         }
-    }
-}
-
-impl Default for RawLanguage {
-    fn default() -> Self {
-        RawLanguage::Json
     }
 }
 
@@ -535,9 +519,10 @@ impl RequestBody {
         self.raw_parameter = map
             .iter()
             .map(|(key, val)| {
-                let mut kv = old.get(key).cloned().unwrap_or_else(|| {
-                    KeyValue::new(key.clone(), String::new())
-                });
+                let mut kv = old
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| KeyValue::new(key.clone(), String::new()));
                 kv.key = key.clone();
                 kv.value = match val {
                     serde_json::Value::String(s) => s.clone(),
@@ -561,9 +546,8 @@ impl RequestBody {
             if kv.key.trim().is_empty() {
                 continue;
             }
-            let parsed = serde_json::from_str::<serde_json::Value>(&kv.value).unwrap_or_else(|_| {
-                serde_json::Value::String(kv.value.clone())
-            });
+            let parsed = serde_json::from_str::<serde_json::Value>(&kv.value)
+                .unwrap_or_else(|_| serde_json::Value::String(kv.value.clone()));
             map.insert(kv.key.clone(), parsed);
         }
         if let Ok(json) = serde_json::to_string_pretty(&serde_json::Value::Object(map)) {
@@ -588,36 +572,33 @@ fn json_type_to_field(val: &serde_json::Value) -> FieldType {
 /// Where an API-key auth credential is injected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AuthTarget {
+    #[default]
     Header,
     Query,
-}
-
-impl Default for AuthTarget {
-    fn default() -> Self {
-        AuthTarget::Header
-    }
 }
 
 /// The authentication scheme selected for a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AuthType {
+    #[default]
     None,
     Bearer,
     Basic,
     ApiKey,
 }
 
-impl Default for AuthType {
-    fn default() -> Self {
-        AuthType::None
-    }
-}
-
 impl AuthType {
     pub fn all() -> &'static [AuthType] {
-        &[AuthType::None, AuthType::Bearer, AuthType::Basic, AuthType::ApiKey]
+        &[
+            AuthType::None,
+            AuthType::Bearer,
+            AuthType::Basic,
+            AuthType::ApiKey,
+        ]
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -944,7 +925,11 @@ pub struct MergeRequest {
 }
 
 impl MergeRequest {
-    pub fn new(title: impl Into<String>, source: impl Into<String>, target: impl Into<String>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        source: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
         Self {
             id: new_id(),
             title: title.into(),
@@ -968,7 +953,11 @@ pub struct StatusCodeEntry {
 
 impl StatusCodeEntry {
     pub fn new(code: u16, name: impl Into<String>) -> Self {
-        Self { code, name: name.into(), description: String::new() }
+        Self {
+            code,
+            name: name.into(),
+            description: String::new(),
+        }
     }
 
     /// A small built-in dictionary seeded for new projects so the
@@ -995,7 +984,11 @@ impl StatusCodeEntry {
             (504, "Gateway Timeout", "网关超时"),
         ]
         .iter()
-        .map(|(c, n, d)| Self { code: *c, name: n.to_string(), description: d.to_string() })
+        .map(|(c, n, d)| Self {
+            code: *c,
+            name: n.to_string(),
+            description: d.to_string(),
+        })
         .collect()
     }
 }
@@ -1131,11 +1124,7 @@ impl Project {
         for req in &self.requests {
             out.push((String::new(), req));
         }
-        fn walk<'a>(
-            folders: &'a [Folder],
-            prefix: &str,
-            out: &mut Vec<(String, &'a ApiRequest)>,
-        ) {
+        fn walk<'a>(folders: &'a [Folder], prefix: &str, out: &mut Vec<(String, &'a ApiRequest)>) {
             for folder in folders {
                 let path = if prefix.is_empty() {
                     folder.name.clone()
@@ -1254,9 +1243,7 @@ impl Project {
     pub fn move_request(&mut self, req_id: &str, dest: &MoveTarget) -> bool {
         // Can't drop onto yourself.
         match dest {
-            MoveTarget::BeforeRequest(id) | MoveTarget::AfterRequest(id)
-                if id == req_id =>
-            {
+            MoveTarget::BeforeRequest(id) | MoveTarget::AfterRequest(id) if id == req_id => {
                 return false;
             }
             _ => {}
@@ -1283,9 +1270,13 @@ impl Project {
             MoveTarget::BeforeRequest(target_id) => {
                 insert_request_relative(&mut self.requests, &mut self.folders, req, target_id, true)
             }
-            MoveTarget::AfterRequest(target_id) => {
-                insert_request_relative(&mut self.requests, &mut self.folders, req, target_id, false)
-            }
+            MoveTarget::AfterRequest(target_id) => insert_request_relative(
+                &mut self.requests,
+                &mut self.folders,
+                req,
+                target_id,
+                false,
+            ),
         }
     }
 
@@ -1629,7 +1620,10 @@ mod tests {
         };
         body.sync_raw_to_fields();
         assert_eq!(body.raw_parameter.len(), 1);
-        assert!(!body.raw_parameter[0].required, "user's required=false preserved");
+        assert!(
+            !body.raw_parameter[0].required,
+            "user's required=false preserved"
+        );
         assert_eq!(body.raw_parameter[0].description, "用户名");
     }
 
@@ -1642,7 +1636,10 @@ mod tests {
             ..Default::default()
         };
         body.sync_raw_to_fields();
-        assert!(body.raw_parameter.is_empty(), "XML bodies should not be parsed into fields");
+        assert!(
+            body.raw_parameter.is_empty(),
+            "XML bodies should not be parsed into fields"
+        );
     }
 
     #[test]

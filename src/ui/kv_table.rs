@@ -12,10 +12,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
 };
 
 use crate::state::models::{FieldType, KeyValue};
@@ -148,7 +147,7 @@ impl RenderOnce for KvTable {
         let show_type = self.show_type;
         let show_description = self.show_description;
         let show_required = self.show_required;
-        let id = self.id.clone();
+        let _id = self.id.clone();
         let theme = cx.theme().clone();
         v_flex()
             .w_full()
@@ -168,13 +167,11 @@ impl RenderOnce for KvTable {
                     .w_full()
                     .gap_1()
                     .items_center()
-                    .child(
-                        Checkbox::new(("kv-enabled", ix))
-                            .checked(enabled)
-                            .on_click(move |checked: &bool, window, cx| {
-                                (toggle)(ix, *checked, window, cx);
-                            }),
-                    )
+                    .child(Checkbox::new(("kv-enabled", ix)).checked(enabled).on_click(
+                        move |checked: &bool, window, cx| {
+                            (toggle)(ix, *checked, window, cx);
+                        },
+                    ))
                     .child(
                         div()
                             .w(px(140.))
@@ -182,15 +179,12 @@ impl RenderOnce for KvTable {
                             .child(Input::new(&row.key).small().appearance(false)),
                     )
                     .child(
-                        div()
-                            .w(px(160.))
-                            .flex_shrink_0()
-                            .child(
-                                Input::new(&row.value)
-                                    .small()
-                                    .appearance(false)
-                                    .disabled(is_file && allow_files),
-                            ),
+                        div().w(px(160.)).flex_shrink_0().child(
+                            Input::new(&row.value)
+                                .small()
+                                .appearance(false)
+                                .disabled(is_file && allow_files),
+                        ),
                     )
                     // Type selector dropdown (form-data / query).
                     .when(show_type, |this| {
@@ -208,41 +202,38 @@ impl RenderOnce for KvTable {
                                         .w(px(72.)),
                                 )
                                 .p(px(4.))
-                                .child(
-                                    v_flex()
-                                        .w(px(90.))
-                                        .gap(px(2.))
-                                        .children(FieldType::all().iter().map(|&ft| {
-                                            let cb = on_type_inner.clone();
-                                            let is_current = ft == field_type;
-                                            let tc = theme_clone.clone();
-                                            div()
-                                                .id(format!("kv-type-opt-{ix}-{}", ft.as_str()))
-                                                .w_full()
-                                                .h(px(22.))
-                                                .px(px(8.))
-                                                .flex()
-                                                .items_center()
-                                                .text_size(px(11.))
-                                                .rounded(px(4.))
-                                                .when(is_current, |d| {
-                                                    d.bg(tc.accent.opacity(0.5))
-                                                        .text_color(tc.foreground)
-                                                })
-                                                .when(!is_current, |d| {
-                                                    d.text_color(tc.muted_foreground)
-                                                })
-                                                .hover(|d| d.bg(tc.accent.opacity(0.3)))
-                                                .child(ft.as_str().to_string())
-                                                .on_click(move |_, window, cx: &mut App| {
-                                                    (cb)(ix, ft, window, cx);
-                                                    // Force the popover to close by refreshing —
-                                                    // the Popover's internal state resets on
-                                                    // re-render when it loses focus.
-                                                    window.refresh();
-                                                })
-                                        })),
-                                ),
+                                .child(v_flex().w(px(90.)).gap(px(2.)).children(
+                                    FieldType::all().iter().map(|&ft| {
+                                        let cb = on_type_inner.clone();
+                                        let is_current = ft == field_type;
+                                        let tc = theme_clone.clone();
+                                        div()
+                                            .id(format!("kv-type-opt-{ix}-{}", ft.as_str()))
+                                            .w_full()
+                                            .h(px(22.))
+                                            .px(px(8.))
+                                            .flex()
+                                            .items_center()
+                                            .text_size(px(11.))
+                                            .rounded(px(4.))
+                                            .when(is_current, |d| {
+                                                d.bg(tc.accent.opacity(0.5))
+                                                    .text_color(tc.foreground)
+                                            })
+                                            .when(!is_current, |d| {
+                                                d.text_color(tc.muted_foreground)
+                                            })
+                                            .hover(|d| d.bg(tc.accent.opacity(0.3)))
+                                            .child(ft.as_str().to_string())
+                                            .on_click(move |_, window, cx: &mut App| {
+                                                (cb)(ix, ft, window, cx);
+                                                // Force the popover to close by refreshing —
+                                                // the Popover's internal state resets on
+                                                // re-render when it loses focus.
+                                                window.refresh();
+                                            })
+                                    }),
+                                )),
                         )
                     })
                     // Required toggle: "*" highlighted when active. Decoupled
@@ -260,8 +251,7 @@ impl RenderOnce for KvTable {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::BOLD)
                                 .when(required, |t| {
-                                    t.bg(theme.danger.opacity(0.2))
-                                        .text_color(theme.danger)
+                                    t.bg(theme.danger.opacity(0.2)).text_color(theme.danger)
                                 })
                                 .when(!required, |t| {
                                     t.text_color(theme.muted_foreground.opacity(0.5))
@@ -279,11 +269,7 @@ impl RenderOnce for KvTable {
                             div()
                                 .w(px(180.))
                                 .flex_shrink_0()
-                                .child(
-                                    Input::new(&row.description)
-                                        .small()
-                                        .appearance(false),
-                                ),
+                                .child(Input::new(&row.description).small().appearance(false)),
                         )
                     })
                     // File picker button (form-data + File type).
@@ -328,17 +314,12 @@ impl RenderOnce for KvTable {
 
 /// Helper: build a fresh set of rows from `pairs`, ensuring exactly one
 /// trailing empty row for quick entry.
-pub fn rows_from_pairs(
-    pairs: &[KeyValue],
-    window: &mut Window,
-    cx: &mut App,
-) -> Vec<KvRow> {
+pub fn rows_from_pairs(pairs: &[KeyValue], window: &mut Window, cx: &mut App) -> Vec<KvRow> {
     let mut rows: Vec<KvRow> = pairs.iter().map(|kv| KvRow::new(kv, window, cx)).collect();
     let needs_trailing = rows
         .last()
         .map(|r| {
-            !r.key.read(cx).value().trim().is_empty()
-                || !r.value.read(cx).value().trim().is_empty()
+            !r.key.read(cx).value().trim().is_empty() || !r.value.read(cx).value().trim().is_empty()
         })
         .unwrap_or(true);
     if needs_trailing {

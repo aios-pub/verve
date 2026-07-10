@@ -31,9 +31,7 @@ fn main() {
         .try_init();
 
     // Apply the persisted UI locale (defaults to zh-CN).
-    if let Some(locale) = verve::state::persistence::load_layout()
-        .and_then(|l| l.locale)
-    {
+    if let Some(locale) = verve::state::persistence::load_layout().and_then(|l| l.locale) {
         rust_i18n::set_locale(&locale);
     } else {
         rust_i18n::set_locale("zh-CN");

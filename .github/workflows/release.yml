@@ -70,7 +70,15 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y \
+            gcc g++ clang \
+            libssl-dev pkg-config \
+            libfontconfig-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev \
+            libwayland-dev \
+            libzstd-dev \
+            libvulkan1 vulkan-validationlayers
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -97,7 +105,15 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y \
+            gcc g++ clang \
+            libssl-dev pkg-config \
+            libfontconfig-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev \
+            libwayland-dev \
+            libzstd-dev \
+            libvulkan1 vulkan-validationlayers
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -188,7 +204,15 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y \
+            gcc g++ clang \
+            libssl-dev pkg-config \
+            libfontconfig-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev \
+            libwayland-dev \
+            libzstd-dev \
+            libvulkan1 vulkan-validationlayers
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
@@ -256,7 +280,16 @@ jobs:
       - name: Install cross-compilation toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y \
+            gcc g++ clang \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libssl-dev pkg-config \
+            libfontconfig-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev \
+            libwayland-dev \
+            libzstd-dev \
+            libvulkan1 vulkan-validationlayers
           cargo install cross
 
       - name: Cache cargo registry

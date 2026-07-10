@@ -195,7 +195,12 @@ fn parse_request(raw: &str) -> Result<ParsedRequest, &'static str> {
         }
     }
     let body = lines.collect::<Vec<_>>().join("\r\n");
-    Ok(ParsedRequest { method, path, headers, body })
+    Ok(ParsedRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
 }
 
 /// Build the full HTTP/1.1 response (status line + headers + body).
@@ -245,7 +250,11 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
     // ---- Strict enforcement: expiration -----------------------------------
     let now = now_ts();
     if !cfg.is_valid_at(now) {
-        return response(410, "text/html; charset=utf-8", expired_html(&cfg).as_bytes());
+        return response(
+            410,
+            "text/html; charset=utf-8",
+            expired_html(&cfg).as_bytes(),
+        );
     }
 
     // ---- /s/<id>/password (GET form + POST verify) ------------------------
@@ -364,8 +373,7 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
                     return response_bytes(
                         400,
                         "application/json",
-                        format!(r#"{{"error":"invalid project json: {e}"}}"#)
-                            .into_bytes(),
+                        format!(r#"{{"error":"invalid project json: {e}"}}"#).into_bytes(),
                     );
                 }
             };
@@ -392,7 +400,9 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
         ("POST", "/admin/api/shares") => {
             let project_id = form_field(&req.body, "project_id").unwrap_or_default();
             let title = form_field(&req.body, "title").unwrap_or_default();
-            let public = form_field(&req.body, "public").map(|v| v == "1").unwrap_or(true);
+            let public = form_field(&req.body, "public")
+                .map(|v| v == "1")
+                .unwrap_or(true);
             let password = form_field(&req.body, "password");
 
             if store.get_project(&project_id).is_none() {
@@ -497,7 +507,10 @@ fn request_in_folder(folder: &crate::state::models::Folder, request_id: &str) ->
     if folder.requests.iter().any(|r| r.id == request_id) {
         return true;
     }
-    folder.folders.iter().any(|f| request_in_folder(f, request_id))
+    folder
+        .folders
+        .iter()
+        .any(|f| request_in_folder(f, request_id))
 }
 
 /// Build a JSON array of `{id, name, method, path}` for the in-scope requests.
@@ -899,10 +912,9 @@ fn url_decode(s: &str) -> String {
         match bytes[i] {
             b'+' => out.push(' '),
             b'%' if i + 2 < bytes.len() => {
-                if let Ok(b) = u8::from_str_radix(
-                    &String::from_utf8_lossy(&bytes[i + 1..i + 3]),
-                    16,
-                ) {
+                if let Ok(b) =
+                    u8::from_str_radix(&String::from_utf8_lossy(&bytes[i + 1..i + 3]), 16)
+                {
                     out.push(b as char);
                     i += 2;
                 } else {
@@ -926,7 +938,12 @@ fn record_visit(configs: &Arc<RwLock<Vec<ShareConfig>>>, id: &str) {
 }
 
 fn mime_from_ext(path: &std::path::Path) -> Option<&'static str> {
-    match path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
@@ -988,8 +1005,14 @@ mod tests {
 
     #[test]
     fn password_form_decodes_correctly() {
-        assert_eq!(form_field("password=hello&x=1", "password"), Some("hello".into()));
-        assert_eq!(form_field("password=hi%20there", "password"), Some("hi there".into()));
+        assert_eq!(
+            form_field("password=hello&x=1", "password"),
+            Some("hello".into())
+        );
+        assert_eq!(
+            form_field("password=hi%20there", "password"),
+            Some("hi there".into())
+        );
         assert_eq!(form_field("password=a+b", "password"), Some("a b".into()));
     }
 
@@ -1044,14 +1067,17 @@ mod tests {
         let mut p = crate::state::models::Project::new("X");
         let id_for_lookup = p.id.clone();
         let id = p.id.clone();
-        p.requests.push(ApiRequest::new("R", RequestMethod::Get, "/r"));
-        let provider = ClosureProvider(move |qid: &str| {
-            if qid == id {
-                Some(p.clone())
-            } else {
-                None
-            }
-        });
+        p.requests
+            .push(ApiRequest::new("R", RequestMethod::Get, "/r"));
+        let provider = ClosureProvider(
+            move |qid: &str| {
+                if qid == id {
+                    Some(p.clone())
+                } else {
+                    None
+                }
+            },
+        );
         assert!(provider.get_project(&id_for_lookup).is_some());
         assert!(provider.get_project("nope").is_none());
     }

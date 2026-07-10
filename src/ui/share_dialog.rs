@@ -21,10 +21,11 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _, Theme, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    h_flex, popover::Popover, v_flex,
+    h_flex,
+    popover::Popover,
+    v_flex, ActiveTheme, IconName, Sizable as _, Theme, WindowExt as _,
 };
 
 use crate::share::models::{
@@ -82,8 +83,7 @@ impl ShareDialogState {
             s.set_value(&config.title, window, cx);
             s
         });
-        let password_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("访问密码"));
+        let password_input = cx.new(|cx| InputState::new(window, cx).placeholder("访问密码"));
 
         cx.new(|_cx| Self {
             config,
@@ -150,7 +150,11 @@ pub fn render_content(
         .child(render_env_section(state.clone(), theme.clone(), cx))
         // 字段展示控制
         .child(divider(border))
-        .child(render_field_display_section(state.clone(), theme.clone(), cx))
+        .child(render_field_display_section(
+            state.clone(),
+            theme.clone(),
+            cx,
+        ))
         // 文档 logo
         .child(divider(border))
         .child(render_logo_section(state.clone(), theme.clone(), cx))
@@ -172,11 +176,7 @@ fn divider(border: Hsla) -> Div {
 // Section: 有效期 (expiration dropdown)
 // ===========================================================================
 
-fn render_expire_section(
-    state: Entity<ShareDialogState>,
-    theme: Theme,
-    cx: &App,
-) -> Div {
+fn render_expire_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) -> Div {
     let s = state.read(cx);
     let muted = theme.muted_foreground;
     let current_label = s.config.expire.label();
@@ -204,37 +204,46 @@ fn render_expire_section(
                         .small()
                         .w(px(200.))
                         .label(current_label)
-                        .icon(IconName::ChevronDown)
+                        .icon(IconName::ChevronDown),
                 )
-                .child(v_flex().p_1().w(px(200.)).gap(px(1.)).children(
-                    Expiration::PRESETS.iter().enumerate().map(|(ix, (exp, label))| {
-                        let selected = s.config.expire == *exp;
-                        let state_for_click = state.clone();
-                        let exp_val = *exp;
-                        h_flex()
-                            .id(("expire-opt", ix))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|st| st.bg(theme.muted))
-                            .when(selected, |d| d.bg(theme.accent.opacity(0.5)))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(if selected { theme.foreground } else { muted })
-                                    .child(*label),
-                            )
-                            .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
-                                let _ = state_for_click.update(cx, |s, cx| {
-                                    s.config.expire = exp_val;
-                                    s.expire_popover = false;
-                                    window.refresh();
-                                    cx.notify();
-                                });
-                            })
-                    }),
-                )),
+                .child(
+                    v_flex().p_1().w(px(200.)).gap(px(1.)).children(
+                        Expiration::PRESETS
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, (exp, label))| {
+                                let selected = s.config.expire == *exp;
+                                let state_for_click = state.clone();
+                                let exp_val = *exp;
+                                h_flex()
+                                    .id(("expire-opt", ix))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|st| st.bg(theme.muted))
+                                    .when(selected, |d| d.bg(theme.accent.opacity(0.5)))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(if selected {
+                                                theme.foreground
+                                            } else {
+                                                muted
+                                            })
+                                            .child(*label),
+                                    )
+                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx| {
+                                        let _ = state_for_click.update(cx, |s, cx| {
+                                            s.config.expire = exp_val;
+                                            s.expire_popover = false;
+                                            window.refresh();
+                                            cx.notify();
+                                        });
+                                    })
+                            }),
+                    ),
+                ),
         )
 }
 
@@ -249,28 +258,31 @@ fn render_methods_section(state: Entity<ShareDialogState>, theme: Theme, cx: &Ap
     v_flex()
         .gap_2()
         .child(section_label("分享方式", muted))
-        .child(h_flex().gap_4().flex_wrap().children(
-            ShareMethod::ALL.iter().map(|&method| {
-                let checked = s.config.share_methods.contains(&method);
-                let state_for_click = state.clone();
-                let id = format!("share-method-{}", method.label());
-                Checkbox::new(SharedString::from(id))
-                    .checked(checked)
-                    .label(method.label())
-                    .on_click(move |c: &bool, _window, cx| {
-                        let _ = state_for_click.update(cx, |s, cx| {
-                            if *c {
-                                if !s.config.share_methods.contains(&method) {
-                                    s.config.share_methods.push(method);
+        .child(
+            h_flex()
+                .gap_4()
+                .flex_wrap()
+                .children(ShareMethod::ALL.iter().map(|&method| {
+                    let checked = s.config.share_methods.contains(&method);
+                    let state_for_click = state.clone();
+                    let id = format!("share-method-{}", method.label());
+                    Checkbox::new(SharedString::from(id))
+                        .checked(checked)
+                        .label(method.label())
+                        .on_click(move |c: &bool, _window, cx| {
+                            let _ = state_for_click.update(cx, |s, cx| {
+                                if *c {
+                                    if !s.config.share_methods.contains(&method) {
+                                        s.config.share_methods.push(method);
+                                    }
+                                } else {
+                                    s.config.share_methods.retain(|m| *m != method);
                                 }
-                            } else {
-                                s.config.share_methods.retain(|m| *m != method);
-                            }
-                            cx.notify();
-                        });
-                    })
-            }),
-        ))
+                                cx.notify();
+                            });
+                        })
+                })),
+        )
 }
 
 // ===========================================================================
@@ -344,7 +356,12 @@ fn render_env_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) -
         return v_flex()
             .gap_2()
             .child(section_label("开发环境", muted))
-            .child(div().text_sm().text_color(muted).child("当前项目没有环境变量"));
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("当前项目没有环境变量"),
+            );
     }
 
     let selected_id = s.config.environment_id.clone();
@@ -384,7 +401,7 @@ fn render_env_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) -
                         .small()
                         .w(px(220.))
                         .label(selected_label)
-                        .icon(IconName::ChevronDown)
+                        .icon(IconName::ChevronDown),
                 )
                 .child(v_flex().p_1().w(px(220.)).gap(px(1.)).children(
                     options.into_iter().enumerate().map(|(ix, (id, label))| {
@@ -421,11 +438,7 @@ fn render_env_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) -
 // Section: 字段展示控制 (field display checkboxes)
 // ===========================================================================
 
-fn render_field_display_section(
-    state: Entity<ShareDialogState>,
-    theme: Theme,
-    cx: &App,
-) -> Div {
+fn render_field_display_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) -> Div {
     let s = state.read(cx);
     let muted = theme.muted_foreground;
 
@@ -433,24 +446,25 @@ fn render_field_display_section(
         .gap_2()
         .child(section_label("字段展示控制", muted))
         .child(
-            h_flex()
-                .gap_x(px(24.))
-                .gap_y(px(8.))
-                .flex_wrap()
-                .children(FieldDisplay::FIELDS.iter().enumerate().map(|(ix, (key, label))| {
-                    let checked = s.config.field_display.get(key);
-                    let state_for_click = state.clone();
-                    let key_owned = key.to_string();
-                    Checkbox::new(("field-display", ix))
-                        .checked(checked)
-                        .label(*label)
-                        .on_click(move |c: &bool, _window, cx| {
-                            let _ = state_for_click.update(cx, |s, cx| {
-                                s.config.field_display.set(&key_owned, *c);
-                                cx.notify();
-                            });
-                        })
-                })),
+            h_flex().gap_x(px(24.)).gap_y(px(8.)).flex_wrap().children(
+                FieldDisplay::FIELDS
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, (key, label))| {
+                        let checked = s.config.field_display.get(key);
+                        let state_for_click = state.clone();
+                        let key_owned = key.to_string();
+                        Checkbox::new(("field-display", ix))
+                            .checked(checked)
+                            .label(*label)
+                            .on_click(move |c: &bool, _window, cx| {
+                                let _ = state_for_click.update(cx, |s, cx| {
+                                    s.config.field_display.set(&key_owned, *c);
+                                    cx.notify();
+                                });
+                            })
+                    }),
+            ),
         )
 }
 
@@ -484,8 +498,13 @@ fn render_logo_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) 
             .and_then(|n| n.to_str())
             .unwrap_or("logo")
             .to_string();
-        row = row
-            .child(div().flex_1().text_sm().text_color(muted).child(path_display));
+        row = row.child(
+            div()
+                .flex_1()
+                .text_sm()
+                .text_color(muted)
+                .child(path_display),
+        );
     } else {
         row = row.child(
             div()
@@ -498,8 +517,13 @@ fn render_logo_section(state: Entity<ShareDialogState>, theme: Theme, cx: &App) 
                 .justify_center()
                 .child(div().text_lg().text_color(muted).child("V")),
         );
-        row = row
-            .child(div().flex_1().text_sm().text_color(muted).child("未选择 logo（可选）"));
+        row = row.child(
+            div()
+                .flex_1()
+                .text_sm()
+                .text_color(muted)
+                .child("未选择 logo（可选）"),
+        );
     }
 
     // Choose button.

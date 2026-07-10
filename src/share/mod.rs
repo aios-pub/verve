@@ -25,6 +25,4 @@ pub mod persist;
 pub mod qrcode;
 pub mod server;
 
-pub use models::{
-    AccessControl, Expiration, FieldDisplay, ShareConfig, ShareMethod, ShareScope,
-};
+pub use models::{AccessControl, Expiration, FieldDisplay, ShareConfig, ShareMethod, ShareScope};

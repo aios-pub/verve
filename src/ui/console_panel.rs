@@ -1,7 +1,7 @@
 //! Bottom pane: request/response console log (history).
 
 use gpui::*;
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme};
 
 use crate::state::{AppEvent, AppState};
 
@@ -68,8 +68,16 @@ impl Render for ConsolePanel {
                             )
                             .child(div().w(px_unit(60.)).child(h.method.to_string()))
                             .child(div().flex_1().child(h.name.clone()))
-                            .child(div().text_color(theme.muted_foreground).child(format!("{} ms", h.time_ms)))
-                            .child(div().text_color(theme.muted_foreground).child(h.at.chars().take(19).collect::<String>()))
+                            .child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} ms", h.time_ms)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .child(h.at.chars().take(19).collect::<String>()),
+                            )
                             .id(("console-row", i))
                     })),
             )

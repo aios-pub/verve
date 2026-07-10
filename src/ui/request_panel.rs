@@ -13,37 +13,42 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
-    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    h_flex, popover::Popover, v_flex,
+    h_flex,
+    popover::Popover,
+    v_flex, ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
 };
 
 use crate::http;
-use crate::state::{AppEvent, AppState};
 use crate::state::models::*;
+use crate::state::{AppEvent, AppState};
 use crate::ui::kv_table::{self, KvRow};
 
-/// Action bound to Cmd/Ctrl+Enter to send the active request.
-gpui::actions!(
-    verve,
-    [SendRequest]
-);
+// Action bound to Cmd/Ctrl+Enter to send the active request.
+gpui::actions!(verve, [SendRequest]);
 
 /// Shared stop-flags for in-flight streaming requests (SSE/WebSocket), keyed by
 /// request id. A background task polls its flag and aborts once it goes true.
 static ACTIVE_STOP_FLAGS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    std::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    >,
 > = std::sync::OnceLock::new();
 
-fn stop_flags() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>> {
+fn stop_flags() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
+> {
     ACTIVE_STOP_FLAGS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Register a stop flag for a request id and return it for the background task.
 fn register_stop(id: &str) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
     let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    stop_flags().lock().unwrap().insert(id.to_string(), flag.clone());
+    stop_flags()
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), flag.clone());
     flag
 }
 
@@ -165,17 +170,19 @@ pub enum FolderTab {
 }
 
 impl RequestPanel {
-    pub fn new(
-        state: Entity<AppState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let url = cx.new(|cx| InputState::new(window, cx).placeholder("https://..."));
         let req_base_url = cx.new(|cx| InputState::new(window, cx).placeholder("前置URL"));
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("接口名称"));
-        let method_options: Vec<String> = RequestMethod::all().iter().map(|m| m.to_string()).collect();
+        let method_options: Vec<String> =
+            RequestMethod::all().iter().map(|m| m.to_string()).collect();
         let method_select = cx.new(|cx| {
-            SelectState::new(method_options, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                method_options,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
         let body_editor = cx.new(|cx| {
             InputState::new(window, cx)
@@ -183,10 +190,17 @@ impl RequestPanel {
                 .placeholder("Request body (JSON, XML, ...)")
                 .default_value("{}")
         });
-        let lang_options: Vec<String> =
-            RawLanguage::all().iter().map(|l| l.lower_name().to_string()).collect();
+        let lang_options: Vec<String> = RawLanguage::all()
+            .iter()
+            .map(|l| l.lower_name().to_string())
+            .collect();
         let body_lang_select = cx.new(|cx| {
-            SelectState::new(lang_options, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                lang_options,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
         // Body type selector: none / form-data / urlencoded / raw.
         let body_type_options: Vec<String> = vec![
@@ -196,7 +210,12 @@ impl RequestPanel {
             "raw".to_string(),
         ];
         let body_type_select = cx.new(|cx| {
-            SelectState::new(body_type_options, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                body_type_options,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
         // React to body-type changes.
         let bt_sub = cx.subscribe(&body_type_select, Self::on_body_type_change);
@@ -206,15 +225,22 @@ impl RequestPanel {
                 .placeholder("// 预执行脚本：apt.setVariable(k,v) · apt.getVariable(k)")
         });
         let tests_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
-                .placeholder("// 后执行脚本：response.{status,body,json,headers,time} · apt.assert(cond,msg)")
+            InputState::new(window, cx).multi_line(true).placeholder(
+                "// 后执行脚本：response.{status,body,json,headers,time} · apt.assert(cond,msg)",
+            )
         });
         // Auth fields.
-        let auth_type_options: Vec<String> =
-            AuthType::all().iter().map(|a| a.as_str().to_string()).collect();
+        let auth_type_options: Vec<String> = AuthType::all()
+            .iter()
+            .map(|a| a.as_str().to_string())
+            .collect();
         let auth_type_select = cx.new(|cx| {
-            SelectState::new(auth_type_options, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                auth_type_options,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
         let auth_target_select = cx.new(|cx| {
             SelectState::new(
@@ -238,10 +264,8 @@ impl RequestPanel {
                 .rows(4)
                 .placeholder("目录描述（可选）：说明该目录下接口的用途、归属模块等")
         });
-        let folder_base_url = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://api.example.com")
-        });
+        let folder_base_url =
+            cx.new(|cx| InputState::new(window, cx).placeholder("https://api.example.com"));
 
         let panel = Self {
             state: state.clone(),
@@ -389,12 +413,7 @@ impl RequestPanel {
     /// On input change/blur, commit the editors back into the active model
     /// (request or folder) so edits apply live (name/path/etc. update in the
     /// tree and lists as you type). Saving is debounced inside notify_edited.
-    fn on_input_blur(
-        &mut self,
-        _src: Entity<InputState>,
-        ev: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_input_blur(&mut self, _src: Entity<InputState>, ev: &InputEvent, cx: &mut Context<Self>) {
         if matches!(ev, InputEvent::Blur | InputEvent::Change) {
             // If a folder is selected, commit the folder editors; otherwise
             // commit the request editors.
@@ -406,13 +425,11 @@ impl RequestPanel {
         }
     }
 
-    fn on_state_event(
-        &mut self,
-        _src: Entity<AppState>,
-        ev: &AppEvent,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(ev, AppEvent::SelectionChanged | AppEvent::EnvironmentChanged) {
+    fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
+        if matches!(
+            ev,
+            AppEvent::SelectionChanged | AppEvent::EnvironmentChanged
+        ) {
             // Reload the active request/folder so the URL base_url display
             // and all variable-dependent fields pick up the new env values.
             self.pending_reload = true;
@@ -435,7 +452,8 @@ impl RequestPanel {
         let id = self.state.read(cx).selected_request.clone();
         // Find the request in state.
         let req = self.state.read(cx).active_project().and_then(|p| {
-            id.as_ref().and_then(|id| p.find_request(id).map(|(_, r)| r.clone()))
+            id.as_ref()
+                .and_then(|id| p.find_request(id).map(|(_, r)| r.clone()))
         });
 
         self.request_id = id.clone();
@@ -457,22 +475,25 @@ impl RequestPanel {
                         }
                     } else {
                         // Relative path — check folder base_url.
-                        let st = self.state.read(cx);
-                        let base = st.active_project()
-                            .and_then(|p| {
+                        let base = {
+                            let st = self.state.read(cx);
+                            st.active_project().and_then(|p| {
                                 p.find_request(&r.id)
                                     .and_then(|(chain, _)| resolve_folder_base_url(p, &chain))
-                            });
-                        drop(st);
+                            })
+                        };
                         match base {
                             Some(b) => (b, r.url.clone()),
                             None => (String::new(), r.url.clone()),
                         }
                     }
                 };
-                self.req_base_url.update(cx, |s, cx| s.set_value(base_display, window, cx));
-                self.url.update(cx, |s, cx| s.set_value(path_display, window, cx));
-                self.name.update(cx, |s, cx| s.set_value(r.name.clone(), window, cx));
+                self.req_base_url
+                    .update(cx, |s, cx| s.set_value(base_display, window, cx));
+                self.url
+                    .update(cx, |s, cx| s.set_value(path_display, window, cx));
+                self.name
+                    .update(cx, |s, cx| s.set_value(r.name.clone(), window, cx));
                 // Protocol drives whether the method selector is shown.
                 self.protocol = r.protocol;
                 let method_str = r.method.to_string();
@@ -498,11 +519,7 @@ impl RequestPanel {
                 );
                 // Visual-mode rows for the Raw body (reused across renders so
                 // typing in the field inputs doesn't lose focus).
-                self.raw_visual_rows = kv_table::rows_from_pairs(
-                    &r.body.raw_parameter,
-                    window,
-                    cx,
-                );
+                self.raw_visual_rows = kv_table::rows_from_pairs(&r.body.raw_parameter, window, cx);
                 // Body type select.
                 let bt_str = match r.body.body_type {
                     BodyType::None => "none",
@@ -517,8 +534,10 @@ impl RequestPanel {
                 let lang_str = r.body.raw_language.lower_name().to_string();
                 self.body_lang_select
                     .update(cx, |s, cx| s.set_selected_value(&lang_str, window, cx));
-                self.pre_script_editor.update(cx, |s, cx| s.set_value(r.pre_script.clone(), window, cx));
-                self.tests_editor.update(cx, |s, cx| s.set_value(r.tests_script.clone(), window, cx));
+                self.pre_script_editor
+                    .update(cx, |s, cx| s.set_value(r.pre_script.clone(), window, cx));
+                self.tests_editor
+                    .update(cx, |s, cx| s.set_value(r.tests_script.clone(), window, cx));
                 // Auth.
                 self.auth_type = r.auth.auth_type;
                 self.auth_target = r.auth.add_to;
@@ -532,15 +551,22 @@ impl RequestPanel {
                 self.auth_target_select.update(cx, |s, cx| {
                     s.set_selected_value(&auth_target_str, window, cx)
                 });
-                self.auth_token.update(cx, |s, cx| s.set_value(r.auth.token.clone(), window, cx));
-                self.auth_username.update(cx, |s, cx| s.set_value(r.auth.username.clone(), window, cx));
-                self.auth_password.update(cx, |s, cx| s.set_value(r.auth.password.clone(), window, cx));
-                self.auth_key.update(cx, |s, cx| s.set_value(r.auth.key.clone(), window, cx));
-                self.auth_value.update(cx, |s, cx| s.set_value(r.auth.value.clone(), window, cx));
+                self.auth_token
+                    .update(cx, |s, cx| s.set_value(r.auth.token.clone(), window, cx));
+                self.auth_username
+                    .update(cx, |s, cx| s.set_value(r.auth.username.clone(), window, cx));
+                self.auth_password
+                    .update(cx, |s, cx| s.set_value(r.auth.password.clone(), window, cx));
+                self.auth_key
+                    .update(cx, |s, cx| s.set_value(r.auth.key.clone(), window, cx));
+                self.auth_value
+                    .update(cx, |s, cx| s.set_value(r.auth.value.clone(), window, cx));
             }
             None => {
-                self.url.update(cx, |s, cx| s.set_value(String::new(), window, cx));
-                self.name.update(cx, |s, cx| s.set_value(String::new(), window, cx));
+                self.url
+                    .update(cx, |s, cx| s.set_value(String::new(), window, cx));
+                self.name
+                    .update(cx, |s, cx| s.set_value(String::new(), window, cx));
                 self.params_rows = Vec::new();
                 self.headers_rows = Vec::new();
                 self.path_rows = Vec::new();
@@ -559,16 +585,22 @@ impl RequestPanel {
         if id.is_none() {
             return false;
         }
-        let folder = self.state.read(cx).active_project().and_then(|p| {
-            p.find_folder(id.as_deref()?).map(|(_, f)| f.clone())
-        });
+        let folder = self
+            .state
+            .read(cx)
+            .active_project()
+            .and_then(|p| p.find_folder(id.as_deref()?).map(|(_, f)| f.clone()));
         match folder {
             Some(f) => {
                 self.folder_id = id.clone();
                 self.iface_page = 0;
-                self.folder_name.update(cx, |s, cx| s.set_value(f.name.clone(), window, cx));
-                self.folder_desc.update(cx, |s, cx| s.set_value(f.description.clone(), window, cx));
-                self.folder_base_url.update(cx, |s, cx| s.set_value(f.base_url.clone().unwrap_or_default(), window, cx));
+                self.folder_name
+                    .update(cx, |s, cx| s.set_value(f.name.clone(), window, cx));
+                self.folder_desc
+                    .update(cx, |s, cx| s.set_value(f.description.clone(), window, cx));
+                self.folder_base_url.update(cx, |s, cx| {
+                    s.set_value(f.base_url.clone().unwrap_or_default(), window, cx)
+                });
                 self.folder_param_rows = kv_table::rows_from_pairs(&f.params, window, cx);
                 self.folder_header_rows = kv_table::rows_from_pairs(&f.headers, window, cx);
                 self.folder_var_rows = kv_table::rows_from_pairs(&f.variables, window, cx);
@@ -592,7 +624,11 @@ impl RequestPanel {
         let name = self.folder_name.read(cx).value().to_string();
         let description = self.folder_desc.read(cx).text().to_string();
         let base_url_raw = self.folder_base_url.read(cx).value().trim().to_string();
-        let base_url = if base_url_raw.is_empty() { None } else { Some(base_url_raw) };
+        let base_url = if base_url_raw.is_empty() {
+            None
+        } else {
+            Some(base_url_raw)
+        };
         let params = kv_table::pairs_from_rows(&self.folder_param_rows, cx);
         let headers = kv_table::pairs_from_rows(&self.folder_header_rows, cx);
         let variables = kv_table::pairs_from_rows(&self.folder_var_rows, cx);
@@ -672,10 +708,12 @@ impl RequestPanel {
                             kv_table::pairs_from_rows(&self.raw_visual_rows, cx);
                     }
                     match self.body_type {
-                        BodyType::FormData => req.body.form_data =
-                            kv_table::pairs_from_rows(&self.body_rows, cx),
-                        BodyType::Urlencoded => req.body.urlencoded =
-                            kv_table::pairs_from_rows(&self.body_rows, cx),
+                        BodyType::FormData => {
+                            req.body.form_data = kv_table::pairs_from_rows(&self.body_rows, cx)
+                        }
+                        BodyType::Urlencoded => {
+                            req.body.urlencoded = kv_table::pairs_from_rows(&self.body_rows, cx)
+                        }
                         _ => {}
                     }
                     req.auth = auth;
@@ -710,11 +748,18 @@ impl RequestPanel {
             folder_vars.extend_from_slice(slice);
         }
         let env: Vec<KeyValue> = project.active_env_variables().to_vec();
-        log::info!("EFFECTIVE_VARS: env_count={} keys={:?}", env.len(),
-            env.iter().map(|kv| kv.key.clone()).collect::<Vec<_>>());
+        log::info!(
+            "EFFECTIVE_VARS: env_count={} keys={:?}",
+            env.len(),
+            env.iter().map(|kv| kv.key.clone()).collect::<Vec<_>>()
+        );
         let req_vars = req.variables.clone();
-        let mut map = crate::state::models::effective_variables(&global, &env, &folder_vars, &req_vars);
-        log::info!("EFFECTIVE_VARS: final map keys={:?}", map.keys().collect::<Vec<_>>());
+        let mut map =
+            crate::state::models::effective_variables(&global, &env, &folder_vars, &req_vars);
+        log::info!(
+            "EFFECTIVE_VARS: final map keys={:?}",
+            map.keys().collect::<Vec<_>>()
+        );
         // Inject folder base_url as "baseUrl" + special key for relative paths.
         // A per-request base_url override (selected from the dropdown) takes
         // precedence over the folder's base_url.
@@ -722,7 +767,10 @@ impl RequestPanel {
         if !req_base_raw.trim().is_empty() {
             let resolved = crate::http::variable::substitute(&req_base_raw, &map);
             if !resolved.trim().is_empty() {
-                map.insert("__folder_base_url__".to_string(), resolved.trim_end_matches('/').to_string());
+                map.insert(
+                    "__folder_base_url__".to_string(),
+                    resolved.trim_end_matches('/').to_string(),
+                );
                 map.entry("baseUrl".to_string()).or_insert(resolved);
             }
         } else if let Some(base) = resolve_folder_base_url(project, &chain) {
@@ -796,7 +844,9 @@ impl RequestPanel {
                 }
             }
         } else if self.body_type == crate::state::models::BodyType::Urlencoded {
-            let pairs: Vec<String> = self.body_rows.iter()
+            let pairs: Vec<String> = self
+                .body_rows
+                .iter()
                 .filter(|kv| kv.enabled)
                 .map(|kv| {
                     let k = kv.key.read(cx).value().to_string();
@@ -830,7 +880,9 @@ impl RequestPanel {
                 url.clone()
             };
             let mut url_with_params = url_with_base;
-            let query_pairs: Vec<String> = self.params_rows.iter()
+            let query_pairs: Vec<String> = self
+                .params_rows
+                .iter()
                 .filter(|kv| kv.enabled)
                 .map(|kv| {
                     let k = kv.key.read(cx).value().to_string();
@@ -839,7 +891,11 @@ impl RequestPanel {
                 })
                 .collect();
             if !query_pairs.is_empty() {
-                let sep = if url_with_params.contains('?') { "&" } else { "?" };
+                let sep = if url_with_params.contains('?') {
+                    "&"
+                } else {
+                    "?"
+                };
                 url_with_params = format!("{}{}{}", url_with_params, sep, query_pairs.join("&"));
             }
             url_with_params
@@ -868,8 +924,12 @@ impl RequestPanel {
                 Some(x) => x,
                 None => return,
             };
-            let folder_vars: Vec<KeyValue> =
-                project.folder_variables_chain(&chain).into_iter().flatten().cloned().collect();
+            let folder_vars: Vec<KeyValue> = project
+                .folder_variables_chain(&chain)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
             let mut vars = crate::state::models::effective_variables(
                 &project.global_variables,
                 project.active_env_variables(),
@@ -888,14 +948,23 @@ impl RequestPanel {
                 // base_url against the current effective vars.
                 let resolved_req_base = crate::http::variable::substitute(&req_base_raw, &vars);
                 if !resolved_req_base.trim().is_empty() {
-                    vars.insert("__folder_base_url__".to_string(), resolved_req_base.trim_end_matches('/').to_string());
-                    vars.entry("baseUrl".to_string()).or_insert(resolved_req_base);
+                    vars.insert(
+                        "__folder_base_url__".to_string(),
+                        resolved_req_base.trim_end_matches('/').to_string(),
+                    );
+                    vars.entry("baseUrl".to_string())
+                        .or_insert(resolved_req_base);
                 }
             } else if let Some(base) = resolve_folder_base_url(project, &chain) {
                 vars.insert("__folder_base_url__".to_string(), base.clone());
                 vars.entry("baseUrl".to_string()).or_insert(base);
             }
-            (req.pre_script.clone(), req.tests_script.clone(), req.clone(), vars)
+            (
+                req.pre_script.clone(),
+                req.tests_script.clone(),
+                req.clone(),
+                vars,
+            )
         };
 
         // Dispatch by protocol. HTTP/SSE/GraphQL share the HTTP prepare path;
@@ -978,7 +1047,7 @@ impl RequestPanel {
 
         let client = cx.http_client();
         let id_clone = id.clone();
-        self.state.update(cx, |s, cx| s.sending = Some(id.clone()));
+        self.state.update(cx, |s, _cx| s.sending = Some(id.clone()));
         let env_id = self
             .state
             .read(cx)
@@ -1023,7 +1092,9 @@ impl RequestPanel {
                                             {
                                                 kv.value = v.clone();
                                             } else {
-                                                env.variables.push(crate::state::models::KeyValue::new(k, v));
+                                                env.variables.push(
+                                                    crate::state::models::KeyValue::new(k, v),
+                                                );
                                             }
                                         }
                                     }
@@ -1138,7 +1209,7 @@ impl RequestPanel {
         let client = cx.http_client();
         let stop = register_stop(&id);
         let id_clone = id.clone();
-        self.state.update(cx, |s, cx| s.sending = Some(id.clone()));
+        self.state.update(cx, |s, _cx| s.sending = Some(id.clone()));
 
         cx.spawn(async move |this, cx| {
             // Seed an empty streaming response so the UI shows the "停止" state.
@@ -1175,23 +1246,20 @@ impl RequestPanel {
 
             // Poll loop: interleave the stream with periodic UI-sync ticks.
             let result = loop {
-                let timer = cx.background_executor()
+                let timer = cx
+                    .background_executor()
                     .timer(std::time::Duration::from_millis(120));
-                match futures::future::select(&mut stream_fut, Box::pin(timer)).await
-                {
+                match futures::future::select(&mut stream_fut, Box::pin(timer)).await {
                     futures::future::Either::Left((res, _)) => break res,
                     futures::future::Either::Right(((), _)) => {
                         // UI-sync tick: mirror new accumulator content into the model.
-                        let snapshot =
-                            acc_for_poll.lock().map(|s| s.clone()).unwrap_or_default();
+                        let snapshot = acc_for_poll.lock().map(|s| s.clone()).unwrap_or_default();
                         if snapshot.len() != last_len {
                             last_len = snapshot.len();
                             let _ = this.update(cx, |this, cx| {
                                 this.state.update(cx, |s, cx| {
                                     if let Some(project) = s.active_project_mut() {
-                                        if let Some((_, r)) =
-                                            project.find_request_mut(&id_clone)
-                                        {
+                                        if let Some((_, r)) = project.find_request_mut(&id_clone) {
                                             if let Some(resp) = r.last_response.as_mut() {
                                                 resp.body = snapshot.clone();
                                                 resp.size = snapshot.len() as u64;
@@ -1264,7 +1332,7 @@ impl RequestPanel {
         });
 
         // Connect off the GPUI thread; the connection runs on its own tokio rt.
-        let mut conn = crate::http::ws::connect(&url);
+        let conn = crate::http::ws::connect(&url);
 
         cx.spawn(async move |this, cx| {
             let mut log = String::new();
@@ -1358,7 +1426,7 @@ impl RequestPanel {
             cx.emit(AppEvent::ResponseUpdated(id.clone()));
         });
 
-        let mut conn = crate::http::tcp::connect(&url);
+        let conn = crate::http::tcp::connect(&url);
 
         cx.spawn(async move |this, cx| {
             let mut log = String::new();
@@ -1514,7 +1582,7 @@ impl RequestPanel {
         // Socket.IO uses engine.io: first message is "0" (open), then we
         // upgrade to WebSocket. For simplicity, connect directly via WS
         // and send/receive engine.io frames.
-        let mut conn = crate::http::ws::connect(&format!(
+        let conn = crate::http::ws::connect(&format!(
             "{}/socket.io/?EIO=4&transport=websocket",
             ws_url.trim_end_matches('/')
         ));
@@ -1530,11 +1598,15 @@ impl RequestPanel {
                 }
                 match conn.frames.recv().await {
                     Ok(crate::http::ws::WsFrame::Status(s)) => {
-                        if !log.is_empty() { log.push('\n'); }
+                        if !log.is_empty() {
+                            log.push('\n');
+                        }
                         log.push_str(&format!("• {s}"));
                     }
                     Ok(crate::http::ws::WsFrame::Message(m)) => {
-                        if !log.is_empty() { log.push('\n'); }
+                        if !log.is_empty() {
+                            log.push('\n');
+                        }
                         log.push_str(&format!("← {m}"));
                     }
                     Ok(crate::http::ws::WsFrame::Done(err)) => {
@@ -1712,11 +1784,7 @@ impl Render for RequestPanel {
                         .child(
                             div()
                                 .flex_1()
-                                .child(
-                                    Input::new(&self.name)
-                                        .small()
-                                        .appearance(false),
-                                ),
+                                .child(Input::new(&self.name).small().appearance(false)),
                         )
                         .child(
                             Button::new("locate")
@@ -1773,16 +1841,25 @@ impl Render for RequestPanel {
                             // open/close management so selecting an option
                             // closes the dropdown automatically.
                             {
-                                let active_env = self.state.read(cx).active_project()
+                                let active_env = self
+                                    .state
+                                    .read(cx)
+                                    .active_project()
                                     .and_then(|p| p.active_environment.as_ref())
                                     .and_then(|eid| {
-                                        self.state.read(cx).active_project()
-                                            .and_then(|p| p.environments.iter().find(|e| &e.id == eid))
+                                        self.state.read(cx).active_project().and_then(|p| {
+                                            p.environments.iter().find(|e| &e.id == eid)
+                                        })
                                     });
                                 let env_urls: Vec<(String, String)> = active_env
                                     .map(|env| {
-                                        env.variables.iter()
-                                            .filter(|kv| kv.enabled && (kv.value.starts_with("http://") || kv.value.starts_with("https://")))
+                                        env.variables
+                                            .iter()
+                                            .filter(|kv| {
+                                                kv.enabled
+                                                    && (kv.value.starts_with("http://")
+                                                        || kv.value.starts_with("https://"))
+                                            })
                                             .map(|kv| (kv.key.clone(), kv.value.clone()))
                                             .collect()
                                     })
@@ -1800,7 +1877,11 @@ impl Render for RequestPanel {
                                 } else {
                                     base_val_raw
                                 };
-                                let label_text = if base_val.trim().is_empty() { "前置URL".to_string() } else { base_val };
+                                let label_text = if base_val.trim().is_empty() {
+                                    "前置URL".to_string()
+                                } else {
+                                    base_val
+                                };
 
                                 Popover::new("req-base-pop")
                                     .anchor(gpui::Anchor::BottomLeft)
@@ -1832,90 +1913,113 @@ impl Render for RequestPanel {
                                                     .py_1()
                                                     .child("选择前置URL"),
                                             )
-                                            .child(
-                                                {
-                                                    let pe = panel_entity.clone();
-                                                    div()
-                                                        .id("req-base-clear")
-                                                        .px_2()
-                                                        .py_1()
-                                                        .rounded_md()
-                                                        .cursor_pointer()
-                                                        .hover(|s| s.bg(theme_c.muted))
-                                                        .child(
-                                                            div()
-                                                                .text_sm()
-                                                                .text_color(theme_c.muted_foreground)
-                                                                .child("（空）使用目录配置"),
-                                                        )
-                                                        .on_mouse_down(MouseButton::Left, move |_ev, window, cx: &mut App| {
-                                                            let _ = pe.update(cx, |this, cx| {
-                                                                this.req_base_url.update(cx, |input, cx| {
-                                                                    input.set_value("", window, cx);
-                                                                });
-                                                                this.req_baseurl_open = false;
-                                                                cx.notify();
-                                                            });
-                                                            window.refresh();
-                                                        })
-                                                },
-                                            )
-                                            .children(env_urls.iter().enumerate().map(|(i, (k, v))| {
-                                                let val_display = v.trim_end_matches('/').to_string();
-                                                let key = k.clone();
-                                                // Store the {{key}} placeholder so the value
-                                                // follows env var changes; the literal value is
-                                                // only shown in the dropdown as a preview.
-                                                let placeholder = format!("{{{{{}}}}}", key);
-                                                let tc = theme_c.clone();
+                                            .child({
                                                 let pe = panel_entity.clone();
-
                                                 div()
-                                                    .id(("req-base-opt", i))
+                                                    .id("req-base-clear")
                                                     .px_2()
                                                     .py_1()
                                                     .rounded_md()
                                                     .cursor_pointer()
-                                                    .hover(|s| s.bg(tc.muted))
+                                                    .hover(|s| s.bg(theme_c.muted))
                                                     .child(
-                                                        v_flex()
-                                                            .gap(px(1.))
-                                                            .child(
-                                                                div()
-                                                                    .text_sm()
-                                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                                    .child(format!("{{{{{}}}}}", key)),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_xs()
-                                                                    .text_color(tc.muted_foreground)
-                                                                    .child(val_display),
-                                                            ),
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(theme_c.muted_foreground)
+                                                            .child("（空）使用目录配置"),
                                                     )
-                                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx: &mut App| {
-                                                        let _ = pe.update(cx, |this, cx| {
-                                                            this.req_base_url.update(cx, |input, cx| {
-                                                                input.set_value(&placeholder, window, cx);
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        move |_ev, window, cx: &mut App| {
+                                                            let _ = pe.update(cx, |this, cx| {
+                                                                this.req_base_url.update(
+                                                                    cx,
+                                                                    |input, cx| {
+                                                                        input.set_value(
+                                                                            "", window, cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                                this.req_baseurl_open = false;
+                                                                cx.notify();
                                                             });
-                                                            this.req_baseurl_open = false;
-                                                            cx.notify();
-                                                        });
-                                                        window.refresh();
-                                                    })
-                                            })),
+                                                            window.refresh();
+                                                        },
+                                                    )
+                                            })
+                                            .children(env_urls.iter().enumerate().map(
+                                                |(i, (k, v))| {
+                                                    let val_display =
+                                                        v.trim_end_matches('/').to_string();
+                                                    let key = k.clone();
+                                                    // Store the {{key}} placeholder so the value
+                                                    // follows env var changes; the literal value is
+                                                    // only shown in the dropdown as a preview.
+                                                    let placeholder = format!("{{{{{}}}}}", key);
+                                                    let tc = theme_c.clone();
+                                                    let pe = panel_entity.clone();
+
+                                                    div()
+                                                        .id(("req-base-opt", i))
+                                                        .px_2()
+                                                        .py_1()
+                                                        .rounded_md()
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(tc.muted))
+                                                        .child(
+                                                            v_flex()
+                                                                .gap(px(1.))
+                                                                .child(
+                                                                    div()
+                                                                        .text_sm()
+                                                                        .font_weight(
+                                                                            FontWeight::SEMIBOLD,
+                                                                        )
+                                                                        .child(format!(
+                                                                            "{{{{{}}}}}",
+                                                                            key
+                                                                        )),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(
+                                                                            tc.muted_foreground,
+                                                                        )
+                                                                        .child(val_display),
+                                                                ),
+                                                        )
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            move |_ev, window, cx: &mut App| {
+                                                                let _ =
+                                                                    pe.update(cx, |this, cx| {
+                                                                        this.req_base_url.update(
+                                                                            cx,
+                                                                            |input, cx| {
+                                                                                input.set_value(
+                                                                                    &placeholder,
+                                                                                    window,
+                                                                                    cx,
+                                                                                );
+                                                                            },
+                                                                        );
+                                                                        this.req_baseurl_open =
+                                                                            false;
+                                                                        cx.notify();
+                                                                    });
+                                                                window.refresh();
+                                                            },
+                                                        )
+                                                },
+                                            )),
                                     )
                                     .into_any_element()
                             },
                         )
                         .child(
                             // Path input (the part after the base URL).
-                            div()
-                                .flex_1()
-                                .child(
-                                    Input::new(&self.url)
-                                        .small(),
-                                ),
+                            div().flex_1().child(Input::new(&self.url).small()),
                         )
                         .child(
                             Button::new("send")
@@ -1957,18 +2061,76 @@ impl Render for RequestPanel {
                         .gap_1()
                         .border_b_1()
                         .border_color(theme.border)
-                        .child(tab_label("Header", active_tab == ReqTab::Headers, ReqTab::Headers, &theme, cx))
-                        .child(tab_label("Query", active_tab == ReqTab::Query, ReqTab::Query, &theme, cx))
-                        .child(tab_label("Path", active_tab == ReqTab::Path, ReqTab::Path, &theme, cx))
-                        .child(tab_label("Body", active_tab == ReqTab::Body, ReqTab::Body, &theme, cx))
-                        .child(tab_label("认证", active_tab == ReqTab::Auth, ReqTab::Auth, &theme, cx))
-                        .child(tab_label("Cookie", active_tab == ReqTab::Cookie, ReqTab::Cookie, &theme, cx))
-                        .child(tab_label("预执行操作", active_tab == ReqTab::PreRequest, ReqTab::PreRequest, &theme, cx))
-                        .child(tab_label("后执行操作", active_tab == ReqTab::PostRequest, ReqTab::PostRequest, &theme, cx))
-                        .child(tab_label("Curl", active_tab == ReqTab::Curl, ReqTab::Curl, &theme, cx)),
+                        .child(tab_label(
+                            "Header",
+                            active_tab == ReqTab::Headers,
+                            ReqTab::Headers,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "Query",
+                            active_tab == ReqTab::Query,
+                            ReqTab::Query,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "Path",
+                            active_tab == ReqTab::Path,
+                            ReqTab::Path,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "Body",
+                            active_tab == ReqTab::Body,
+                            ReqTab::Body,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "认证",
+                            active_tab == ReqTab::Auth,
+                            ReqTab::Auth,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "Cookie",
+                            active_tab == ReqTab::Cookie,
+                            ReqTab::Cookie,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "预执行操作",
+                            active_tab == ReqTab::PreRequest,
+                            ReqTab::PreRequest,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "后执行操作",
+                            active_tab == ReqTab::PostRequest,
+                            ReqTab::PostRequest,
+                            &theme,
+                            cx,
+                        ))
+                        .child(tab_label(
+                            "Curl",
+                            active_tab == ReqTab::Curl,
+                            ReqTab::Curl,
+                            &theme,
+                            cx,
+                        )),
                 )
                 .child(
-                    div().flex_1().min_h_0().p_3().child(self.render_active_tab(window, cx)),
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_3()
+                        .child(self.render_active_tab(window, cx)),
                 )
             })
     }
@@ -2256,7 +2418,12 @@ impl RequestPanel {
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_xs().text_color(theme.muted_foreground).child(label))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
                 .child(Input::new(input).small())
         };
 
@@ -2269,11 +2436,9 @@ impl RequestPanel {
                     .gap_2()
                     .items_center()
                     .child(
-                        div().w(px(180.)).child(
-                            Select::new(&self.auth_type_select)
-                                .small()
-                                .appearance(true),
-                        ),
+                        div()
+                            .w(px(180.))
+                            .child(Select::new(&self.auth_type_select).small().appearance(true)),
                     )
                     .when(auth_type == AuthType::ApiKey, |row| {
                         row.child(
@@ -2311,7 +2476,13 @@ impl RequestPanel {
     }
 
     /// Render the kv editor for params/headers rows.
-    fn render_kv(&self, rows: &[KvRow], show_type: bool, allow_files: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_kv(
+        &self,
+        rows: &[KvRow],
+        show_type: bool,
+        allow_files: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let view_toggle = cx.entity();
         let view_delete = cx.entity();
         let view_add = cx.entity();
@@ -3164,7 +3335,9 @@ fn folder_tab_label(
         } else {
             theme.muted_foreground
         })
-        .when(is_active, |this| this.border_b_2().border_color(theme.primary))
+        .when(is_active, |this| {
+            this.border_b_2().border_color(theme.primary)
+        })
         .hover(|this| this.bg(theme.accent.opacity(0.5)))
         .child(label.to_string())
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -3217,7 +3390,13 @@ impl RequestPanel {
 
     // --- folder kv row handlers (parallel to the request kv handlers) ---
 
-    pub fn folder_toggle_kv(&mut self, section: FolderKvSection, ix: usize, val: bool, cx: &mut Context<Self>) {
+    pub fn folder_toggle_kv(
+        &mut self,
+        section: FolderKvSection,
+        ix: usize,
+        val: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(row) = self.folder_rows_mut(section).get_mut(ix) {
             row.enabled = val;
         }
@@ -3225,7 +3404,12 @@ impl RequestPanel {
         cx.notify();
     }
 
-    pub fn folder_delete_kv(&mut self, section: FolderKvSection, ix: usize, cx: &mut Context<Self>) {
+    pub fn folder_delete_kv(
+        &mut self,
+        section: FolderKvSection,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.folder_rows_mut(section);
         if ix < rows.len() {
             rows.remove(ix);
@@ -3284,9 +3468,8 @@ impl RequestPanel {
             (true, None) => {
                 // Add it (after the same relative order as IfaceColumn::all()).
                 self.iface_columns.push(col);
-                self.iface_columns.sort_by_key(|c| {
-                    IfaceColumn::all().iter().position(|x| x == c).unwrap_or(0)
-                });
+                self.iface_columns
+                    .sort_by_key(|c| IfaceColumn::all().iter().position(|x| x == c).unwrap_or(0));
             }
             (false, Some(i)) => {
                 // Never remove the last column.
@@ -3394,12 +3577,10 @@ impl RequestPanel {
     /// rebuilt from the freshly parsed model.
     pub fn sync_raw_to_visual(&mut self, cx: &mut Context<Self>) {
         let id = self.request_id.clone();
-        if let Some(req) = self
-            .state
-            .read(cx)
-            .active_project()
-            .and_then(|p| id.as_ref().and_then(|id| p.find_request(id).map(|(_, r)| r.clone())))
-        {
+        if let Some(req) = self.state.read(cx).active_project().and_then(|p| {
+            id.as_ref()
+                .and_then(|id| p.find_request(id).map(|(_, r)| r.clone()))
+        }) {
             let mut body = req.body.clone();
             body.sync_raw_to_fields();
             self.state.update(cx, |s, cx| {
@@ -3464,16 +3645,12 @@ impl RequestPanel {
             on_file_pick: Arc::new(|_, _, _| {}),
         };
 
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .gap_1()
-            .child(
-                crate::ui::kv_table::KvTable::new("raw-visual", self.raw_visual_rows.clone(), handlers)
-                    .show_type(true)
-                    .show_required(true)
-                    .show_description(true),
-            )
+        v_flex().size_full().min_h_0().gap_1().child(
+            crate::ui::kv_table::KvTable::new("raw-visual", self.raw_visual_rows.clone(), handlers)
+                .show_type(true)
+                .show_required(true)
+                .show_description(true),
+        )
     }
 
     /// Sync the visual-mode row inputs back to the model's `raw_parameter`,
@@ -3546,7 +3723,11 @@ impl RequestPanel {
 fn _unused(_a: Arc<()>, _t: Task<()>) {}
 
 /// Recursively set `base_url` on the folder with the given id.
-fn set_folder_base_url(folders: &mut [crate::state::models::Folder], id: &str, url: Option<String>) -> bool {
+fn set_folder_base_url(
+    folders: &mut [crate::state::models::Folder],
+    id: &str,
+    url: Option<String>,
+) -> bool {
     for f in folders.iter_mut() {
         if f.id == id {
             f.base_url = url.clone();

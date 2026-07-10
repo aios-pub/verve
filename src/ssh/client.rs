@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use russh::client::{self, Handle};
+use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
 use russh::{ChannelMsg, Disconnect};
-use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use tokio::sync::mpsc;
 
 use super::credentials;
@@ -91,7 +91,10 @@ pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession,
 
         // Tunnel through to the target.
         let target = chain.last().unwrap();
-        let target_addr = target.bastion_target_override.as_deref().unwrap_or(&target.host);
+        let target_addr = target
+            .bastion_target_override
+            .as_deref()
+            .unwrap_or(&target.host);
         let tunnel = bastion_handle
             .channel_open_direct_tcpip(target_addr, target.port as u32, "127.0.0.1", 0)
             .await
@@ -113,7 +116,7 @@ pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession,
         .map_err(|e| format!("打开会话失败: {e}"))?;
 
     let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into());
-    let mut channel = channel;
+    let channel = channel;
     channel
         .request_pty(false, &term, cols, rows, 0, 0, &[])
         .await
@@ -185,8 +188,7 @@ pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession,
 async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result<(), String> {
     let ok = match host.auth_type {
         SshAuthType::Password => {
-            let password = credentials::load_keychain(&host.id, "password")
-                .unwrap_or_default();
+            let password = credentials::load_keychain(&host.id, "password").unwrap_or_default();
             handle
                 .authenticate_password(&host.username, password)
                 .await
@@ -198,7 +200,9 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
             let passphrase = credentials::load_keychain(&host.id, "key_passphrase").ok();
             let key = load_secret_key(key_path, passphrase.as_deref())
                 .map_err(|e| format!("加载密钥失败: {e}"))?;
-            let hash_alg = handle.best_supported_rsa_hash().await
+            let hash_alg = handle
+                .best_supported_rsa_hash()
+                .await
                 .map_err(|e| format!("RSA hash: {e}"))?
                 .flatten();
             handle

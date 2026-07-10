@@ -8,9 +8,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, IconName, Selectable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, Selectable as _, Sizable as _, WindowExt as _,
 };
 
 use crate::ssh::models::{SshAuthType, SshHost};
@@ -54,7 +53,10 @@ impl SshHostDialogState {
         let port = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("端口");
             s.set_value(
-                &existing.as_ref().map(|e| e.port.to_string()).unwrap_or_else(|| "22".into()),
+                &existing
+                    .as_ref()
+                    .map(|e| e.port.to_string())
+                    .unwrap_or_else(|| "22".into()),
                 window,
                 cx,
             );
@@ -77,10 +79,10 @@ impl SshHostDialogState {
             s
         });
         let password = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("密码");
+            let s = InputState::new(window, cx).placeholder("密码");
             s
         });
-        let auth_type = existing.as_ref().map(|e| e.auth_type.clone()).unwrap_or_default();
+        let auth_type = existing.as_ref().map(|e| e.auth_type).unwrap_or_default();
         let proxy_jump = existing.as_ref().and_then(|e| e.bastion_id.clone());
         let _ = available_hosts; // used by caller for dropdown population
         cx.new(|_cx| Self {
@@ -129,173 +131,228 @@ pub fn open_dialog<F>(
         let border = theme.border;
         let on_save = on_save.clone();
 
-        dialog.title(title_text).content(move |content, _window, cx| {
-            let s = state_for_content.read(cx);
-            let auth_type = s.auth_type.clone();
-            let body = v_flex()
-                .p_4()
-                .w(px(460.))
-                .gap_3()
-                // Name
-                .child(v_flex().gap_1().child(
-                    div().text_sm().font_weight(FontWeight::SEMIBOLD).child("名称"),
-                ).child(Input::new(&s.name).small()))
-                // Host + Port (side by side)
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("主机地址"),
-                                )
-                                .child(Input::new(&s.host).small()),
-                        )
-                        .child(
-                            v_flex()
-                                .w(px(100.))
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("端口"),
-                                )
-                                .child(Input::new(&s.port).small()),
-                        ),
-                )
-                // Username
-                .child(v_flex().gap_1().child(
-                    div().text_sm().font_weight(FontWeight::SEMIBOLD).child("用户名"),
-                ).child(Input::new(&s.username).small()))
-                // Auth type selector (simple buttons)
-                .child(
-                    v_flex().gap_1().child(
-                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child("认证方式"),
-                    ).child(
-                        h_flex().gap_2().children(SshAuthType::ALL.iter().map(|&at| {
-                            let is_selected = at == auth_type;
-                            let tc = theme.clone();
-                            Button::new(SharedString::from(format!("auth-type-{}", at.label())))
-                                .ghost()
-                                .small()
-                                .label(at.label())
-                                .selected(is_selected)
-                                .when(is_selected, |b| {
-                                    b.bg(tc.accent.opacity(0.5)).text_color(tc.foreground)
-                                })
-                                .on_click({
-                                    let state = state_for_content.clone();
-                                    move |_ev, _window, cx: &mut App| {
-                                        let _ = state.update(cx, |s, cx| {
-                                            s.auth_type = at;
-                                            cx.notify();
-                                        });
-                                    }
-                                })
-                        }))
-                    )
-                )
-                // Conditional: password or key path
-                .when(auth_type == SshAuthType::Password, |col| {
-                    col.child(v_flex().gap_1().child(
-                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child("密码"),
-                    ).child(Input::new(&s.password).small()))
-                })
-                .when(auth_type == SshAuthType::PrivateKey, |col| {
-                    col.child(v_flex().gap_1().child(
-                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child("密钥路径"),
-                    ).child(Input::new(&s.key_path).small()))
-                        .child(v_flex().gap_1().child(
-                            div().text_sm().font_weight(FontWeight::SEMIBOLD).child("密钥密码（可选）"),
-                        ).child(Input::new(&s.password).small()))
-                })
-                // Jump host selection
-                .child(div().h(px(1.)).w_full().bg(border))
-                .child(
+        dialog
+            .title(title_text)
+            .content(move |content, _window, cx| {
+                let s = state_for_content.read(cx);
+                let auth_type = s.auth_type;
+                let body =
                     v_flex()
-                        .gap_1()
+                        .p_4()
+                        .w(px(460.))
+                        .gap_3()
+                        // Name
                         .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("跳板机（可选）"),
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("名称"),
+                                )
+                                .child(Input::new(&s.name).small()),
                         )
+                        // Host + Port (side by side)
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("选择一台已配置的主机作为跳板机（ProxyJump）"),
-                        ),
-                );
-            content.child(body)
-        }).footer({
-            let on_save = on_save.clone();
-            let state = state_for_footer.clone();
-            Button::new("host-save")
-                .primary()
-                .small()
-                .label("保存")
-                .on_click(move |_ev, window, cx| {
-                    let s = state.read(cx);
-                    let name_input = s.name.read(cx).value().to_string();
-                    let host_addr = s.host.read(cx).value().to_string();
-                    let port: u16 = s.port.read(cx).value().parse().unwrap_or(22);
-                    let username = s.username.read(cx).value().to_string();
-                    let key_path_val = s.key_path.read(cx).value().to_string();
-                    let password_val = s.password.read(cx).value().to_string();
+                            h_flex()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child("主机地址"),
+                                        )
+                                        .child(Input::new(&s.host).small()),
+                                )
+                                .child(
+                                    v_flex()
+                                        .w(px(100.))
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child("端口"),
+                                        )
+                                        .child(Input::new(&s.port).small()),
+                                ),
+                        )
+                        // Username
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("用户名"),
+                                )
+                                .child(Input::new(&s.username).small()),
+                        )
+                        // Auth type selector (simple buttons)
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("认证方式"),
+                                )
+                                .child(h_flex().gap_2().children(SshAuthType::ALL.iter().map(
+                                    |&at| {
+                                        let is_selected = at == auth_type;
+                                        let tc = theme.clone();
+                                        Button::new(SharedString::from(format!(
+                                            "auth-type-{}",
+                                            at.label()
+                                        )))
+                                        .ghost()
+                                        .small()
+                                        .label(at.label())
+                                        .selected(is_selected)
+                                        .when(is_selected, |b| {
+                                            b.bg(tc.accent.opacity(0.5)).text_color(tc.foreground)
+                                        })
+                                        .on_click({
+                                            let state = state_for_content.clone();
+                                            move |_ev, _window, cx: &mut App| {
+                                                let _ = state.update(cx, |s, cx| {
+                                                    s.auth_type = at;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
+                                    },
+                                ))),
+                        )
+                        // Conditional: password or key path
+                        .when(auth_type == SshAuthType::Password, |col| {
+                            col.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("密码"),
+                                    )
+                                    .child(Input::new(&s.password).small()),
+                            )
+                        })
+                        .when(auth_type == SshAuthType::PrivateKey, |col| {
+                            col.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("密钥路径"),
+                                    )
+                                    .child(Input::new(&s.key_path).small()),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("密钥密码（可选）"),
+                                    )
+                                    .child(Input::new(&s.password).small()),
+                            )
+                        })
+                        // Jump host selection
+                        .child(div().h(px(1.)).w_full().bg(border))
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("跳板机（可选）"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child("选择一台已配置的主机作为跳板机（ProxyJump）"),
+                                ),
+                        );
+                content.child(body)
+            })
+            .footer({
+                let on_save = on_save.clone();
+                let state = state_for_footer.clone();
+                Button::new("host-save")
+                    .primary()
+                    .small()
+                    .label("保存")
+                    .on_click(move |_ev, window, cx| {
+                        let s = state.read(cx);
+                        let name_input = s.name.read(cx).value().to_string();
+                        let host_addr = s.host.read(cx).value().to_string();
+                        let port: u16 = s.port.read(cx).value().parse().unwrap_or(22);
+                        let username = s.username.read(cx).value().to_string();
+                        let key_path_val = s.key_path.read(cx).value().to_string();
+                        let password_val = s.password.read(cx).value().to_string();
 
-                    // Name defaults to the host address if left empty.
-                    let name = if name_input.trim().is_empty() {
-                        host_addr.clone()
-                    } else {
-                        name_input
-                    };
-
-                    let mut host = if let Some(id) = &s.editing_id {
-                        host_store::find_host(id).unwrap_or_else(|| SshHost::new(&name, &host_addr))
-                    } else {
-                        SshHost::new(&name, &host_addr)
-                    };
-                    host.name = name;
-                    host.host = host_addr;
-                    host.port = port;
-                    host.username = username;
-                    host.auth_type = s.auth_type.clone();
-                    host.key_path = if s.auth_type == SshAuthType::PrivateKey && !key_path_val.is_empty() {
-                        Some(key_path_val)
-                    } else {
-                        None
-                    };
-                    host.bastion_id = s.proxy_jump.clone();
-
-                    // Store the secret if a password was entered.
-                    if !password_val.is_empty() {
-                        let kind = match s.auth_type {
-                            SshAuthType::Password => "password",
-                            SshAuthType::PrivateKey => "key_passphrase",
-                            SshAuthType::Agent => "",
+                        // Name defaults to the host address if left empty.
+                        let name = if name_input.trim().is_empty() {
+                            host_addr.clone()
+                        } else {
+                            name_input
                         };
-                        if !kind.is_empty() {
-                            let _ = credentials::store_keychain(&host.id, kind, &password_val);
-                            host.credential = Some(crate::ssh::models::CredentialRef {
-                                key: credentials::keyring_key(&host.id, kind),
-                                source: crate::ssh::models::CredentialSource::Keychain,
-                            });
+
+                        let mut host = if let Some(id) = &s.editing_id {
+                            host_store::find_host(id)
+                                .unwrap_or_else(|| SshHost::new(&name, &host_addr))
+                        } else {
+                            SshHost::new(&name, &host_addr)
+                        };
+                        host.name = name;
+                        host.host = host_addr;
+                        host.port = port;
+                        host.username = username;
+                        host.auth_type = s.auth_type;
+                        host.key_path =
+                            if s.auth_type == SshAuthType::PrivateKey && !key_path_val.is_empty() {
+                                Some(key_path_val)
+                            } else {
+                                None
+                            };
+                        host.bastion_id = s.proxy_jump.clone();
+
+                        // Store the secret if a password was entered.
+                        if !password_val.is_empty() {
+                            let kind = match s.auth_type {
+                                SshAuthType::Password => "password",
+                                SshAuthType::PrivateKey => "key_passphrase",
+                                SshAuthType::Agent => "",
+                            };
+                            if !kind.is_empty() {
+                                let _ = credentials::store_keychain(&host.id, kind, &password_val);
+                                host.credential = Some(crate::ssh::models::CredentialRef {
+                                    key: credentials::keyring_key(&host.id, kind),
+                                    source: crate::ssh::models::CredentialSource::Keychain,
+                                });
+                            }
                         }
-                    }
 
-                    // Persist to disk before invoking the callback.
-                    host_store::upsert_host(host.clone());
+                        // Persist to disk before invoking the callback.
+                        host_store::upsert_host(host.clone());
 
-                    (*on_save.clone())(host, window, cx);
-                    window.close_dialog(cx);
-                })
-        })
+                        (*on_save.clone())(host, window, cx);
+                        window.close_dialog(cx);
+                    })
+            })
     });
 }

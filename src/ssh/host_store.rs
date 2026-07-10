@@ -96,8 +96,8 @@ pub fn jump_chain(host: &SshHost) -> Result<Vec<SshHost>, String> {
         if !visited.insert(bastion_id.clone()) {
             return Err(format!("跳板机循环检测：{}", bastion_id));
         }
-        let bastion = find_host(bastion_id)
-            .ok_or_else(|| format!("找不到跳板机配置：{}", bastion_id))?;
+        let bastion =
+            find_host(bastion_id).ok_or_else(|| format!("找不到跳板机配置：{}", bastion_id))?;
         chain.insert(0, bastion.clone());
         current = bastion;
         if chain.len() > 8 {
@@ -137,7 +137,9 @@ mod tests {
     use crate::state::models::new_id;
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _guard = crate::ssh::TEST_HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::ssh::TEST_HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("verve-ssh-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");

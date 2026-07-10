@@ -5,8 +5,8 @@ pub mod client;
 pub mod credentials;
 pub mod host_store;
 pub mod models;
-pub mod vault;
 pub mod terminal;
+pub mod vault;
 
 /// Global mutex for serializing HOME-dependent tests across all ssh submodules.
 #[cfg(test)]

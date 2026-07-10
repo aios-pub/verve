@@ -39,9 +39,11 @@ pub fn project_to_markdown(project: &Project) -> String {
         out.push_str(&project.description);
         out.push_str("\n\n");
     }
-    if let Some(env) = project.active_environment.as_ref().and_then(|id| {
-        project.environments.iter().find(|e| &e.id == id)
-    }) {
+    if let Some(env) = project
+        .active_environment
+        .as_ref()
+        .and_then(|id| project.environments.iter().find(|e| &e.id == id))
+    {
         out.push_str(&format!("> Active environment: **{}**\n\n", env.name));
     }
 
@@ -66,16 +68,9 @@ fn render_folder_md(out: &mut String, folder: &Folder, level: usize) {
     }
 }
 
-fn render_request_md(
-    out: &mut String,
-    req: &crate::state::models::ApiRequest,
-    level: usize,
-) {
+fn render_request_md(out: &mut String, req: &crate::state::models::ApiRequest, level: usize) {
     let heading = "#".repeat(level);
-    out.push_str(&format!(
-        "{heading} `{}` {}\n\n",
-        req.method, req.name
-    ));
+    out.push_str(&format!("{heading} `{}` {}\n\n", req.method, req.name));
     out.push_str(&format!("- **URL:** `{}`\n", req.url));
     out.push_str(&format!("- **Method:** {}\n", method_label(req.method)));
     if !req.params.is_empty() {
@@ -391,8 +386,7 @@ fn body_to_apipost(body: &crate::state::models::RequestBody) -> serde_json::Valu
             let raw_parameter: Vec<serde_json::Value> = body
                 .raw_parameter
                 .iter()
-                .map(|kv| kvs_to_apipost_params(std::slice::from_ref(kv)))
-                .flatten()
+                .flat_map(|kv| kvs_to_apipost_params(std::slice::from_ref(kv)))
                 .collect();
             json!({
                 "mode": mode,
@@ -486,7 +480,8 @@ mod tests {
 
         // Environment.
         let mut env = crate::state::models::Environment::new("测试环境");
-        env.variables.push(KeyValue::new("baseUrl", "https://api.test"));
+        env.variables
+            .push(KeyValue::new("baseUrl", "https://api.test"));
         project.environments.push(env);
 
         // Global header.
@@ -509,7 +504,8 @@ mod tests {
             token: "tok123".into(),
             ..Default::default()
         };
-        req1.headers.push(KeyValue::new("Content-Type", "multipart/form-data"));
+        req1.headers
+            .push(KeyValue::new("Content-Type", "multipart/form-data"));
         project.requests.push(req1);
 
         // Root API with raw body, no auth.

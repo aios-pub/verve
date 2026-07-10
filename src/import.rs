@@ -37,9 +37,7 @@ struct PostmanRequest {
 #[serde(untagged)]
 enum PostmanUrl {
     Raw(String),
-    Object {
-        raw: Option<String>,
-    },
+    Object { raw: Option<String> },
 }
 
 impl PostmanUrl {
@@ -99,7 +97,9 @@ fn convert_items(items: &[PostmanItem]) -> (Vec<Folder>, Vec<ApiRequest>) {
                     .and_then(RequestMethod::parse)
                     .unwrap_or(RequestMethod::Get);
                 let url = req.url.as_ref().map(|u| u.raw()).unwrap_or_default();
-                folder.requests.push(ApiRequest::new(&item.name, method, url));
+                folder
+                    .requests
+                    .push(ApiRequest::new(&item.name, method, url));
             }
             folders.push(folder);
         }
@@ -564,10 +564,34 @@ fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiReque
     };
 
     // Headers / query / cookies / path.
-    api.headers = node.request.header.parameter.iter().map(|p| p.to_kv()).collect();
-    api.params = node.request.query.parameter.iter().map(|p| p.to_kv()).collect();
-    api.cookies = node.request.cookie.parameter.iter().map(|p| p.to_kv()).collect();
-    api.path = node.request.restful.parameter.iter().map(|p| p.to_kv()).collect();
+    api.headers = node
+        .request
+        .header
+        .parameter
+        .iter()
+        .map(|p| p.to_kv())
+        .collect();
+    api.params = node
+        .request
+        .query
+        .parameter
+        .iter()
+        .map(|p| p.to_kv())
+        .collect();
+    api.cookies = node
+        .request
+        .cookie
+        .parameter
+        .iter()
+        .map(|p| p.to_kv())
+        .collect();
+    api.path = node
+        .request
+        .restful
+        .parameter
+        .iter()
+        .map(|p| p.to_kv())
+        .collect();
 
     // Body.
     let body = &node.request.body;
@@ -610,9 +634,7 @@ fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiReque
         .and_then(|a| a.as_array())
         .and_then(|arr| {
             arr.iter().find_map(|a| {
-                if a.get("target_id").and_then(|v| v.as_str())
-                    == node.target_id.as_deref()
-                {
+                if a.get("target_id").and_then(|v| v.as_str()) == node.target_id.as_deref() {
                     a.get("request")
                         .and_then(|r| r.get("auth"))
                         .and_then(|a| a.get("type"))
@@ -702,10 +724,23 @@ mod tests {
         }"#;
         let project = openapi_v3(json).unwrap();
         assert_eq!(project.name, "Pets API");
-        assert!(project.environments.first().map(|e| e.variables.iter().any(|v| v.key == "baseUrl")).unwrap_or(false));
+        assert!(project
+            .environments
+            .first()
+            .map(|e| e.variables.iter().any(|v| v.key == "baseUrl"))
+            .unwrap_or(false));
         let pets = project.folders.iter().find(|f| f.name == "pets").unwrap();
         assert_eq!(pets.requests.len(), 2);
-        assert_eq!(project.folders.iter().find(|f| f.name == "Default").unwrap().requests.len(), 1);
+        assert_eq!(
+            project
+                .folders
+                .iter()
+                .find(|f| f.name == "Default")
+                .unwrap()
+                .requests
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -779,7 +814,10 @@ mod tests {
         assert_eq!(project.environments[0].name, "默认环境");
         assert_eq!(project.environments[0].variables.len(), 1);
         assert_eq!(project.environments[0].variables[0].key, "baseUrl");
-        assert_eq!(project.environments[0].variables[0].value, "https://api.test");
+        assert_eq!(
+            project.environments[0].variables[0].value,
+            "https://api.test"
+        );
 
         // Global header.
         assert_eq!(project.global_headers.len(), 1);

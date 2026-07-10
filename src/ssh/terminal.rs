@@ -8,8 +8,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{ActiveTheme, h_flex};
-
+use gpui_component::ActiveTheme;
 
 /// A null event listener for the alacritty terminal.
 #[derive(Clone, Default)]
@@ -164,7 +163,9 @@ pub struct TerminalView {
     /// Sender for writing keystrokes to the SSH channel.
     pub input_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Sender for terminal resize notifications to SSH.
-    pub resize_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>>>,
+    pub resize_tx: Arc<
+        std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>>,
+    >,
     /// Keystroke interceptor subscription (catches Tab etc. before GPUI).
     _keystroke_sub: Option<gpui::Subscription>,
     /// Last IME composing text (for delta calculation).
@@ -173,14 +174,20 @@ pub struct TerminalView {
 
 impl TerminalView {
     pub fn new(cols: u16, rows: u16, cx: &mut Context<Self>) -> Self {
-        let dims = TermDims { cols: cols as usize, rows: rows as usize };
+        let dims = TermDims {
+            cols: cols as usize,
+            rows: rows as usize,
+        };
         let config = Config::default();
         let term = Term::new(config, &dims, NullListener);
         let term_arc = Arc::new(std::sync::Mutex::new(term));
         let input_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>> =
             Arc::new(std::sync::Mutex::new(None));
-        let resize_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>>> =
-            Arc::new(std::sync::Mutex::new(None));
+        let resize_tx: Arc<
+            std::sync::Mutex<
+                Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>,
+            >,
+        > = Arc::new(std::sync::Mutex::new(None));
 
         // Register a GLOBAL keystroke interceptor that catches ALL keystrokes
         // — including Tab, which GPUI's dispatch_keystroke routes to the text
@@ -218,8 +225,9 @@ impl TerminalView {
     /// Feed raw bytes from SSH into the terminal parser.
     pub fn feed(&self, data: &[u8]) {
         // Log raw bytes to verify ANSI escape sequences are present.
-        if data.iter().any(|&b| b == 0x1b) {
-            log::info!("FEED: {} bytes with ANSI escape, preview={:?}",
+        if data.contains(&0x1b) {
+            log::info!(
+                "FEED: {} bytes with ANSI escape, preview={:?}",
                 data.len(),
                 String::from_utf8_lossy(&data[..data.len().min(80)])
             );
@@ -236,7 +244,10 @@ impl TerminalView {
         self.cols = cols;
         self.rows = rows;
         if let Ok(mut term) = self.term.lock() {
-            let dims = TermDims { cols: cols as usize, rows: rows as usize };
+            let dims = TermDims {
+                cols: cols as usize,
+                rows: rows as usize,
+            };
             term.resize(dims);
         }
     }
@@ -272,7 +283,10 @@ impl TerminalView {
     }
 
     /// Set the resize sender (called when the connection is established).
-    pub fn set_resize_tx(&self, tx: tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>) {
+    pub fn set_resize_tx(
+        &self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>,
+    ) {
         log::info!("SET_RESIZE_TX: resize sender set");
         if let Ok(mut guard) = self.resize_tx.lock() {
             *guard = Some(tx);
@@ -344,7 +358,7 @@ fn keystroke_to_bytes(ks: &gpui::Keystroke) -> Vec<u8> {
 }
 
 /// Convert a VTE `Color` to a GPUI `Hsla`.
-fn color_to_hsla(color: &Color, default_fg: Hsla) -> Hsla {
+fn color_to_hsla(color: &Color, _default_fg: Hsla) -> Hsla {
     match color {
         Color::Named(nc) => named_color_to_hsla(*nc),
         Color::Spec(rgb) => hsla_from_rgb8(rgb.r, rgb.g, rgb.b),
@@ -389,7 +403,11 @@ fn hsla_from_rgb8(r: u8, g: u8, b: u8) -> Hsla {
         return gpui::hsla(0.0, 0.0, l, 1.0);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + (if g < b { 6.0 } else { 0.0 })
     } else if max == g {
@@ -456,7 +474,12 @@ impl Render for TerminalView {
         // Read ALL lines including scrollback history.
         let lines: Vec<String> = {
             let Ok(term) = self.term.lock() else {
-                return div().id("terminal-view").w_full().bg(bg).child("终端加载中…").into_any_element();
+                return div()
+                    .id("terminal-view")
+                    .w_full()
+                    .bg(bg)
+                    .child("终端加载中…")
+                    .into_any_element();
             };
             let dims: &dyn Dimensions = &*term;
             let num_cols = dims.columns();
@@ -560,11 +583,7 @@ impl Render for TerminalView {
                 |_bounds, _window, _cx| {},
                 move |_bounds, _state, window, cx: &mut App| {
                     let bounds = window.bounds();
-                    window.handle_input(
-                        &fh,
-                        ElementInputHandler::new(bounds, entity.clone()),
-                        cx,
-                    );
+                    window.handle_input(&fh, ElementInputHandler::new(bounds, entity.clone()), cx);
                 },
             ))
             .into_any_element()

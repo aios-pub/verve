@@ -82,7 +82,10 @@ mod tests {
     #[test]
     fn substitutes_known() {
         let m = vars(&[("baseUrl", "https://x.test"), ("id", "42")]);
-        assert_eq!(substitute("{{baseUrl}}/api/{{id}}", &m), "https://x.test/api/42");
+        assert_eq!(
+            substitute("{{baseUrl}}/api/{{id}}", &m),
+            "https://x.test/api/42"
+        );
     }
 
     #[test]

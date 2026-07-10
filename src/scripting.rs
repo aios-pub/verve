@@ -28,8 +28,7 @@ use boa_engine::object::builtins::JsFunction;
 use boa_engine::object::ObjectInitializer;
 use boa_engine::property::Attribute;
 use boa_engine::{
-    Context, JsArgs, JsValue, NativeFunction, Source, js_string,
-    object::FunctionObjectBuilder,
+    js_string, object::FunctionObjectBuilder, Context, JsArgs, JsValue, NativeFunction, Source,
 };
 
 use crate::state::models::Response;
@@ -54,10 +53,7 @@ pub enum SideEffect {
     /// A console line (from `apt.echo` / `console.log`).
     Log(String),
     /// An assertion outcome.
-    Assert {
-        passed: bool,
-        message: String,
-    },
+    Assert { passed: bool, message: String },
 }
 
 /// The collected side effects + any runtime error from a script run.
@@ -88,11 +84,7 @@ pub fn run_post_request(
     run(script, vars, Some(response))
 }
 
-fn run(
-    script: &str,
-    vars: &BTreeMap<String, String>,
-    response: Option<&Response>,
-) -> ScriptResult {
+fn run(script: &str, vars: &BTreeMap<String, String>, response: Option<&Response>) -> ScriptResult {
     if script.trim().is_empty() {
         return ScriptResult::default();
     }
@@ -167,7 +159,11 @@ fn install_apt(ctx: &mut Context) -> Result<(), boa_engine::JsError> {
     // --- console.log ---
     let console = {
         let mut obj = ObjectInitializer::new(ctx);
-        obj.function(NativeFunction::from_fn_ptr(log_native), js_string!("log"), 0);
+        obj.function(
+            NativeFunction::from_fn_ptr(log_native),
+            js_string!("log"),
+            0,
+        );
         obj.build()
     };
     ctx.register_global_property(js_string!("console"), console, Attribute::all())?;
@@ -175,19 +171,43 @@ fn install_apt(ctx: &mut Context) -> Result<(), boa_engine::JsError> {
     // --- apt.variables / apt.environment (get/set) ---
     let variables = {
         let mut obj = ObjectInitializer::new(ctx);
-        obj.function(NativeFunction::from_fn_ptr(var_get_native), js_string!("get"), 1);
-        obj.function(NativeFunction::from_fn_ptr(var_set_env_native), js_string!("set"), 2);
+        obj.function(
+            NativeFunction::from_fn_ptr(var_get_native),
+            js_string!("get"),
+            1,
+        );
+        obj.function(
+            NativeFunction::from_fn_ptr(var_set_env_native),
+            js_string!("set"),
+            2,
+        );
         obj.build()
     };
     let environment = variables.clone();
 
     let mut apt = ObjectInitializer::new(ctx);
-    apt.function(NativeFunction::from_fn_ptr(echo_native), js_string!("echo"), 0);
-    apt.function(NativeFunction::from_fn_ptr(assert_native), js_string!("assert"), 2);
+    apt.function(
+        NativeFunction::from_fn_ptr(echo_native),
+        js_string!("echo"),
+        0,
+    );
+    apt.function(
+        NativeFunction::from_fn_ptr(assert_native),
+        js_string!("assert"),
+        2,
+    );
     apt.property(js_string!("variables"), variables, Attribute::all());
     apt.property(js_string!("environment"), environment, Attribute::all());
-    apt.function(NativeFunction::from_fn_ptr(var_set_env_native), js_string!("setVariable"), 2);
-    apt.function(NativeFunction::from_fn_ptr(var_get_native), js_string!("getVariable"), 1);
+    apt.function(
+        NativeFunction::from_fn_ptr(var_set_env_native),
+        js_string!("setVariable"),
+        2,
+    );
+    apt.function(
+        NativeFunction::from_fn_ptr(var_get_native),
+        js_string!("getVariable"),
+        1,
+    );
     let apt_obj = apt.build();
 
     ctx.register_global_property(js_string!("apt"), apt_obj, Attribute::all())?;
@@ -195,23 +215,34 @@ fn install_apt(ctx: &mut Context) -> Result<(), boa_engine::JsError> {
 }
 
 /// Install the global `response` object for post-request scripts.
-fn install_response(ctx: &mut Context, response: Option<&Response>) -> Result<(), boa_engine::JsError> {
+fn install_response(
+    ctx: &mut Context,
+    response: Option<&Response>,
+) -> Result<(), boa_engine::JsError> {
     // Compute the parsed JSON value first (borrows ctx), before building the
     // response object (which also borrows ctx mutably).
     let json_val: Option<JsValue> = match response {
-        Some(r) if r.is_json => {
-            serde_json::from_str::<serde_json::Value>(&r.body)
-                .ok()
-                .map(|v| json_to_js_value(ctx, &v))
-                .transpose()?
-        }
+        Some(r) if r.is_json => serde_json::from_str::<serde_json::Value>(&r.body)
+            .ok()
+            .map(|v| json_to_js_value(ctx, &v))
+            .transpose()?,
         _ => None,
     };
 
     let resp_obj = ObjectInitializer::new(ctx).build();
     if let Some(r) = response {
-        let _ = resp_obj.set(js_string!("status"), JsValue::from(r.status as f64), false, ctx);
-        let _ = resp_obj.set(js_string!("time"), JsValue::from(r.time_ms as f64), false, ctx);
+        let _ = resp_obj.set(
+            js_string!("status"),
+            JsValue::from(r.status as f64),
+            false,
+            ctx,
+        );
+        let _ = resp_obj.set(
+            js_string!("time"),
+            JsValue::from(r.time_ms as f64),
+            false,
+            ctx,
+        );
         let _ = resp_obj.set(
             js_string!("body"),
             JsValue::from(js_string!(r.body.as_str())),
@@ -242,7 +273,10 @@ fn install_response(ctx: &mut Context, response: Option<&Response>) -> Result<()
 
 /// Convert a serde_json::Value into a boa JsValue. Uses `JsObject::set` to
 /// avoid holding a mutable context borrow across nested construction.
-fn json_to_js_value(ctx: &mut Context, value: &serde_json::Value) -> Result<JsValue, boa_engine::JsError> {
+fn json_to_js_value(
+    ctx: &mut Context,
+    value: &serde_json::Value,
+) -> Result<JsValue, boa_engine::JsError> {
     Ok(match value {
         serde_json::Value::Null => JsValue::null(),
         serde_json::Value::Bool(b) => JsValue::from(*b),
@@ -270,19 +304,31 @@ fn json_to_js_value(ctx: &mut Context, value: &serde_json::Value) -> Result<JsVa
 // Native functions (`fn` pointers — no captures; state via context globals).
 // ---------------------------------------------------------------------------
 
-fn log_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsValue, boa_engine::JsError> {
+fn log_native(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> Result<JsValue, boa_engine::JsError> {
     let msg = join_args(args, ctx);
     push_effect(ctx, SideEffect::Log(msg));
     Ok(JsValue::undefined())
 }
 
-fn echo_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsValue, boa_engine::JsError> {
+fn echo_native(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> Result<JsValue, boa_engine::JsError> {
     let msg = join_args(args, ctx);
     push_effect(ctx, SideEffect::Log(msg));
     Ok(JsValue::undefined())
 }
 
-fn assert_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsValue, boa_engine::JsError> {
+fn assert_native(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> Result<JsValue, boa_engine::JsError> {
     let passed = args.get_or_undefined(0).to_boolean();
     let message = args
         .get(1)
@@ -299,14 +345,22 @@ fn assert_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result
 }
 
 /// `apt.variables.get(name)` / `apt.getVariable(name)`.
-fn var_get_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsValue, boa_engine::JsError> {
+fn var_get_native(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> Result<JsValue, boa_engine::JsError> {
     let name = arg_string(args, 0, ctx);
     let value = current_var(ctx, &name);
     Ok(JsValue::from(js_string!(value.as_str())))
 }
 
 /// `apt.variables.set(name, value)` / `apt.environment.set` / `apt.setVariable`.
-fn var_set_env_native(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Result<JsValue, boa_engine::JsError> {
+fn var_set_env_native(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> Result<JsValue, boa_engine::JsError> {
     let name = arg_string(args, 0, ctx);
     let value = arg_string(args, 1, ctx);
     push_effect(
@@ -354,12 +408,20 @@ fn push_effect(ctx: &mut Context, effect: SideEffect) {
             format!("ASSERT\x1f{passed}\x1f{}", escape(message))
         }
         SideEffect::SetVariable { scope, name, value } => {
-            let s = if scope == &VarScope::Environment { "env" } else { "req" };
+            let s = if scope == &VarScope::Environment {
+                "env"
+            } else {
+                "req"
+            };
             format!("SET\x1f{s}\x1f{}\x1f{}", escape(name), escape(value))
         }
     };
     let cur = read_global_string(ctx, "__verve_effects__");
-    let next = if cur.is_empty() { tag } else { format!("{cur}\x1e{tag}") };
+    let next = if cur.is_empty() {
+        tag
+    } else {
+        format!("{cur}\x1e{tag}")
+    };
     write_global_string(ctx, "__verve_effects__", &next);
 }
 
@@ -493,13 +555,10 @@ mod tests {
         );
         assert!(result.error.is_none(), "{:?}", result.error);
         assert_eq!(result.assertions_passed, 1);
-        let token = result
-            .effects
-            .iter()
-            .find_map(|e| match e {
-                SideEffect::SetVariable { name, value, .. } if name == "token" => Some(value.clone()),
-                _ => None,
-            });
+        let token = result.effects.iter().find_map(|e| match e {
+            SideEffect::SetVariable { name, value, .. } if name == "token" => Some(value.clone()),
+            _ => None,
+        });
         assert_eq!(token.as_deref(), Some("xyz"));
     }
 

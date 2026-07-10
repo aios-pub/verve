@@ -174,7 +174,8 @@ impl GitState {
             Ok(Box::new(|this: &mut GitState| {
                 this.initialized = true;
                 None
-            }) as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
+            })
+                as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
         });
     }
 
@@ -185,10 +186,10 @@ impl GitState {
         }
         self.spawn_read(cx, "提交中", move |repo| {
             match ops::commit(&repo, &message)? {
-                Some(id) => Ok(Box::new(move |_this: &mut GitState| {
-                    Some(format!("已提交 {id}"))
-                })
-                    as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>),
+                Some(id) => Ok(
+                    Box::new(move |_this: &mut GitState| Some(format!("已提交 {id}")))
+                        as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>,
+                ),
                 None => anyhow::bail!("没有可提交的更改"),
             }
         });
@@ -232,7 +233,8 @@ impl GitState {
             Ok(Box::new(move |this: &mut GitState| {
                 this.remote = Some(url);
                 Some("已配置远程仓库".to_string())
-            }) as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
+            })
+                as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
         });
     }
 
@@ -246,8 +248,13 @@ impl GitState {
         self.spawn_read(cx, "拉取中", move |repo| {
             let msg = ops::pull(&repo, &auth)?;
             Ok(Box::new(move |_this: &mut GitState| {
-                Some(if msg.is_empty() { "已是最新".to_string() } else { msg })
-            }) as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
+                Some(if msg.is_empty() {
+                    "已是最新".to_string()
+                } else {
+                    msg
+                })
+            })
+                as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
         });
     }
 
@@ -260,8 +267,13 @@ impl GitState {
         self.spawn_read(cx, "推送中", move |repo| {
             let msg = ops::push(&repo, &auth)?;
             Ok(Box::new(move |_this: &mut GitState| {
-                Some(if msg.is_empty() { "已推送到 origin".to_string() } else { msg })
-            }) as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
+                Some(if msg.is_empty() {
+                    "已推送到 origin".to_string()
+                } else {
+                    msg
+                })
+            })
+                as Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>)
         });
     }
 
@@ -362,10 +374,8 @@ impl GitState {
                     }
                     SyncOutcome::Timeout => {
                         log::error!("sync_async: 后台任务 90s 未返回，强制清除 busy");
-                        this.last_result = Some((
-                            "同步超时（90s）— 远程地址或认证可能有误".to_string(),
-                            false,
-                        ));
+                        this.last_result =
+                            Some(("同步超时（90s）— 远程地址或认证可能有误".to_string(), false));
                     }
                 }
                 cx.emit(GitEvent::Updated);
@@ -388,7 +398,10 @@ impl GitState {
     /// output); returning `None` falls back to the generic message.
     fn spawn_read<F>(&mut self, cx: &mut Context<Self>, label: &str, op: F)
     where
-        F: FnOnce(gix::Repository) -> anyhow::Result<Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>>
+        F: FnOnce(
+                gix::Repository,
+            )
+                -> anyhow::Result<Box<dyn FnOnce(&mut GitState) -> Option<String> + Send>>
             + Send
             + 'static,
     {
@@ -452,10 +465,16 @@ fn summarize_sync(logs: &[String]) -> String {
     }
     // Look for the key signals in priority order.
     let committed = logs.iter().find(|l| l.starts_with("已提交"));
-    let pushed = logs.iter().any(|l| l.contains("已推送") || l.contains("track 'origin"));
+    let pushed = logs
+        .iter()
+        .any(|l| l.contains("已推送") || l.contains("track 'origin"));
     if let Some(c) = committed {
         // Shorten the commit id for display.
-        let short = c.split_whitespace().nth(1).map(|id| &id[..7.min(id.len())]).unwrap_or("");
+        let short = c
+            .split_whitespace()
+            .nth(1)
+            .map(|id| &id[..7.min(id.len())])
+            .unwrap_or("");
         if pushed {
             return format!("同步完成 · 已提交 {short}");
         }

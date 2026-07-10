@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use futures::AsyncReadExt as _;
-use http_client::{AsyncBody, Builder, HttpRequestExt as _, HttpClient, Method, RedirectPolicy};
+use http_client::{AsyncBody, Builder, HttpClient, HttpRequestExt as _, Method, RedirectPolicy};
 
-use crate::state::models::{AuthConfig, KeyValue, RequestMethod, Response};
 use crate::http::PreparedRequest;
+use crate::state::models::{AuthConfig, KeyValue, RequestMethod, Response};
 
 /// A single parsed SSE event.
 #[derive(Debug, Clone, Default)]
@@ -62,7 +62,10 @@ pub fn stream(
         let start = Instant::now();
         // Force SSE-friendly headers if the caller didn't set them.
         let mut headers = prepared.headers;
-        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("accept")) {
+        if !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("accept"))
+        {
             headers.push(("Accept".into(), "text/event-stream".into()));
         }
 

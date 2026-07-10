@@ -117,7 +117,10 @@ pub fn prepare(
         BodyType::None => {}
         BodyType::Raw => {
             if !ensure_header(&out_headers, "content-type") {
-                out_headers.push(("Content-Type".into(), body.raw_language.content_type().into()));
+                out_headers.push((
+                    "Content-Type".into(),
+                    body.raw_language.content_type().into(),
+                ));
             }
             body_bytes = super::variable::substitute(&body.raw, vars).into_bytes();
         }
@@ -199,9 +202,7 @@ pub fn prepare(
 }
 
 fn ensure_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case(name))
+    headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name))
 }
 
 /// Apply authentication to the outgoing headers (or query string for an API
@@ -242,9 +243,7 @@ fn inject_auth(
                 }
                 AuthTarget::Query => {
                     if let Ok(mut parsed) = Url::parse(url) {
-                        parsed
-                            .query_pairs_mut()
-                            .append_pair(&key, &value);
+                        parsed.query_pairs_mut().append_pair(&key, &value);
                         *url = parsed.to_string();
                     }
                 }
@@ -255,8 +254,7 @@ fn inject_auth(
 
 /// Minimal Base64 (standard alphabet) encoder — avoids pulling a crate.
 fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -282,13 +280,7 @@ fn base64_encode(input: &[u8]) -> String {
 fn serde_urlencode(pairs: &[(String, String)]) -> String {
     pairs
         .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                percent_encode(k),
-                percent_encode(v)
-            )
-        })
+        .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -310,9 +302,7 @@ pub fn normalize_url_with_default(url: &str, default_scheme: &str) -> String {
     let known = [
         "http://", "https://", "ws://", "wss://", "tcp://", "grpc://",
     ];
-    if known.iter().any(|s| trimmed.to_lowercase().starts_with(s))
-        || trimmed.contains("://")
-    {
+    if known.iter().any(|s| trimmed.to_lowercase().starts_with(s)) || trimmed.contains("://") {
         return trimmed.to_string();
     }
 
@@ -404,11 +394,7 @@ pub async fn execute(
     };
 
     let status = resp.status().as_u16();
-    let status_text = resp
-        .status()
-        .canonical_reason()
-        .unwrap_or("")
-        .to_string();
+    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
 
     let mut headers: Vec<KeyValue> = Vec::new();
     for (name, value) in resp.headers().iter() {

@@ -19,17 +19,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, Disableable as _, IconName, Sizable as _,
-    WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _,
 };
 
 use crate::git::state::{GitEvent, GitState};
+use crate::state::models::{ApiToken, MergeRequest, RequestMethod, StatusCodeEntry};
 use crate::state::persistence::{self, GitConfig};
-use crate::state::models::{
-    ApiToken, MergeRequest, RequestMethod, StatusCodeEntry,
-};
 use crate::state::{AppEvent, AppState};
 
 /// A selectable management section in the secondary nav.
@@ -111,7 +107,7 @@ pub struct ProjectManagePanel {
 
 /// Which input dialog is queued for opening (needs a Window, opened in render).
 #[derive(Clone, Debug)]
-enum PendingInput {
+pub enum PendingInput {
     Commit,
     NewBranch,
     EditRemote,
@@ -161,7 +157,8 @@ impl ProjectManagePanel {
         let sc_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("如 OK"));
         let sc_desc_input = cx.new(|cx| InputState::new(window, cx).placeholder("状态码说明"));
         // API token dialog input.
-        let token_label_input = cx.new(|cx| InputState::new(window, cx).placeholder("备注名，如 CI 同步"));
+        let token_label_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("备注名，如 CI 同步"));
 
         let mut panel = Self {
             git,
@@ -196,9 +193,12 @@ impl ProjectManagePanel {
         let token = self.git.read(cx).auth.token.clone();
         let username = self.git.read(cx).auth.username.clone();
         let remote = self.git.read(cx).remote.clone().unwrap_or_default();
-        self.token_input.update(cx, |s, cx| s.set_value(token, window, cx));
-        self.username_input.update(cx, |s, cx| s.set_value(username, window, cx));
-        self.remote_input.update(cx, |s, cx| s.set_value(remote, window, cx));
+        self.token_input
+            .update(cx, |s, cx| s.set_value(token, window, cx));
+        self.username_input
+            .update(cx, |s, cx| s.set_value(username, window, cx));
+        self.remote_input
+            .update(cx, |s, cx| s.set_value(remote, window, cx));
     }
 
     fn reseed_project_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -208,8 +208,10 @@ impl ProjectManagePanel {
             .active_project()
             .map(|p| (p.name.clone(), p.description.clone()))
             .unwrap_or_default();
-        self.project_name_input.update(cx, |s, cx| s.set_value(name, window, cx));
-        self.project_desc_input.update(cx, |s, cx| s.set_value(desc, window, cx));
+        self.project_name_input
+            .update(cx, |s, cx| s.set_value(name, window, cx));
+        self.project_desc_input
+            .update(cx, |s, cx| s.set_value(desc, window, cx));
     }
 
     /// Persist the current git config fields back to layout.json.
@@ -281,7 +283,8 @@ impl ProjectManagePanel {
                                 .on_click(move |_, window, cx| {
                                     let name = input_f.read(cx).value().to_string();
                                     if !name.trim().is_empty() {
-                                        let _ = git_f.update(cx, |g, cx| g.create_branch_async(name, cx));
+                                        let _ = git_f
+                                            .update(cx, |g, cx| g.create_branch_async(name, cx));
                                     }
                                     window.close_dialog(cx);
                                 }),
@@ -297,34 +300,39 @@ impl ProjectManagePanel {
                     let input_f = input.clone();
                     let git_f = git.clone();
                     let panel_f = panel.clone();
-                    dialog.title("远程仓库").content(move |content, _w, _cx| {
-                        content.child(
-                            v_flex()
-                                .p_4()
-                                .w(px(460.))
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(gpui::rgb(0xcccccc))
-                                        .child("origin URL（HTTPS，可嵌入 token）"),
-                                )
-                                .child(Input::new(&input_c)),
+                    dialog
+                        .title("远程仓库")
+                        .content(move |content, _w, _cx| {
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(460.))
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(gpui::rgb(0xcccccc))
+                                            .child("origin URL（HTTPS，可嵌入 token）"),
+                                    )
+                                    .child(Input::new(&input_c)),
+                            )
+                        })
+                        .footer(
+                            Button::new("ok-remote")
+                                .primary()
+                                .small()
+                                .label("保存")
+                                .on_click(move |_, window, cx| {
+                                    let url = input_f.read(cx).value().to_string();
+                                    if !url.trim().is_empty() {
+                                        let _ =
+                                            git_f.update(cx, |g, cx| g.set_remote_async(url, cx));
+                                        let _ = panel_f
+                                            .update(cx, |this, cx| this.persist_git_config(cx));
+                                    }
+                                    window.close_dialog(cx);
+                                }),
                         )
-                    }).footer(
-                        Button::new("ok-remote")
-                            .primary()
-                            .small()
-                            .label("保存")
-                            .on_click(move |_, window, cx| {
-                                let url = input_f.read(cx).value().to_string();
-                                if !url.trim().is_empty() {
-                                    let _ = git_f.update(cx, |g, cx| g.set_remote_async(url, cx));
-                                    let _ = panel_f.update(cx, |this, cx| this.persist_git_config(cx));
-                                }
-                                window.close_dialog(cx);
-                            }),
-                    )
                 });
             }
             PendingInput::EditAuth => {
@@ -339,42 +347,46 @@ impl ProjectManagePanel {
                     let tok_f = tok.clone();
                     let git_f = git.clone();
                     let panel_f = panel.clone();
-                    dialog.title("认证配置").content(move |content, _w, _cx| {
-                        content.child(
-                            v_flex()
-                                .p_4()
-                                .w(px(460.))
-                                .gap_3()
-                                .child(
-                                    v_flex()
-                                        .gap_1()
-                                        .child(div().text_size(px(12.)).child("用户名"))
-                                        .child(Input::new(&user_c)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .gap_1()
-                                        .child(div().text_size(px(12.)).child("Access Token"))
-                                        .child(Input::new(&tok_c)),
-                                ),
+                    dialog
+                        .title("认证配置")
+                        .content(move |content, _w, _cx| {
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(460.))
+                                    .gap_3()
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(div().text_size(px(12.)).child("用户名"))
+                                            .child(Input::new(&user_c)),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(div().text_size(px(12.)).child("Access Token"))
+                                            .child(Input::new(&tok_c)),
+                                    ),
+                            )
+                        })
+                        .footer(
+                            Button::new("ok-auth")
+                                .primary()
+                                .small()
+                                .label("保存")
+                                .on_click(move |_, window, cx| {
+                                    let username = user_f.read(cx).value().to_string();
+                                    let token = tok_f.read(cx).value().to_string();
+                                    let _ = git_f.update(cx, |g, cx| {
+                                        g.auth.username = username;
+                                        g.auth.token = token;
+                                        cx.notify();
+                                    });
+                                    let _ =
+                                        panel_f.update(cx, |this, cx| this.persist_git_config(cx));
+                                    window.close_dialog(cx);
+                                }),
                         )
-                    }).footer(
-                        Button::new("ok-auth")
-                            .primary()
-                            .small()
-                            .label("保存")
-                            .on_click(move |_, window, cx| {
-                                let username = user_f.read(cx).value().to_string();
-                                let token = tok_f.read(cx).value().to_string();
-                                let _ = git_f.update(cx, |g, cx| {
-                                    g.auth.username = username;
-                                    g.auth.token = token;
-                                    cx.notify();
-                                });
-                                let _ = panel_f.update(cx, |this, cx| this.persist_git_config(cx));
-                                window.close_dialog(cx);
-                            }),
-                    )
                 });
             }
             PendingInput::NewMergeRequest => {
@@ -390,46 +402,50 @@ impl ProjectManagePanel {
                     let source_f = source.clone();
                     let target_f = target.clone();
                     let state_f = state.clone();
-                    dialog.title("新建合并请求").content(move |content, _w, _cx| {
-                        content.child(
-                            v_flex()
-                                .p_4()
-                                .w(px(460.))
-                                .gap_3()
-                                .child(field("标题", Input::new(&title_c)))
-                                .child(field("源分支", Input::new(&source_c)))
-                                .child(field("目标分支", Input::new(&target_c))),
+                    dialog
+                        .title("新建合并请求")
+                        .content(move |content, _w, _cx| {
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(460.))
+                                    .gap_3()
+                                    .child(field("标题", Input::new(&title_c)))
+                                    .child(field("源分支", Input::new(&source_c)))
+                                    .child(field("目标分支", Input::new(&target_c))),
+                            )
+                        })
+                        .footer(
+                            Button::new("ok-mr")
+                                .primary()
+                                .small()
+                                .label("创建")
+                                .on_click(move |_, window, cx| {
+                                    let title = title_f.read(cx).value().to_string();
+                                    let source = source_f.read(cx).value().to_string();
+                                    let target = target_f.read(cx).value().to_string();
+                                    if !title.trim().is_empty() {
+                                        let source = if source.trim().is_empty() {
+                                            "feature".to_string()
+                                        } else {
+                                            source
+                                        };
+                                        let target = if target.trim().is_empty() {
+                                            "main".to_string()
+                                        } else {
+                                            target
+                                        };
+                                        let _ = state_f.update(cx, |s, cx| {
+                                            if let Some(p) = s.active_project_mut() {
+                                                p.merge_requests
+                                                    .push(MergeRequest::new(title, source, target));
+                                            }
+                                            s.notify_workspace(cx);
+                                        });
+                                    }
+                                    window.close_dialog(cx);
+                                }),
                         )
-                    }).footer(
-                        Button::new("ok-mr")
-                            .primary()
-                            .small()
-                            .label("创建")
-                            .on_click(move |_, window, cx| {
-                                let title = title_f.read(cx).value().to_string();
-                                let source = source_f.read(cx).value().to_string();
-                                let target = target_f.read(cx).value().to_string();
-                                if !title.trim().is_empty() {
-                                    let source = if source.trim().is_empty() {
-                                        "feature".to_string()
-                                    } else {
-                                        source
-                                    };
-                                    let target = if target.trim().is_empty() {
-                                        "main".to_string()
-                                    } else {
-                                        target
-                                    };
-                                    let _ = state_f.update(cx, |s, cx| {
-                                        if let Some(p) = s.active_project_mut() {
-                                            p.merge_requests.push(MergeRequest::new(title, source, target));
-                                        }
-                                        s.notify_workspace(cx);
-                                    });
-                                }
-                                window.close_dialog(cx);
-                            }),
-                    )
                 });
             }
             PendingInput::NewStatusCode => {
@@ -445,40 +461,47 @@ impl ProjectManagePanel {
                     let name_f = name.clone();
                     let desc_f = desc.clone();
                     let state_f = state.clone();
-                    dialog.title("新增状态码").content(move |content, _w, _cx| {
-                        content.child(
-                            v_flex()
-                                .p_4()
-                                .w(px(460.))
-                                .gap_3()
-                                .child(field("状态码", Input::new(&code_c)))
-                                .child(field("名称", Input::new(&name_c)))
-                                .child(field("描述", Input::new(&desc_c))),
+                    dialog
+                        .title("新增状态码")
+                        .content(move |content, _w, _cx| {
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(460.))
+                                    .gap_3()
+                                    .child(field("状态码", Input::new(&code_c)))
+                                    .child(field("名称", Input::new(&name_c)))
+                                    .child(field("描述", Input::new(&desc_c))),
+                            )
+                        })
+                        .footer(
+                            Button::new("ok-sc")
+                                .primary()
+                                .small()
+                                .label("添加")
+                                .on_click(move |_, window, cx| {
+                                    let code_raw = code_f.read(cx).value().to_string();
+                                    let name = name_f.read(cx).value().to_string();
+                                    let desc = desc_f.read(cx).value().to_string();
+                                    if let Ok(c) = code_raw.trim().parse::<u16>() {
+                                        let _ = state_f.update(cx, |s, cx| {
+                                            if let Some(p) = s.active_project_mut() {
+                                                p.status_codes.push(StatusCodeEntry {
+                                                    code: c,
+                                                    name: if name.trim().is_empty() {
+                                                        c.to_string()
+                                                    } else {
+                                                        name
+                                                    },
+                                                    description: desc,
+                                                });
+                                            }
+                                            s.notify_workspace(cx);
+                                        });
+                                    }
+                                    window.close_dialog(cx);
+                                }),
                         )
-                    }).footer(
-                        Button::new("ok-sc")
-                            .primary()
-                            .small()
-                            .label("添加")
-                            .on_click(move |_, window, cx| {
-                                let code_raw = code_f.read(cx).value().to_string();
-                                let name = name_f.read(cx).value().to_string();
-                                let desc = desc_f.read(cx).value().to_string();
-                                if let Ok(c) = code_raw.trim().parse::<u16>() {
-                                    let _ = state_f.update(cx, |s, cx| {
-                                        if let Some(p) = s.active_project_mut() {
-                                            p.status_codes.push(StatusCodeEntry {
-                                                code: c,
-                                                name: if name.trim().is_empty() { c.to_string() } else { name },
-                                                description: desc,
-                                            });
-                                        }
-                                        s.notify_workspace(cx);
-                                    });
-                                }
-                                window.close_dialog(cx);
-                            }),
-                    )
                 });
             }
             PendingInput::NewApiToken => {
@@ -488,39 +511,44 @@ impl ProjectManagePanel {
                     let label_c = label.clone();
                     let label_f = label.clone();
                     let state_f = state.clone();
-                    dialog.title("新建 API Token").content(move |content, _w, _cx| {
-                        content.child(
-                            v_flex()
-                                .p_4()
-                                .w(px(460.))
-                                .gap_2()
-                                .child(
-                                    div().text_size(px(12.)).text_color(gpui::rgb(0xcccccc))
-                                        .child("为该 token 取一个备注名以便区分用途"),
-                                )
-                                .child(Input::new(&label_c)),
+                    dialog
+                        .title("新建 API Token")
+                        .content(move |content, _w, _cx| {
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(460.))
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(gpui::rgb(0xcccccc))
+                                            .child("为该 token 取一个备注名以便区分用途"),
+                                    )
+                                    .child(Input::new(&label_c)),
+                            )
+                        })
+                        .footer(
+                            Button::new("ok-token")
+                                .primary()
+                                .small()
+                                .label("创建")
+                                .on_click(move |_, window, cx| {
+                                    let label = label_f.read(cx).value().to_string();
+                                    let label = if label.trim().is_empty() {
+                                        "默认".to_string()
+                                    } else {
+                                        label
+                                    };
+                                    let _ = state_f.update(cx, |s, cx| {
+                                        if let Some(p) = s.active_project_mut() {
+                                            p.api_tokens.push(ApiToken::new(label));
+                                        }
+                                        s.notify_workspace(cx);
+                                    });
+                                    window.close_dialog(cx);
+                                }),
                         )
-                    }).footer(
-                        Button::new("ok-token")
-                            .primary()
-                            .small()
-                            .label("创建")
-                            .on_click(move |_, window, cx| {
-                                let label = label_f.read(cx).value().to_string();
-                                let label = if label.trim().is_empty() {
-                                    "默认".to_string()
-                                } else {
-                                    label
-                                };
-                                let _ = state_f.update(cx, |s, cx| {
-                                    if let Some(p) = s.active_project_mut() {
-                                        p.api_tokens.push(ApiToken::new(label));
-                                    }
-                                    s.notify_workspace(cx);
-                                });
-                                window.close_dialog(cx);
-                            }),
-                    )
                 });
             }
         }
@@ -566,45 +594,40 @@ impl Render for ProjectManagePanel {
             // ---- Secondary nav (left) ----
             .child(self.render_secondary_nav(active, &theme, cx))
             // ---- Section content (right) ----
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .child(match self.active_section {
-                        ManageSection::BasicSettings => {
-                            self.render_basic_settings(&theme, cx).into_any_element()
-                        }
-                        ManageSection::IterationBranch => {
-                            self.render_iteration_branch(&theme, cx).into_any_element()
-                        }
-                        ManageSection::MergeRequests => {
-                            self.render_merge_requests(&theme, cx).into_any_element()
-                        }
-                        ManageSection::BranchManage => {
-                            self.render_branch_manage(&theme, cx).into_any_element()
-                        }
-                        ManageSection::MockService => {
-                            self.render_mock_service(&theme, cx).into_any_element()
-                        }
-                        ManageSection::PublicResources => {
-                            self.render_public_resources(&theme, cx).into_any_element()
-                        }
-                        ManageSection::IfaceProps => {
-                            self.render_iface_props(&theme, cx).into_any_element()
-                        }
-                        ManageSection::IfaceStatus => {
-                            self.render_iface_status(&theme, cx).into_any_element()
-                        }
-                        ManageSection::ExternalCaps => {
-                            self.render_external_caps(&theme, cx).into_any_element()
-                        }
-                        ManageSection::ImportExport => {
-                            self.render_import_export(&theme, cx).into_any_element()
-                        }
-                    }),
-            )
+            .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(
+                match self.active_section {
+                    ManageSection::BasicSettings => {
+                        self.render_basic_settings(&theme, cx).into_any_element()
+                    }
+                    ManageSection::IterationBranch => {
+                        self.render_iteration_branch(&theme, cx).into_any_element()
+                    }
+                    ManageSection::MergeRequests => {
+                        self.render_merge_requests(&theme, cx).into_any_element()
+                    }
+                    ManageSection::BranchManage => {
+                        self.render_branch_manage(&theme, cx).into_any_element()
+                    }
+                    ManageSection::MockService => {
+                        self.render_mock_service(&theme, cx).into_any_element()
+                    }
+                    ManageSection::PublicResources => {
+                        self.render_public_resources(&theme, cx).into_any_element()
+                    }
+                    ManageSection::IfaceProps => {
+                        self.render_iface_props(&theme, cx).into_any_element()
+                    }
+                    ManageSection::IfaceStatus => {
+                        self.render_iface_status(&theme, cx).into_any_element()
+                    }
+                    ManageSection::ExternalCaps => {
+                        self.render_external_caps(&theme, cx).into_any_element()
+                    }
+                    ManageSection::ImportExport => {
+                        self.render_import_export(&theme, cx).into_any_element()
+                    }
+                },
+            ))
     }
 }
 
@@ -726,7 +749,8 @@ impl ProjectManagePanel {
                                 .label("保存")
                                 .on_click(move |_, _w, cx: &mut App| {
                                     let _ = ent.update(cx, |this, cx| {
-                                        let name = this.project_name_input.read(cx).value().to_string();
+                                        let name =
+                                            this.project_name_input.read(cx).value().to_string();
                                         let desc =
                                             this.project_desc_input.read(cx).value().to_string();
                                         this.state.update(cx, |s, cx| {
@@ -789,7 +813,11 @@ impl ProjectManagePanel {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(div().text_color(theme.muted_foreground).child("尚未初始化 Git 仓库"))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child("尚未初始化 Git 仓库"),
+                )
                 .child(
                     Button::new("git-init")
                         .primary()
@@ -827,7 +855,11 @@ impl ProjectManagePanel {
                                 "{} · {} 待提交{}",
                                 branch.as_deref().unwrap_or("—"),
                                 dirty,
-                                if ahead > 0 { format!(" · {} 待推送", ahead) } else { String::new() }
+                                if ahead > 0 {
+                                    format!(" · {} 待推送", ahead)
+                                } else {
+                                    String::new()
+                                }
                             )),
                     )
                     .when_some(busy, |col, label| {
@@ -932,16 +964,22 @@ impl ProjectManagePanel {
                             }
                         },
                     ))
-                    .child(toggle_row("auto-push", "自动推送", auto_push, theme.clone(), {
-                        let p = panel_ent.downgrade();
-                        move |val: bool, cx: &mut App| {
-                            let _ = git_auto_push.update(cx, |g, cx| {
-                                g.auto_push = val;
-                                cx.notify();
-                            });
-                            let _ = p.update(cx, |this, cx| this.persist_git_config(cx));
-                        }
-                    })),
+                    .child(toggle_row(
+                        "auto-push",
+                        "自动推送",
+                        auto_push,
+                        theme.clone(),
+                        {
+                            let p = panel_ent.downgrade();
+                            move |val: bool, cx: &mut App| {
+                                let _ = git_auto_push.update(cx, |g, cx| {
+                                    g.auto_push = val;
+                                    cx.notify();
+                                });
+                                let _ = p.update(cx, |this, cx| this.persist_git_config(cx));
+                            }
+                        },
+                    )),
             )
             // Last result banner
             .when_some(last_result, |col, (msg, ok)| {
@@ -969,7 +1007,12 @@ impl ProjectManagePanel {
             .gap_3()
             .border_r_1()
             .border_color(theme.border)
-            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("分支"))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("分支"),
+            )
             .child(
                 v_flex()
                     .id("branch-list-scroll")
@@ -994,7 +1037,8 @@ impl ProjectManagePanel {
                             .items_center()
                             .gap(px(6.))
                             .when(is_active, |d| {
-                                d.bg(theme.primary.opacity(0.2)).font_weight(FontWeight::SEMIBOLD)
+                                d.bg(theme.primary.opacity(0.2))
+                                    .font_weight(FontWeight::SEMIBOLD)
                             })
                             .hover(|d| d.bg(theme.accent.opacity(0.3)))
                             .child(IconName::Github)
@@ -1012,13 +1056,16 @@ impl ProjectManagePanel {
                                         .child(IconName::Delete)
                                         .on_click(move |_, _w, cx| {
                                             let name = b_del.clone();
-                                            let _ = git_del.update(cx, |g, cx| g.delete_branch_async(name, cx));
+                                            let _ = git_del.update(cx, |g, cx| {
+                                                g.delete_branch_async(name, cx)
+                                            });
                                         }),
                                 )
                             })
                             .on_click(move |_, _w, cx| {
                                 if !is_active {
-                                    let _ = git_e.update(cx, |g, cx| g.checkout_async(b.clone(), cx));
+                                    let _ =
+                                        git_e.update(cx, |g, cx| g.checkout_async(b.clone(), cx));
                                 }
                             })
                     })),
@@ -1035,12 +1082,23 @@ impl ProjectManagePanel {
                     })),
             )
             .child(div().h(px(1.)).w_full().bg(theme.border))
-            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("远程 / 认证"))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("远程 / 认证"),
+            )
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().text_size(px(12.)).w(px(48.)).text_color(theme.muted_foreground).child("远程"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .w(px(48.))
+                            .text_color(theme.muted_foreground)
+                            .child("远程"),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -1066,13 +1124,18 @@ impl ProjectManagePanel {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().text_size(px(12.)).w(px(48.)).text_color(theme.muted_foreground).child("认证"))
                     .child(
                         div()
-                            .flex_1()
                             .text_size(px(12.))
-                            .child(if auth_set { "已配置" } else { "未配置" }),
+                            .w(px(48.))
+                            .text_color(theme.muted_foreground)
+                            .child("认证"),
                     )
+                    .child(div().flex_1().text_size(px(12.)).child(if auth_set {
+                        "已配置"
+                    } else {
+                        "未配置"
+                    }))
                     .child(
                         Button::new("auth-edit")
                             .ghost()
@@ -1091,7 +1154,12 @@ impl ProjectManagePanel {
             .gap_2()
             .flex_1()
             .min_w_0()
-            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("提交历史"))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("提交历史"),
+            )
             .when(commits.is_empty(), |c| {
                 c.child(
                     div()
@@ -1130,7 +1198,9 @@ impl ProjectManagePanel {
                                             .text_color(theme.primary)
                                             .child(c.short_id.clone()),
                                     )
-                                    .child(div().flex_1().text_size(px(13.)).child(c.message.clone())),
+                                    .child(
+                                        div().flex_1().text_size(px(13.)).child(c.message.clone()),
+                                    ),
                             )
                             .child(
                                 h_flex()
@@ -1266,32 +1336,39 @@ impl ProjectManagePanel {
         let branches = g.branches.clone();
         let dirty = g.status.dirty;
 
-        let mut body = v_flex().size_full().id("iter-scroll").overflow_y_scroll().child(
-            v_flex()
-                .p_6()
-                .gap_5()
-                .max_w(px(820.))
-                .child(section_title("迭代分支"))
-                .child(
-                    div().text_size(px(12.)).text_color(theme.muted_foreground).child(
-                        "按分支组织迭代。每条分支对应一次开发迭代，可在此查看、创建与切换。",
-                    ),
-                )
-                .child(
-                    h_flex().gap_2().child(
-                        Button::new("iter-new")
-                            .primary()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("新建迭代分支")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pending = Some(PendingInput::NewBranch);
-                                cx.notify();
-                            })),
-                    ),
-                )
-                .child(div().h(px(1.)).w_full().bg(theme.border)),
-        );
+        let mut body = v_flex()
+            .size_full()
+            .id("iter-scroll")
+            .overflow_y_scroll()
+            .child(
+                v_flex()
+                    .p_6()
+                    .gap_5()
+                    .max_w(px(820.))
+                    .child(section_title("迭代分支"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(
+                            "按分支组织迭代。每条分支对应一次开发迭代，可在此查看、创建与切换。",
+                        ),
+                    )
+                    .child(
+                        h_flex().gap_2().child(
+                            Button::new("iter-new")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("新建迭代分支")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.pending = Some(PendingInput::NewBranch);
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                    .child(div().h(px(1.)).w_full().bg(theme.border)),
+            );
 
         if !initialized {
             body = body.child(
@@ -1303,39 +1380,46 @@ impl ProjectManagePanel {
             return body.into_any_element();
         }
 
-        body = body.child(
-            v_flex()
-                .gap(px(1.))
-                .children(branches.iter().map(|b| {
-                    let b = b.clone();
-                    let is_active = Some(&b) == current.as_ref();
-                    let badge = if is_active { "当前" } else { "" };
-                    let dirty_label = if is_active && dirty > 0 {
-                        format!("{} 处未提交", dirty)
-                    } else {
-                        String::new()
-                    };
-                    h_flex()
-                        .id(format!("iter-br-{}", b))
-                        .w_full()
-                        .px_3()
-                        .py(px(8.))
-                        .gap_2()
-                        .items_center()
-                        .rounded(px(4.))
-                        .border_1()
-                        .when(is_active, |d| {
-                            d.border_color(theme.primary).bg(theme.primary.opacity(0.12))
-                        })
-                        .when(!is_active, |d| d.border_color(theme.border))
-                        .hover(|d| d.bg(theme.muted))
-                        .child(IconName::Github)
-                        .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(b.clone()))
-                        .when(is_active, |d| d.child(badge_chip(badge, &theme)))
-                        .child(div().flex_1())
-                        .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child(dirty_label))
-                })),
-        );
+        body = body.child(v_flex().gap(px(1.)).children(branches.iter().map(|b| {
+            let b = b.clone();
+            let is_active = Some(&b) == current.as_ref();
+            let badge = if is_active { "当前" } else { "" };
+            let dirty_label = if is_active && dirty > 0 {
+                format!("{} 处未提交", dirty)
+            } else {
+                String::new()
+            };
+            h_flex()
+                .id(format!("iter-br-{}", b))
+                .w_full()
+                .px_3()
+                .py(px(8.))
+                .gap_2()
+                .items_center()
+                .rounded(px(4.))
+                .border_1()
+                .when(is_active, |d| {
+                    d.border_color(theme.primary)
+                        .bg(theme.primary.opacity(0.12))
+                })
+                .when(!is_active, |d| d.border_color(theme.border))
+                .hover(|d| d.bg(theme.muted))
+                .child(IconName::Github)
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(b.clone()),
+                )
+                .when(is_active, |d| d.child(badge_chip(badge, &theme)))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted_foreground)
+                        .child(dirty_label),
+                )
+        })));
 
         body.into_any_element()
     }
@@ -1349,7 +1433,12 @@ impl ProjectManagePanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = theme.clone();
-        let mrs = self.state.read(cx).active_project().map(|p| p.merge_requests.clone()).unwrap_or_default();
+        let mrs = self
+            .state
+            .read(cx)
+            .active_project()
+            .map(|p| p.merge_requests.clone())
+            .unwrap_or_default();
 
         v_flex()
             .size_full()
@@ -1402,7 +1491,11 @@ impl ProjectManagePanel {
                     .filter_map(|(path, req)| {
                         req.mock.as_ref().filter(|m| m.enabled).map(|m| {
                             (
-                                if path.is_empty() { req.name.clone() } else { path },
+                                if path.is_empty() {
+                                    req.name.clone()
+                                } else {
+                                    path
+                                },
                                 req.url.clone(),
                                 req.name.clone(),
                                 m.status,
@@ -1505,8 +1598,12 @@ impl ProjectManagePanel {
                             ),
                     )
                     .child(
-                        div().text_size(px(12.)).text_color(theme.muted_foreground)
-                            .child("项目级共享的 HTTP 状态码字典，可在响应文档与 Mock 规则中引用。"),
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(
+                                "项目级共享的 HTTP 状态码字典，可在响应文档与 Mock 规则中引用。",
+                            ),
                     )
                     .child(status_code_table(&codes, &theme, self.state.clone())),
             )
@@ -1560,17 +1657,22 @@ impl ProjectManagePanel {
                     .max_w(px(1100.))
                     .child(section_title("接口属性"))
                     .child(
-                        div().text_size(px(12.)).text_color(theme.muted_foreground)
-                            .child(format!("共 {} 个接口。展示其所属目录、方法、路径与状态。", rows.len())),
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "共 {} 个接口。展示其所属目录、方法、路径与状态。",
+                                rows.len()
+                            )),
                     )
                     .child(div().h(px(1.)).w_full().bg(theme.border))
                     .child(header)
                     .child(
-                        v_flex()
-                            .gap(px(1.))
-                            .children(rows.iter().enumerate().map(|(i, r)| {
-                                iface_props_row(i, r, &theme)
-                            })),
+                        v_flex().gap(px(1.)).children(
+                            rows.iter()
+                                .enumerate()
+                                .map(|(i, r)| iface_props_row(i, r, &theme)),
+                        ),
                     ),
             )
             .into_any_element()
@@ -1586,7 +1688,8 @@ impl ProjectManagePanel {
     ) -> impl IntoElement {
         let theme = theme.clone();
         // Group all requests by their status label (empty → "未设置").
-        let mut groups: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+        let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         if let Some(p) = self.state.read(cx).active_project() {
             for (_path, req) in p.iter_all_requests() {
                 let key = if req.status.trim().is_empty() {
@@ -1610,17 +1713,21 @@ impl ProjectManagePanel {
                     .max_w(px(900.))
                     .child(section_title("接口状态"))
                     .child(
-                        div().text_size(px(12.)).text_color(theme.muted_foreground).child(
-                            format!("按状态聚合统计。共 {} 个接口，分布于 {} 个状态。", total, groups.len()),
-                        ),
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "按状态聚合统计。共 {} 个接口，分布于 {} 个状态。",
+                                total,
+                                groups.len()
+                            )),
                     )
                     .child(
-                        h_flex()
-                            .gap_3()
-                            .flex_wrap()
-                            .children(groups.iter().map(|(status, names)| {
-                                status_card(status, names.len(), &theme)
-                            })),
+                        h_flex().gap_3().flex_wrap().children(
+                            groups
+                                .iter()
+                                .map(|(status, names)| status_card(status, names.len(), &theme)),
+                        ),
                     )
                     .child(div().h(px(1.)).w_full().bg(theme.border))
                     .child(
@@ -1641,19 +1748,15 @@ impl ProjectManagePanel {
                                             )
                                             .child(badge_chip(&names.len().to_string(), &theme)),
                                     )
-                                    .child(
-                                        v_flex()
-                                            .gap(px(1.))
-                                            .children(names.iter().map(|n| {
-                                                div()
-                                                    .px_3()
-                                                    .py(px(5.))
-                                                    .text_size(px(12.))
-                                                    .rounded(px(4.))
-                                                    .hover(|d| d.bg(theme.muted))
-                                                    .child(n.clone())
-                                            })),
-                                    )
+                                    .child(v_flex().gap(px(1.)).children(names.iter().map(|n| {
+                                        div()
+                                            .px_3()
+                                            .py(px(5.))
+                                            .text_size(px(12.))
+                                            .rounded(px(4.))
+                                            .hover(|d| d.bg(theme.muted))
+                                            .child(n.clone())
+                                    })))
                             })),
                     ),
             )
@@ -1669,7 +1772,12 @@ impl ProjectManagePanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = theme.clone();
-        let proj = self.state.read(cx).active_project().map(|p| (p.id.clone(), p.api_tokens.clone())).unwrap_or_default();
+        let proj = self
+            .state
+            .read(cx)
+            .active_project()
+            .map(|p| (p.id.clone(), p.api_tokens.clone()))
+            .unwrap_or_default();
         let (project_id, tokens) = proj;
 
         v_flex()
@@ -1731,7 +1839,10 @@ fn field(label: &str, input: impl IntoElement) -> impl IntoElement {
 
 /// A consistent section title (h2-ish).
 fn section_title(text: &str) -> impl IntoElement {
-    div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(text.to_string())
+    div()
+        .text_size(px(18.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(text.to_string())
 }
 
 /// A small coloured pill used for counts / "current" markers.
@@ -1756,7 +1867,13 @@ fn status_card(status: &str, count: usize, theme: &gpui_component::Theme) -> imp
         .border_1()
         .border_color(theme.border)
         .bg(theme.muted)
-        .child(div().text_size(px(22.)).font_weight(FontWeight::BOLD).text_color(theme.primary).child(count.to_string()))
+        .child(
+            div()
+                .text_size(px(22.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.primary)
+                .child(count.to_string()),
+        )
         .child(div().text_size(px(13.)).child(status.to_string()))
 }
 
@@ -1791,7 +1908,11 @@ fn mr_table(
     state_ent: Entity<AppState>,
 ) -> impl IntoElement {
     let widths = [px(220.), px(120.), px(120.), px(90.), px(140.)];
-    let header = table_header(&["标题", "源分支", "目标分支", "状态", "创建时间"], &widths, theme);
+    let header = table_header(
+        &["标题", "源分支", "目标分支", "状态", "创建时间"],
+        &widths,
+        theme,
+    );
 
     let body = if mrs.is_empty() {
         v_flex().child(
@@ -1816,11 +1937,40 @@ fn mr_table(
                 .border_b_1()
                 .border_color(theme.border)
                 .hover(|d| d.bg(theme.muted))
-                .child(div().w(widths[0]).flex_shrink_0().text_ellipsis().whitespace_nowrap().overflow_hidden().child(mr.title.clone()))
-                .child(div().w(widths[1]).flex_shrink_0().child(mr.source_branch.clone()))
-                .child(div().w(widths[2]).flex_shrink_0().child(mr.target_branch.clone()))
-                .child(div().w(widths[3]).flex_shrink_0().child(mr_state_chip(&state, theme)))
-                .child(div().w(widths[4]).flex_shrink_0().text_color(theme.muted_foreground).child(mr.created_at.clone()))
+                .child(
+                    div()
+                        .w(widths[0])
+                        .flex_shrink_0()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child(mr.title.clone()),
+                )
+                .child(
+                    div()
+                        .w(widths[1])
+                        .flex_shrink_0()
+                        .child(mr.source_branch.clone()),
+                )
+                .child(
+                    div()
+                        .w(widths[2])
+                        .flex_shrink_0()
+                        .child(mr.target_branch.clone()),
+                )
+                .child(
+                    div()
+                        .w(widths[3])
+                        .flex_shrink_0()
+                        .child(mr_state_chip(&state, theme)),
+                )
+                .child(
+                    div()
+                        .w(widths[4])
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground)
+                        .child(mr.created_at.clone()),
+                )
                 .child(div().flex_1())
                 .child(
                     Button::new(("mr-close", i))
@@ -1832,7 +1982,9 @@ fn mr_table(
                             let id = mr_id.clone();
                             let _ = state_ent.update(cx, |s, cx| {
                                 if let Some(p) = s.active_project_mut() {
-                                    if let Some(m) = p.merge_requests.iter_mut().find(|m| m.id == id) {
+                                    if let Some(m) =
+                                        p.merge_requests.iter_mut().find(|m| m.id == id)
+                                    {
                                         m.state = "closed".to_string();
                                     }
                                 }
@@ -1896,9 +2048,20 @@ fn status_code_table(
                 .border_b_1()
                 .border_color(theme.border)
                 .hover(|d| d.bg(theme.muted))
-                .child(div().w(widths[0]).flex_shrink_0().child(format!("{}", code)))
+                .child(
+                    div()
+                        .w(widths[0])
+                        .flex_shrink_0()
+                        .child(format!("{}", code)),
+                )
                 .child(div().w(widths[1]).flex_shrink_0().child(c.name.clone()))
-                .child(div().w(widths[2]).flex_shrink_0().text_color(theme.muted_foreground).child(c.description.clone()))
+                .child(
+                    div()
+                        .w(widths[2])
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground)
+                        .child(c.description.clone()),
+                )
                 .child(div().flex_1())
                 .child(
                     Button::new(("sc-del", i))
@@ -1960,8 +2123,20 @@ fn token_table(
                 .border_color(theme.border)
                 .hover(|d| d.bg(theme.muted))
                 .child(div().w(widths[0]).flex_shrink_0().child(t.label.clone()))
-                .child(div().w(widths[1]).flex_shrink_0().text_color(theme.muted_foreground).child(masked))
-                .child(div().w(widths[2]).flex_shrink_0().text_color(theme.muted_foreground).child(t.created_at.clone()))
+                .child(
+                    div()
+                        .w(widths[1])
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground)
+                        .child(masked),
+                )
+                .child(
+                    div()
+                        .w(widths[2])
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground)
+                        .child(t.created_at.clone()),
+                )
                 .child(div().flex_1())
                 .child(
                     Button::new(("token-del", i))
@@ -1995,7 +2170,11 @@ fn iface_props_row(
 ) -> impl IntoElement {
     let (path, name, method, url, status, tags) = row;
     let widths = [px(140.), px(160.), px(72.), px(220.), px(90.), px(120.)];
-    let status_label = if status.trim().is_empty() { "未设置" } else { status.as_str() };
+    let status_label = if status.trim().is_empty() {
+        "未设置"
+    } else {
+        status.as_str()
+    };
     h_flex()
         .id(("iface-row", i))
         .w_full()
@@ -2005,12 +2184,61 @@ fn iface_props_row(
         .border_b_1()
         .border_color(theme.border)
         .hover(|d| d.bg(theme.muted))
-        .child(div().w(widths[0]).flex_shrink_0().text_color(theme.muted_foreground).text_ellipsis().whitespace_nowrap().overflow_hidden().child(if path.is_empty() { "/".to_string() } else { path.clone() }))
-        .child(div().w(widths[1]).flex_shrink_0().text_ellipsis().whitespace_nowrap().overflow_hidden().child(name.clone()))
-        .child(div().w(widths[2]).flex_shrink_0().child(method_chip(*method, theme)))
-        .child(div().w(widths[3]).flex_shrink_0().text_color(theme.muted_foreground).text_ellipsis().whitespace_nowrap().overflow_hidden().child(url.clone()))
-        .child(div().w(widths[4]).flex_shrink_0().child(status_label.to_string()))
-        .child(div().w(widths[5]).flex_shrink_0().text_color(theme.muted_foreground).text_ellipsis().whitespace_nowrap().overflow_hidden().child(tags.join(", ")))
+        .child(
+            div()
+                .w(widths[0])
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    path.clone()
+                }),
+        )
+        .child(
+            div()
+                .w(widths[1])
+                .flex_shrink_0()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(name.clone()),
+        )
+        .child(
+            div()
+                .w(widths[2])
+                .flex_shrink_0()
+                .child(method_chip(*method, theme)),
+        )
+        .child(
+            div()
+                .w(widths[3])
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(url.clone()),
+        )
+        .child(
+            div()
+                .w(widths[4])
+                .flex_shrink_0()
+                .child(status_label.to_string()),
+        )
+        .child(
+            div()
+                .w(widths[5])
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(tags.join(", ")),
+        )
 }
 
 /// Coloured chip for an HTTP method.
@@ -2055,10 +2283,28 @@ fn mock_row(
         .border_color(theme.border)
         .hover(|d| d.bg(theme.muted))
         .child(badge_chip(&format!("{}", status), theme))
-        .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(name.to_string()))
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(name.to_string()),
+        )
         .child(div().flex_1())
-        .child(div().text_size(px(11.)).text_color(theme.muted_foreground).text_ellipsis().whitespace_nowrap().overflow_hidden().child(url.to_string()))
-        .child(div().text_size(px(11.)).text_color(theme.muted_foreground).child(location.to_string()))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(theme.muted_foreground)
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(url.to_string()),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(theme.muted_foreground)
+                .child(location.to_string()),
+        )
 }
 
 /// A small toggle row with an on-change callback.
@@ -2084,8 +2330,16 @@ fn toggle_row(
                 .px(px(2.))
                 .cursor_pointer()
                 .when(on, |d| d.bg(theme.primary).justify_end())
-                .when(!on, |d| d.bg(theme.muted_foreground.opacity(0.4)).justify_start())
-                .child(div().w(px(12.)).h(px(12.)).rounded_full().bg(theme.background))
+                .when(!on, |d| {
+                    d.bg(theme.muted_foreground.opacity(0.4)).justify_start()
+                })
+                .child(
+                    div()
+                        .w(px(12.))
+                        .h(px(12.))
+                        .rounded_full()
+                        .bg(theme.background),
+                )
                 .on_click(move |_, _w, cx: &mut App| {
                     on_change(!on, cx);
                 }),

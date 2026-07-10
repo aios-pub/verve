@@ -197,7 +197,9 @@ pub async fn check_for_updates(client: &dyn HttpClient) -> Result<UpdateCheckRes
 
     // Try to find the `latest.json` manifest asset first (preferred path).
     let manifest = if let Some(asset) = release.assets.iter().find(|a| a.name == "latest.json") {
-        fetch_manifest(client, &asset.browser_download_url).await.ok()
+        fetch_manifest(client, &asset.browser_download_url)
+            .await
+            .ok()
     } else {
         None
     };
@@ -209,7 +211,8 @@ pub async fn check_for_updates(client: &dyn HttpClient) -> Result<UpdateCheckRes
             .map(|p| p.url.clone());
         (
             dl,
-            m.notes.unwrap_or_else(|| release.body.clone().unwrap_or_default()),
+            m.notes
+                .unwrap_or_else(|| release.body.clone().unwrap_or_default()),
             m.url.unwrap_or_else(|| release.html_url.clone()),
         )
     } else {

@@ -2,8 +2,8 @@
 
 pub mod app;
 pub mod console_panel;
-pub mod environments_view;
 pub mod env_panel;
+pub mod environments_view;
 pub mod kv_manager_view;
 pub mod kv_table;
 pub mod method_colors;

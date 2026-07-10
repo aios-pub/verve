@@ -127,7 +127,14 @@ async fn handle(mut stream: TcpStream, rules: Arc<HashMap<String, (String, MockR
         Some(v) => v.clone(),
         None => {
             let body = format!("No mock rule for path {path}\n");
-            let _ = write_response(&mut stream, 404, &[KeyValue::new("Content-Type", "text/plain")], body.as_bytes(), 0).await;
+            let _ = write_response(
+                &mut stream,
+                404,
+                &[KeyValue::new("Content-Type", "text/plain")],
+                body.as_bytes(),
+                0,
+            )
+            .await;
             return;
         }
     };
@@ -183,9 +190,6 @@ mod tests {
     fn path_extraction() {
         assert_eq!(path_of("{{baseUrl}}/api/login"), Some("/api/login".into()));
         assert_eq!(path_of("https://x.test/users/1"), Some("/users/1".into()));
-        assert_eq!(
-            path_of("{{baseUrl}}/items?detail=1"),
-            Some("/items".into())
-        );
+        assert_eq!(path_of("{{baseUrl}}/items?detail=1"), Some("/items".into()));
     }
 }

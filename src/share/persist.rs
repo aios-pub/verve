@@ -11,7 +11,9 @@ use super::models::ShareConfig;
 
 /// `~/.verve/shares.json`.
 pub fn shares_path() -> Option<PathBuf> {
-    crate::state::persistence::data_dir().ok().map(|d| d.join("shares.json"))
+    crate::state::persistence::data_dir()
+        .ok()
+        .map(|d| d.join("shares.json"))
 }
 
 /// Load all share configs. Returns an empty vec on any error.
@@ -42,7 +44,11 @@ pub fn save_shares(shares: &[ShareConfig]) {
         return;
     }
     if let Err(e) = fs::rename(&tmp, &path) {
-        log::error!("failed to rename {} -> {}: {e}", tmp.display(), path.display());
+        log::error!(
+            "failed to rename {} -> {}: {e}",
+            tmp.display(),
+            path.display()
+        );
     } else {
         log::debug!("saved {} share(s) to {}", shares.len(), path.display());
     }
@@ -76,7 +82,9 @@ mod tests {
     #[test]
     fn round_trip_via_temp_dir() {
         // Use the shared ssh mutex to serialize all HOME-dependent tests.
-        let _guard = crate::ssh::TEST_HOME_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::ssh::TEST_HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();

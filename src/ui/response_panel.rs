@@ -4,13 +4,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, tab::{Tab, TabBar}, v_flex,
+    h_flex,
+    tab::{Tab, TabBar},
+    v_flex, ActiveTheme, IconName, Selectable as _, Sizable as _,
 };
 
 use crate::state::{AppEvent, AppState};
-use crate::state::models::RequestMethod;
 
 pub struct ResponsePanel {
     pub state: Entity<AppState>,
@@ -86,11 +86,7 @@ impl RespTab {
 }
 
 impl ResponsePanel {
-    pub fn new(
-        state: Entity<AppState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let body_view = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("json")
@@ -109,12 +105,7 @@ impl ResponsePanel {
         }
     }
 
-    fn on_state_event(
-        &mut self,
-        _src: Entity<AppState>,
-        _ev: &AppEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_state_event(&mut self, _src: Entity<AppState>, _ev: &AppEvent, cx: &mut Context<Self>) {
         // refresh_body needs a Window, which subscribe handlers lack; defer.
         self.pending_refresh = true;
         cx.notify();
@@ -175,7 +166,10 @@ impl Render for ResponsePanel {
             None => "暂无响应".to_string(),
         };
         let is_streaming = response.as_ref().map(|r| r.streaming).unwrap_or(false);
-        let time = response.as_ref().map(|r| format!("{} ms", r.time_ms)).unwrap_or_default();
+        let time = response
+            .as_ref()
+            .map(|r| format!("{} ms", r.time_ms))
+            .unwrap_or_default();
         let size = response
             .as_ref()
             .map(|r| format_bytes(r.size))
@@ -199,21 +193,25 @@ impl Render for ResponsePanel {
                     .border_b_1()
                     .border_color(theme.border)
                     .when(is_streaming, |bar| {
-                        bar.child(
-                            div()
-                                .size_2()
-                                .rounded_full()
-                                .bg(theme.primary)
-                                .text_xs(),
-                        )
+                        bar.child(div().size_2().rounded_full().bg(theme.primary).text_xs())
                     })
                     .child(
                         div()
                             .text_color(status_color)
                             .child(div().font_weight(FontWeight::SEMIBOLD).child(status_line)),
                     )
-                    .child(div().text_color(theme.muted_foreground).text_sm().child(time))
-                    .child(div().text_color(theme.muted_foreground).text_sm().child(size))
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .text_sm()
+                            .child(time),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .text_sm()
+                            .child(size),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("pretty-toggle")
@@ -229,22 +227,15 @@ impl Render for ResponsePanel {
                     ),
             )
             .child(
-                div()
-                    .px_3()
-                    .pt_2()
-                    .child(
-                        TabBar::new("response-tabs")
-                            .selected_index(self.active_tab.index())
-                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                                this.active_tab = RespTab::from_index(*ix);
-                                cx.notify();
-                            }))
-                            .children(
-                                RespTab::all()
-                                    .iter()
-                                    .map(|t| Tab::new().label(t.label())),
-                            ),
-                    ),
+                div().px_3().pt_2().child(
+                    TabBar::new("response-tabs")
+                        .selected_index(self.active_tab.index())
+                        .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                            this.active_tab = RespTab::from_index(*ix);
+                            cx.notify();
+                        }))
+                        .children(RespTab::all().iter().map(|t| Tab::new().label(t.label()))),
+                ),
             )
             .child({
                 let active_tab = self.active_tab;
@@ -272,8 +263,9 @@ impl Render for ResponsePanel {
                             .into_any_element(),
                         RespTab::Headers => render_headers(&headers, &theme).into_any_element(),
                         RespTab::Cookie => render_cookies(&cookies, &theme).into_any_element(),
-                        RespTab::Example => render_example(&active_request, &theme)
-                            .into_any_element(),
+                        RespTab::Example => {
+                            render_example(&active_request, &theme).into_any_element()
+                        }
                         RespTab::ActualRequest => {
                             render_actual_request(&active_request, &theme).into_any_element()
                         }
@@ -295,7 +287,10 @@ impl Render for ResponsePanel {
 }
 
 /// Render the response headers as a read-only key/value list.
-fn render_headers(headers: &[crate::state::models::KeyValue], theme: &gpui_component::Theme) -> AnyElement {
+fn render_headers(
+    headers: &[crate::state::models::KeyValue],
+    theme: &gpui_component::Theme,
+) -> AnyElement {
     let rows: Vec<AnyElement> = headers
         .iter()
         .enumerate()
@@ -325,11 +320,7 @@ fn render_headers(headers: &[crate::state::models::KeyValue], theme: &gpui_compo
             .children(rows)
             .into_any_element()
     } else {
-        v_flex()
-            .w_full()
-            .gap_1()
-            .children(rows)
-            .into_any_element()
+        v_flex().w_full().gap_1().children(rows).into_any_element()
     }
 }
 

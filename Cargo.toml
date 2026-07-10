@@ -138,3 +138,16 @@ keyring = { version = "3", features = ["sync-secret-service"] }
 dbg_macro = "deny"
 style = { level = "allow", priority = -1 }
 module_inception = "allow"
+# GPUI element-builder closures produce complex types; the project already
+# allows the entire `style` group. These additional allows cover the remaining
+# noisy lints that conflict with the GPUI/GPUI-component patterns.
+type_complexity = "allow"
+too_many_arguments = "allow"
+result_large_err = "allow"
+
+# rustc dead-code lints: the project has many roadmap features that produce
+# unused-function/field warnings until wired up. Allow at the workspace level.
+[lints.rust]
+dead_code = "allow"
+unused_imports = "allow"
+unused_variables = "allow"

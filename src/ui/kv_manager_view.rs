@@ -8,9 +8,8 @@ use std::sync::Arc;
 
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
 };
 
 use crate::state::models::KeyValue;
@@ -40,8 +39,12 @@ impl KvScope {
         match self {
             KvScope::GlobalParams => "所有接口自动合并这些 query 参数（接口级同名参数覆盖）。",
             KvScope::GlobalHeaders => "所有接口自动合并这些请求头（接口级同名头覆盖）。",
-            KvScope::GlobalVariables => "全项目共享的变量，作用域最低，可被环境/目录/接口级变量覆盖。",
-            KvScope::GlobalCookies => "项目级 Cookie，按 key=value 形式自动注入到请求的 Cookie 头。",
+            KvScope::GlobalVariables => {
+                "全项目共享的变量，作用域最低，可被环境/目录/接口级变量覆盖。"
+            }
+            KvScope::GlobalCookies => {
+                "项目级 Cookie，按 key=value 形式自动注入到请求的 Cookie 头。"
+            }
         }
     }
 
@@ -84,13 +87,14 @@ impl KvManagerView {
         };
         // Reload rows when the workspace structurally changes. The reload
         // needs a Window, so it's deferred to render via pending_reload.
-        view._subs
-            .push(cx.subscribe(&view.state.clone(), move |this, _src, ev: &AppEvent, cx| {
+        view._subs.push(
+            cx.subscribe(&view.state.clone(), move |this, _src, ev: &AppEvent, cx| {
                 if matches!(ev, AppEvent::WorkspaceChanged) {
                     this.pending_reload = true;
                     cx.notify();
                 }
-            }));
+            }),
+        );
         view
     }
 
@@ -126,7 +130,12 @@ impl KvManagerView {
         cx.notify();
     }
 
-    fn change_type(&mut self, ix: usize, ft: crate::state::models::FieldType, cx: &mut Context<Self>) {
+    fn change_type(
+        &mut self,
+        ix: usize,
+        ft: crate::state::models::FieldType,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(row) = self.rows.get_mut(ix) {
             row.field_type = ft;
         }

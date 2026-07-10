@@ -20,8 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context as _, Result, anyhow, bail};
-use gix::prelude::ObjectIdExt as _;
+use anyhow::{anyhow, bail, Context as _, Result};
 
 /// The GIT_ASKPASS helper script body. It reads credentials from env vars set
 /// on the git child process — it contains NO secret itself, so it can live in
@@ -32,6 +31,26 @@ const ASKPASS_SCRIPT: &str = "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s
 /// missing/mistyped credential or an unreachable host from hanging the
 /// background executor forever.
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Kill a process by PID. Cross-platform: uses `taskkill` on Windows and
+/// `kill -TERM` on Unix. Avoids a hard dependency on the `libc` crate (which
+/// lacks `kill` on Windows anyway).
+fn kill_process(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        // /T kills the whole process tree, /F forces termination.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Use the kill command instead of libc::kill for portability.
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
+    }
+}
 
 /// Ensure the `GIT_ASKPASS` helper script exists at `<dir>/.verve-askpass.sh`,
 /// is executable (0700), and matches [`ASKPASS_SCRIPT`]. Returns its path.
@@ -88,7 +107,11 @@ fn run_git(workdir: &Path, auth: &GitAuth, args: &[&str]) -> Result<String> {
         args.join(" "),
         workdir,
         if has_token { "on" } else { "off" },
-        if has_token { "set" } else { "EMPTY — git will have no credentials" }
+        if has_token {
+            "set"
+        } else {
+            "EMPTY — git will have no credentials"
+        }
     );
 
     // Spawn + wait under a watchdog timeout. `wait_with_output` would otherwise
@@ -121,14 +144,15 @@ fn run_git(workdir: &Path, auth: &GitAuth, args: &[&str]) -> Result<String> {
         Err(_) => {
             // Timed out — kill the process if it's still around.
             log::warn!(
-                "git {} 超时（{}s），发送 SIGTERM 终止子进程",
+                "git {} 超时（{}s），终止子进程",
                 args_owned.join(" "),
                 timeout.as_secs()
             );
-            unsafe {
-                libc::kill(child_id as i32, libc::SIGTERM);
-            }
-            bail!("git 操作超时（{}s）— 检查远程地址或认证配置", timeout.as_secs());
+            kill_process(child_id);
+            bail!(
+                "git 操作超时（{}s）— 检查远程地址或认证配置",
+                timeout.as_secs()
+            )
         }
     };
 
@@ -143,7 +167,11 @@ fn run_git(workdir: &Path, auth: &GitAuth, args: &[&str]) -> Result<String> {
         log::warn!("git {} stderr: {}", args_owned.join(" "), stderr);
     }
     if !output.status.success() {
-        let msg = if stderr.is_empty() { stdout.clone() } else { stderr };
+        let msg = if stderr.is_empty() {
+            stdout.clone()
+        } else {
+            stderr
+        };
         bail!("git {} 失败：{msg}", args_owned.join(" "));
     }
     Ok(if stdout.is_empty() { stderr } else { stdout })
@@ -211,7 +239,7 @@ fn ensure_identity(repo: &mut gix::Repository, dir: &Path) -> Result<()> {
     let snapshot = repo.config_snapshot();
     let has_name = snapshot.string("user.name").is_some();
     let has_email = snapshot.string("user.email").is_some();
-    drop(snapshot);
+    let _ = snapshot;
     if has_name && has_email {
         return Ok(());
     }
@@ -228,7 +256,8 @@ fn ensure_identity(repo: &mut gix::Repository, dir: &Path) -> Result<()> {
             content.push_str("\temail = verve@local\n");
         }
     }
-    std::fs::write(&cfg_path, content).with_context(|| format!("write git config {:?}", cfg_path))?;
+    std::fs::write(&cfg_path, content)
+        .with_context(|| format!("write git config {:?}", cfg_path))?;
     *repo = open(dir)?;
     Ok(())
 }
@@ -269,7 +298,11 @@ pub fn status(repo: &gix::Repository) -> Result<GitStatus> {
     // before the first push (no upstream yet) or on any error.
     let ahead = count_ahead(repo, branch.as_deref()).unwrap_or(0);
 
-    Ok(GitStatus { branch, dirty, ahead })
+    Ok(GitStatus {
+        branch,
+        dirty,
+        ahead,
+    })
 }
 
 /// Count local commits ahead of `origin/<branch>`. Returns 0 if the remote
@@ -301,7 +334,7 @@ fn count_ahead(repo: &gix::Repository, branch: Option<&str>) -> Result<usize> {
                     Ok(c) => c,
                     Err(_) => break,
                 };
-                let next = match commit.parent_ids().into_iter().next() {
+                let next = match commit.parent_ids().next() {
                     Some(p) => p.detach(),
                     None => break,
                 };
@@ -319,9 +352,7 @@ fn count_ahead(repo: &gix::Repository, branch: Option<&str>) -> Result<usize> {
 /// Current branch short name (e.g. `main`). Returns `Err` on detached HEAD or
 /// an unborn branch.
 pub fn current_branch(repo: &gix::Repository) -> Result<String> {
-    let name = repo
-        .head_name()?
-        .ok_or_else(|| anyhow!("detached HEAD"))?;
+    let name = repo.head_name()?.ok_or_else(|| anyhow!("detached HEAD"))?;
     let bytes = name.as_bstr();
     let short = bytes
         .strip_prefix(b"refs/heads/")
@@ -412,7 +443,10 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> 
             if SKIP_FILES.contains(&name.as_ref()) {
                 continue;
             }
-            let rel = path.strip_prefix(root).map(|p| p.to_path_buf()).unwrap_or(path);
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_path_buf())
+                .unwrap_or(path);
             out.push(rel);
         }
     }
@@ -445,7 +479,9 @@ pub fn commit(repo: &gix::Repository, message: &str) -> Result<Option<String>> {
     };
     log::debug!(
         "commit: tree={} head={} parents={}",
-        tree_id, head_tree_id, parents.len()
+        tree_id,
+        head_tree_id,
+        parents.len()
     );
 
     let head_name = repo
@@ -456,7 +492,12 @@ pub fn commit(repo: &gix::Repository, message: &str) -> Result<Option<String>> {
         })
         .unwrap_or_else(|| "refs/heads/main".to_string());
 
-    let commit_id = repo.commit(head_name.as_str(), message, tree_id, parents.iter().copied())?;
+    let commit_id = repo.commit(
+        head_name.as_str(),
+        message,
+        tree_id,
+        parents.iter().copied(),
+    )?;
     let detached = commit_id.detach();
     log::debug!("commit: 完成 → {}", detached);
     Ok(Some(detached.to_string()))
@@ -684,32 +725,37 @@ pub fn fetch(repo: &gix::Repository, auth: &GitAuth) -> Result<String> {
         log::warn!("git fetch: token 为空，gix 可能因无凭据而挂起");
     }
     // Attach a credential provider so gix's HTTP transport can authenticate.
-    let connection = remote.connect(gix::remote::Direction::Fetch)?.with_credentials(move |action| {
-        use gix::credentials::helper::Action;
-        match action {
-            Action::Get(ctx) => {
-                log::info!("git fetch: 凭据请求 → 提供已配置的 token");
-                let user = if username.is_empty() {
-                    ctx.username.clone().unwrap_or_default()
-                } else {
-                    username.clone()
-                };
-                Ok(Some(gix::credentials::protocol::Outcome {
-                    identity: gix::sec::identity::Account {
-                        username: user,
-                        password: token.clone(),
-                    },
-                    next: ctx.into(),
-                }))
+    let connection = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .with_credentials(move |action| {
+            use gix::credentials::helper::Action;
+            match action {
+                Action::Get(ctx) => {
+                    log::info!("git fetch: 凭据请求 → 提供已配置的 token");
+                    let user = if username.is_empty() {
+                        ctx.username.clone().unwrap_or_default()
+                    } else {
+                        username.clone()
+                    };
+                    Ok(Some(gix::credentials::protocol::Outcome {
+                        identity: gix::sec::identity::Account {
+                            username: user,
+                            password: token.clone(),
+                        },
+                        next: ctx.into(),
+                    }))
+                }
+                // We never persist/erase credentials — this provider is stateless.
+                _ => Ok(None),
             }
-            // We never persist/erase credentials — this provider is stateless.
-            _ => Ok(None),
-        }
-    });
+        });
     log::info!("git fetch: prepare_fetch...");
     let prepare = connection.prepare_fetch(gix::progress::Discard, Default::default())?;
     log::info!("git fetch: receive...");
-    let outcome = prepare.receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::new(false))?;
+    let outcome = prepare.receive(
+        gix::progress::Discard,
+        &std::sync::atomic::AtomicBool::new(false),
+    )?;
     let changed = match &outcome.status {
         gix::remote::fetch::Status::NoPackReceived { .. } => "无新内容".to_string(),
         gix::remote::fetch::Status::Change { .. } => "有新提交".to_string(),
@@ -768,7 +814,11 @@ pub fn push(repo: &gix::Repository, auth: &GitAuth) -> Result<String> {
         .map(|p| p.to_path_buf())
         .ok_or_else(|| anyhow!("bare repo has no workdir"))?;
     let out = run_git(&workdir, auth, &["push", "-u", "origin", "HEAD"])?;
-    Ok(if out.is_empty() { "已推送到 origin".to_string() } else { out })
+    Ok(if out.is_empty() {
+        "已推送到 origin".to_string()
+    } else {
+        out
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -788,12 +838,26 @@ pub fn push(repo: &gix::Repository, auth: &GitAuth) -> Result<String> {
 ///      and sets tracking); pull is skipped since there's nothing to merge.
 /// 4. Returns the step-by-step log (joined with " · ") for the UI banner.
 pub fn sync(dir: &Path, auth: &GitAuth, message: &str) -> Result<Vec<String>> {
-    log::info!("git sync 开始 (dir={:?}, user={}, token={})", dir, auth.username, if auth.token.is_empty() { "EMPTY" } else { "set" });
+    log::info!(
+        "git sync 开始 (dir={:?}, user={}, token={})",
+        dir,
+        auth.username,
+        if auth.token.is_empty() {
+            "EMPTY"
+        } else {
+            "set"
+        }
+    );
     let mut logs = Vec::new();
     let repo = ensure_repo(dir)?;
     log::info!("git sync: ensure_repo 完成");
     let st = status(&repo)?;
-    log::info!("git sync: status = branch={:?} dirty={} ahead={}", st.branch, st.dirty, st.ahead);
+    log::info!(
+        "git sync: status = branch={:?} dirty={} ahead={}",
+        st.branch,
+        st.dirty,
+        st.ahead
+    );
     if st.dirty > 0 {
         log::info!("git sync: 有改动，提交中...");
         match commit(&repo, message)? {
@@ -815,14 +879,21 @@ pub fn sync(dir: &Path, auth: &GitAuth, message: &str) -> Result<Vec<String>> {
         logs.push("未配置远程，跳过推送".to_string());
         return Ok(logs);
     }
-    log::info!("git sync: 远程 = {}", mask_url(remote.as_deref().unwrap_or("")));
+    log::info!(
+        "git sync: 远程 = {}",
+        mask_url(remote.as_deref().unwrap_or(""))
+    );
     if has_upstream(&repo)? {
         log::info!("git sync: 有 upstream → 先 pull --ff-only");
         // Steady-state: merge remote first, then push our (possibly new) commits.
         match pull(&repo, auth) {
             Ok(msg) => {
                 log::info!("git sync: pull 成功 — {msg}");
-                logs.push(if msg.is_empty() { "已是最新".to_string() } else { msg });
+                logs.push(if msg.is_empty() {
+                    "已是最新".to_string()
+                } else {
+                    msg
+                });
             }
             Err(e) => {
                 log::warn!("git sync: pull 失败 — {e}");
@@ -836,7 +907,11 @@ pub fn sync(dir: &Path, auth: &GitAuth, message: &str) -> Result<Vec<String>> {
     match push(&repo, auth) {
         Ok(msg) => {
             log::info!("git sync: push 成功 — {msg}");
-            logs.push(if msg.is_empty() { "已推送".to_string() } else { msg });
+            logs.push(if msg.is_empty() {
+                "已推送".to_string()
+            } else {
+                msg
+            });
         }
         Err(e) => {
             log::error!("git sync: push 失败 — {e}");

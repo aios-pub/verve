@@ -13,15 +13,14 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Disableable as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _,
 };
 
 use crate::state::persistence;
+use crate::state::AppState;
 use crate::ui::app::SideView;
 use crate::ui::environments_view::EnvironmentsView;
-use crate::state::AppState;
 
 /// Which kind of settings window to open.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,7 +108,7 @@ impl SettingsWindow {
     }
 
     /// Trigger a manual update check from the settings page.
-    fn check_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn check_updates(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.update_checking {
             return;
         }

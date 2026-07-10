@@ -63,7 +63,9 @@ pub fn connect(addr: &str) -> TcpConnection {
 
         let stream = match TcpStream::connect(target).await {
             Ok(s) => {
-                let _ = frame_tx.send(TcpFrame::Status(format!("已连接 → {target}"))).await;
+                let _ = frame_tx
+                    .send(TcpFrame::Status(format!("已连接 → {target}")))
+                    .await;
                 s
             }
             Err(e) => {
@@ -110,8 +112,8 @@ pub fn connect(addr: &str) -> TcpConnection {
                 if stop_for_task.load(Ordering::SeqCst) {
                     break;
                 }
-                let bytes = if data.starts_with("0x") {
-                    match hex_decode(&data[2..]) {
+                let bytes = if let Some(stripped) = data.strip_prefix("0x") {
+                    match hex_decode(stripped) {
                         Ok(b) => b,
                         Err(_) => data.into_bytes(),
                     }
@@ -142,7 +144,7 @@ pub fn connect(addr: &str) -> TcpConnection {
 /// Decode a hex string into bytes.
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     (0..s.len())

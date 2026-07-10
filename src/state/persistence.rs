@@ -74,8 +74,7 @@ pub fn save(data: &WorkspaceData) -> Result<()> {
     let json = serde_json::to_string_pretty(data)?;
     // Write to a temp file then rename, for atomicity.
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, json)
-        .with_context(|| format!("write workspace {:?}", tmp))?;
+    fs::write(&tmp, json).with_context(|| format!("write workspace {:?}", tmp))?;
     fs::rename(&tmp, &path).with_context(|| format!("rename workspace {:?}", path))?;
     Ok(())
 }
@@ -105,7 +104,8 @@ pub fn load_workspaces_index() -> super::models::WorkspacesIndex {
             Ok(mut idx) => {
                 // Guarantee the default workspace always exists (migration safety).
                 if !idx.workspaces.iter().any(|w| w.is_default) {
-                    idx.workspaces.insert(0, super::models::WorkspaceMeta::default_workspace());
+                    idx.workspaces
+                        .insert(0, super::models::WorkspaceMeta::default_workspace());
                     let _ = save_workspaces_index(&idx);
                 }
                 idx

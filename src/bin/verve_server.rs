@@ -100,17 +100,20 @@ fn main() {
     }
 
     log::info!("verve-server starting: host={host} port={port}");
-    log::info!("data dir: {}", data_dir.as_deref().unwrap_or("$HOME/.verve"));
+    log::info!(
+        "data dir: {}",
+        data_dir.as_deref().unwrap_or("$HOME/.verve")
+    );
 
     // Load the file-backed cloud store.
     let store = Arc::new(CloudStore::load());
     let n_projects = store.list_projects().len();
     let n_shares = store.shares().len();
-    log::info!(
-        "loaded {n_projects} project(s), {n_shares} share(s) from cloud store"
-    );
+    log::info!("loaded {n_projects} project(s), {n_shares} share(s) from cloud store");
     if n_projects == 0 {
-        log::warn!("no projects yet — open the admin UI at http://{host}:{port}/admin to upload one");
+        log::warn!(
+            "no projects yet — open the admin UI at http://{host}:{port}/admin to upload one"
+        );
     }
 
     // Start the server in cloud mode (binds the host, serves /admin).

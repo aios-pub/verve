@@ -9,9 +9,8 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
 };
 
 use crate::share::models::{now_ts, ShareConfig, ShareScope};
@@ -44,16 +43,12 @@ impl EventEmitter<ShareEvent> for SharePanel {}
 impl SharePanel {
     pub fn new(state: Entity<AppState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Reload shares when the project/workspace changes.
-        let sub = cx.subscribe(&state, |this, _src, ev: &AppEvent, cx| {
-            match ev {
-                AppEvent::WorkspaceChanged
-                | AppEvent::WorkspaceSwitched
-                | AppEvent::Persisted => {
-                    this.stale = true;
-                    cx.notify();
-                }
-                _ => {}
+        let sub = cx.subscribe(&state, |this, _src, ev: &AppEvent, cx| match ev {
+            AppEvent::WorkspaceChanged | AppEvent::WorkspaceSwitched | AppEvent::Persisted => {
+                this.stale = true;
+                cx.notify();
             }
+            _ => {}
         });
 
         let shares = load_active_project_shares(&state, cx);
@@ -105,10 +100,12 @@ impl Render for SharePanel {
                             .child("文档管理"),
                     )
                     .child(
-                        div().flex_1().text_color(muted).text_sm().pl_3().child(format!(
-                            "当前项目共 {} 个分享",
-                            self.shares.len()
-                        )),
+                        div()
+                            .flex_1()
+                            .text_color(muted)
+                            .text_sm()
+                            .pl_3()
+                            .child(format!("当前项目共 {} 个分享", self.shares.len())),
                     )
                     .child(
                         Button::new("share-new")
@@ -135,7 +132,11 @@ impl Render for SharePanel {
 }
 
 impl SharePanel {
-    fn render_table(&self, cx: &mut Context<Self>, theme: gpui_component::Theme) -> impl IntoElement {
+    fn render_table(
+        &self,
+        cx: &mut Context<Self>,
+        theme: gpui_component::Theme,
+    ) -> impl IntoElement {
         let border = theme.border;
         let muted = theme.muted_foreground;
         let fg = theme.foreground;
@@ -240,7 +241,11 @@ impl SharePanel {
                 .border_color(border)
                 .hover(|s| s.bg(theme.muted))
                 .child(
-                    div().w(px(40.)).text_xs().text_color(status_color).child(status),
+                    div()
+                        .w(px(40.))
+                        .text_xs()
+                        .text_color(status_color)
+                        .child(status),
                 )
                 .child(
                     div()
@@ -250,10 +255,34 @@ impl SharePanel {
                         .overflow_hidden()
                         .child(div().truncate().child(share.display_title())),
                 )
-                .child(div().w(px(90.)).text_sm().text_color(row_muted).child(share.scope_label()))
-                .child(div().w(px(90.)).text_sm().text_color(row_muted).child(share.expire_label()))
-                .child(div().w(px(70.)).text_sm().text_color(row_muted).child(share.access_label()))
-                .child(div().w(px(70.)).text_sm().text_color(row_muted).child(share.visits.to_string()))
+                .child(
+                    div()
+                        .w(px(90.))
+                        .text_sm()
+                        .text_color(row_muted)
+                        .child(share.scope_label()),
+                )
+                .child(
+                    div()
+                        .w(px(90.))
+                        .text_sm()
+                        .text_color(row_muted)
+                        .child(share.expire_label()),
+                )
+                .child(
+                    div()
+                        .w(px(70.))
+                        .text_sm()
+                        .text_color(row_muted)
+                        .child(share.access_label()),
+                )
+                .child(
+                    div()
+                        .w(px(70.))
+                        .text_sm()
+                        .text_color(row_muted)
+                        .child(share.visits.to_string()),
+                )
                 .child(div().w(px(150.)).text_xs().text_color(muted).child(created))
                 .child(div().flex_1().child(actions))
         });

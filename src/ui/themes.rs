@@ -21,7 +21,10 @@ const THEME_FILES: &[(&str, &str)] = &[
     ("hybrid", include_str!("../../themes/hybrid.json")),
     ("jellybeans", include_str!("../../themes/jellybeans.json")),
     ("kibble", include_str!("../../themes/kibble.json")),
-    ("macos-classic", include_str!("../../themes/macos-classic.json")),
+    (
+        "macos-classic",
+        include_str!("../../themes/macos-classic.json"),
+    ),
     ("matrix", include_str!("../../themes/matrix.json")),
     ("mellifluous", include_str!("../../themes/mellifluous.json")),
     ("molokai", include_str!("../../themes/molokai.json")),
@@ -61,7 +64,6 @@ pub fn apply_theme(name: &str, cx: &mut gpui::App) {
     let registry = ThemeRegistry::global(cx);
     if let Some(config) = registry.themes().get(name).cloned() {
         let mode = config.mode;
-        drop(registry);
         let theme = gpui_component::Theme::global_mut(cx);
         if mode.is_dark() {
             theme.dark_theme = config;

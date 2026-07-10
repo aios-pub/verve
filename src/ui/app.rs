@@ -3,18 +3,15 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-/// Actions for keybindings (PRD §6).
-actions!(
-    verve,
-    [SaveWorkspace, NewRequest]
-);
-use gpui_component::select::{Select, SelectEvent, SelectState};
+// Actions for keybindings (PRD §6).
+actions!(verve, [SaveWorkspace, NewRequest]);
+use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::{
-    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
-    WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, popover::Popover, v_flex,
-    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
+    h_flex,
+    popover::Popover,
+    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
+    v_flex, ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, WindowExt as _,
 };
 
 use crate::git::GitState;
@@ -29,7 +26,6 @@ use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::ssh_panel::SshPanel;
-use crate::ui::theme;
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -232,7 +228,12 @@ impl VerveApp {
             })
             .unwrap_or_default();
         let env_select = cx.new(|cx| {
-            SelectState::new(env_names, Some(gpui_component::IndexPath::default()), window, cx)
+            SelectState::new(
+                env_names,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
         });
 
         // Project switcher: one entry per project in the workspace.
@@ -259,8 +260,8 @@ impl VerveApp {
 
         // Git version-control state. Initialised at the workspace data dir
         // (`~/.verve`); loads persisted auth/remote/auto-push config first.
-        let data_dir = crate::state::persistence::data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let data_dir =
+            crate::state::persistence::data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let git = GitState::init(data_dir.clone(), cx);
         {
             // Ensure the git repo exists (pure-local init, no remote/token
@@ -296,11 +297,10 @@ impl VerveApp {
         }
         // Reload workspace data from the now-correct branch.
         state.update(cx, |s, _cx| {
-            s.reload_from_disk(
-                crate::state::persistence::load_workspaces_index().active,
-            );
+            s.reload_from_disk(crate::state::persistence::load_workspaces_index().active);
         });
-        let project_manage = cx.new(|cx| ProjectManagePanel::new(git.clone(), state.clone(), window, cx));
+        let project_manage =
+            cx.new(|cx| ProjectManagePanel::new(git.clone(), state.clone(), window, cx));
         let share = cx.new(|cx| SharePanel::new(state.clone(), window, cx));
         let ssh = cx.new(|cx| SshPanel::new(window, cx));
 
@@ -424,22 +424,27 @@ impl VerveApp {
 
         // Env switcher: update the active environment when the user picks one.
         let env_select_handle = app.env_select.clone();
-        let sub_env = cx.subscribe(&app.env_select, move |this, _src, _ev: &SelectEvent<Vec<String>>, cx| {
-            let chosen = env_select_handle.read(cx).selected_value().cloned();
-            this.state.update(cx, |s, cx| {
-                if let Some(project) = s.active_project_mut() {
-                    // "No environment" (index 0) maps to None; otherwise match by name.
-                    let new_id = match chosen.as_deref() {
-                        Some(name) if name != "No environment" => {
-                            project.environments.iter().find(|e| e.name == name).map(|e| e.id.clone())
-                        }
-                        _ => None,
-                    };
-                    project.active_environment = new_id;
-                    cx.emit(AppEvent::EnvironmentChanged);
-                }
-            });
-        });
+        let sub_env = cx.subscribe(
+            &app.env_select,
+            move |this, _src, _ev: &SelectEvent<Vec<String>>, cx| {
+                let chosen = env_select_handle.read(cx).selected_value().cloned();
+                this.state.update(cx, |s, cx| {
+                    if let Some(project) = s.active_project_mut() {
+                        // "No environment" (index 0) maps to None; otherwise match by name.
+                        let new_id = match chosen.as_deref() {
+                            Some(name) if name != "No environment" => project
+                                .environments
+                                .iter()
+                                .find(|e| e.name == name)
+                                .map(|e| e.id.clone()),
+                            _ => None,
+                        };
+                        project.active_environment = new_id;
+                        cx.emit(AppEvent::EnvironmentChanged);
+                    }
+                });
+            },
+        );
 
         // Project switcher: change the active project when the user picks one.
         let project_select_handle = app.project_select.clone();
@@ -474,14 +479,12 @@ impl VerveApp {
         // call VerveApp's file-prompt methods directly).
         let sub_manage = cx.subscribe(
             &app.project_manage,
-            |this, _src, ev: &crate::ui::project_manage_panel::ManageEvent, cx| {
-                match ev {
-                    crate::ui::project_manage_panel::ManageEvent::Import => {
-                        this.import_collection(cx);
-                    }
-                    crate::ui::project_manage_panel::ManageEvent::Export(fmt) => {
-                        this.export_project(fmt.clone(), cx);
-                    }
+            |this, _src, ev: &crate::ui::project_manage_panel::ManageEvent, cx| match ev {
+                crate::ui::project_manage_panel::ManageEvent::Import => {
+                    this.import_collection(cx);
+                }
+                crate::ui::project_manage_panel::ManageEvent::Export(fmt) => {
+                    this.export_project(fmt.clone(), cx);
                 }
             },
         );
@@ -508,7 +511,14 @@ impl VerveApp {
             }
         });
 
-        app._subs = vec![sub_edited, sub_env, sub_project, sub_git, sub_manage, sub_share];
+        app._subs = vec![
+            sub_edited,
+            sub_env,
+            sub_project,
+            sub_git,
+            sub_manage,
+            sub_share,
+        ];
 
         // Silent startup update check: query GitHub for the latest release
         // after a short delay. On success, store the result so the title-bar
@@ -543,7 +553,7 @@ impl VerveApp {
 
     /// Manual update check (triggered by the title-bar button or settings page).
     /// Shows a notification with the result.
-    pub fn check_updates_manual(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn check_updates_manual(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.update_checking {
             return;
         }
@@ -559,10 +569,8 @@ impl VerveApp {
                 match &result {
                     crate::updater::UpdateCheckResult::UpdateAvailable(info) => {
                         this.update_info = Some(info.clone());
-                        let msg = format!(
-                            "发现新版本 v{}！点击标题栏下载按钮前往下载。",
-                            info.version
-                        );
+                        let msg =
+                            format!("发现新版本 v{}！点击标题栏下载按钮前往下载。", info.version);
                         window.push_notification(
                             gpui_component::notification::Notification::new()
                                 .title("发现新版本")
@@ -600,10 +608,7 @@ impl VerveApp {
     pub fn open_update_download(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(info) = &self.update_info {
             // Prefer the direct download URL; fall back to the release page.
-            let url = info
-                .download_url
-                .as_deref()
-                .unwrap_or(&info.release_url);
+            let url = info.download_url.as_deref().unwrap_or(&info.release_url);
             cx.open_url(url);
         }
     }
@@ -616,61 +621,60 @@ impl VerveApp {
         cx: &mut Context<Self>,
     ) {
         let title = scope.title().to_string();
-        let view = cx.new(|cx| crate::ui::kv_manager_view::KvManagerView::new(
-            self.state.clone(),
-            scope,
-            window,
-            cx,
-        ));
+        let view = cx.new(|cx| {
+            crate::ui::kv_manager_view::KvManagerView::new(self.state.clone(), scope, window, cx)
+        });
         window.open_dialog(cx, move |dialog, _, _| {
             let view = view.clone();
-            dialog.title(title.clone()).content(move |content, _, _| {
-                content.child(div().p_4().child(view.clone()))
-            })
+            dialog
+                .title(title.clone())
+                .content(move |content, _, _| content.child(div().p_4().child(view.clone())))
         });
     }
 
     /// Open a small "new project" prompt dialog.
     fn open_new_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| {
-            gpui_component::input::InputState::new(window, cx).placeholder("项目名称")
-        });
+        let input =
+            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("项目名称"));
         let state = self.state.clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             // Clone per-closure so content and footer each own a handle.
             let input_content = input.clone();
             let input_footer = input.clone();
             let state_footer = state.clone();
-            dialog.title("新建项目").content(move |content, _, _| {
-                content.child(
-                    div()
-                        .p_4()
-                        .w(px(360.))
-                        .child(gpui_component::input::Input::new(&input_content)),
-                )
-            })
-            .footer({
-                // The footer is a plain element; the confirm button reads the
-                // input value, creates the project, and closes the dialog.
-                gpui_component::button::Button::new("confirm-project")
-                    .primary()
-                    .small()
-                    .label("创建")
-                    .on_click(move |_, window, cx| {
-                        let name = input_footer.read(cx).value().to_string();
-                        if !name.trim().is_empty() {
-                            let _ = state_footer.update(cx, |s, cx| {
-                                s.data.projects
-                                    .push(crate::state::models::Project::new(name));
-                                s.active_project = s.data.projects.len() - 1;
-                                s.selected_request = None;
-                                s.selected_folder = None;
-                                s.notify_workspace(cx);
-                            });
-                        }
-                        window.close_dialog(cx);
-                    })
-            })
+            dialog
+                .title("新建项目")
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .p_4()
+                            .w(px(360.))
+                            .child(gpui_component::input::Input::new(&input_content)),
+                    )
+                })
+                .footer({
+                    // The footer is a plain element; the confirm button reads the
+                    // input value, creates the project, and closes the dialog.
+                    gpui_component::button::Button::new("confirm-project")
+                        .primary()
+                        .small()
+                        .label("创建")
+                        .on_click(move |_, window, cx| {
+                            let name = input_footer.read(cx).value().to_string();
+                            if !name.trim().is_empty() {
+                                let _ = state_footer.update(cx, |s, cx| {
+                                    s.data
+                                        .projects
+                                        .push(crate::state::models::Project::new(name));
+                                    s.active_project = s.data.projects.len() - 1;
+                                    s.selected_request = None;
+                                    s.selected_folder = None;
+                                    s.notify_workspace(cx);
+                                });
+                            }
+                            window.close_dialog(cx);
+                        })
+                })
         });
     }
 
@@ -778,8 +782,7 @@ impl VerveApp {
                     idx.active = Some(meta_clone.id.clone());
                     let _ = crate::state::persistence::save_workspaces_index(&idx);
                     this.state.update(cx, |s, cx| {
-                        let active =
-                            crate::state::persistence::load_workspaces_index().active;
+                        let active = crate::state::persistence::load_workspaces_index().active;
                         s.reload_from_disk(active);
                         cx.emit(crate::state::AppEvent::WorkspaceSwitched);
                         cx.emit(crate::state::AppEvent::WorkspaceChanged);
@@ -855,26 +858,28 @@ impl VerveApp {
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let input_content = input.clone();
             let input_footer = input.clone();
-            dialog.title("新建工作空间").content(move |content, _, _| {
-                content.child(
-                    div()
-                        .p_4()
-                        .w(px(360.))
-                        .child(gpui_component::input::Input::new(&input_content)),
-                )
-            })
-            .footer({
-                gpui_component::button::Button::new("confirm-workspace")
-                    .primary()
-                    .small()
-                    .label("创建")
-                    .on_click(move |_, window, cx| {
-                        // Signal that a workspace creation is pending; the name
-                        // is read from the stored input entity on reconciliation.
-                        let _ = input_footer.read(cx).value().to_string();
-                        window.close_dialog(cx);
-                    })
-            })
+            dialog
+                .title("新建工作空间")
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .p_4()
+                            .w(px(360.))
+                            .child(gpui_component::input::Input::new(&input_content)),
+                    )
+                })
+                .footer({
+                    gpui_component::button::Button::new("confirm-workspace")
+                        .primary()
+                        .small()
+                        .label("创建")
+                        .on_click(move |_, window, cx| {
+                            // Signal that a workspace creation is pending; the name
+                            // is read from the stored input entity on reconciliation.
+                            let _ = input_footer.read(cx).value().to_string();
+                            window.close_dialog(cx);
+                        })
+                })
         });
         // Mark pending so render() picks it up and calls create_workspace.
         self.pending_new_workspace = true;
@@ -883,53 +888,49 @@ impl VerveApp {
 
     /// Open a small "new environment" prompt dialog.
     fn open_new_env(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| {
-            gpui_component::input::InputState::new(window, cx).placeholder("环境名称")
-        });
+        let input =
+            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("环境名称"));
         let state = self.state.clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             // Clone per-closure so content and footer each own a handle.
             let input_content = input.clone();
             let input_footer = input.clone();
             let state_footer = state.clone();
-            dialog.title("新建环境").content(move |content, _, _| {
-                content.child(
-                    div()
-                        .p_4()
-                        .w(px(360.))
-                        .child(gpui_component::input::Input::new(&input_content)),
-                )
-            })
-            .footer({
-                gpui_component::button::Button::new("confirm-env")
-                    .primary()
-                    .small()
-                    .label("创建")
-                    .on_click(move |_, window, cx| {
-                        let name = input_footer.read(cx).value().to_string();
-                        if !name.trim().is_empty() {
-                            let _ = state_footer.update(cx, |s, cx| {
-                                if let Some(project) = s.active_project_mut() {
-                                    project
-                                        .environments
-                                        .push(crate::state::models::Environment::new(name));
-                                }
-                                s.notify_workspace(cx);
-                            });
-                        }
-                        window.close_dialog(cx);
-                    })
-            })
+            dialog
+                .title("新建环境")
+                .content(move |content, _, _| {
+                    content.child(
+                        div()
+                            .p_4()
+                            .w(px(360.))
+                            .child(gpui_component::input::Input::new(&input_content)),
+                    )
+                })
+                .footer({
+                    gpui_component::button::Button::new("confirm-env")
+                        .primary()
+                        .small()
+                        .label("创建")
+                        .on_click(move |_, window, cx| {
+                            let name = input_footer.read(cx).value().to_string();
+                            if !name.trim().is_empty() {
+                                let _ = state_footer.update(cx, |s, cx| {
+                                    if let Some(project) = s.active_project_mut() {
+                                        project
+                                            .environments
+                                            .push(crate::state::models::Environment::new(name));
+                                    }
+                                    s.notify_workspace(cx);
+                                });
+                            }
+                            window.close_dialog(cx);
+                        })
+                })
         });
     }
 
     /// Open a project-settings (rename) dialog for the project at `idx`.
-    fn open_project_settings(
-        &mut self,
-        idx: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_project_settings(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         let current_name = self
             .state
             .read(cx)
@@ -1061,12 +1062,7 @@ impl VerveApp {
     }
 
     /// Open a confirmation dialog to delete the project at `idx`.
-    fn confirm_delete_project(
-        &mut self,
-        idx: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn confirm_delete_project(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
         let project_name = self
             .state
             .read(cx)
@@ -1080,56 +1076,52 @@ impl VerveApp {
         let state = self.state.clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let name = project_name.clone();
-            dialog.title("确认删除").content(move |content, _, _| {
-                content.child(
-                    v_flex()
-                        .p_4()
-                        .w(px(360.))
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme_muted)
-                                .child(format!("确定要删除项目「{}」吗？所有接口与目录将被移除，且不可撤销。", name)),
-                        ),
-                )
-            })
-            .footer({
-                let state_del = state.clone();
-                gpui_component::button::Button::new("confirm-project-delete")
-                    .primary()
-                    .small()
-                    .label("删除")
-                    .on_click(move |_, window, cx| {
-                        let _ = state_del.update(cx, |s, cx| {
-                            if s.data.projects.len() > idx {
-                                s.data.projects.remove(idx);
-                                if s.active_project >= s.data.projects.len() {
-                                    s.active_project = s.data.projects.len().saturating_sub(1);
+            dialog
+                .title("确认删除")
+                .content(move |content, _, _| {
+                    content.child(v_flex().p_4().w(px(360.)).gap_2().child(
+                        div().text_sm().text_color(theme_muted).child(format!(
+                            "确定要删除项目「{}」吗？所有接口与目录将被移除，且不可撤销。",
+                            name
+                        )),
+                    ))
+                })
+                .footer({
+                    let state_del = state.clone();
+                    gpui_component::button::Button::new("confirm-project-delete")
+                        .primary()
+                        .small()
+                        .label("删除")
+                        .on_click(move |_, window, cx| {
+                            let _ = state_del.update(cx, |s, cx| {
+                                if s.data.projects.len() > idx {
+                                    s.data.projects.remove(idx);
+                                    if s.active_project >= s.data.projects.len() {
+                                        s.active_project = s.data.projects.len().saturating_sub(1);
+                                    }
+                                    s.selected_request = None;
+                                    s.selected_folder = None;
+                                    s.notify_workspace(cx);
                                 }
-                                s.selected_request = None;
-                                s.selected_folder = None;
-                                s.notify_workspace(cx);
-                            }
-                        });
-                        window.close_dialog(cx);
-                    })
-            })
+                            });
+                            window.close_dialog(cx);
+                        })
+                })
         });
     }
 
     /// Open a confirmation dialog to delete the environment `id`.
-    fn confirm_delete_env(
-        &mut self,
-        id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn confirm_delete_env(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let env_name = self
             .state
             .read(cx)
             .active_project()
-            .and_then(|p| p.environments.iter().find(|e| e.id == id).map(|e| e.name.clone()))
+            .and_then(|p| {
+                p.environments
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.name.clone())
+            })
             .unwrap_or_else(|| "该环境".to_string());
         let theme = cx.theme().clone();
         let theme_muted = theme.muted_foreground;
@@ -1137,40 +1129,38 @@ impl VerveApp {
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let name = env_name.clone();
             let id_del = id.clone();
-            dialog.title("确认删除").content(move |content, _, _| {
-                content.child(
-                    v_flex()
-                        .p_4()
-                        .w(px(360.))
-                        .gap_2()
-                        .child(
+            dialog
+                .title("确认删除")
+                .content(move |content, _, _| {
+                    content.child(
+                        v_flex().p_4().w(px(360.)).gap_2().child(
                             div()
                                 .text_sm()
                                 .text_color(theme_muted)
                                 .child(format!("确定要删除环境「{}」吗？此操作不可撤销。", name)),
                         ),
-                )
-            })
-            .footer({
-                let state_del = state.clone();
-                gpui_component::button::Button::new("confirm-env-delete")
-                    .primary()
-                    .small()
-                    .label("删除")
-                    .on_click(move |_, window, cx| {
-                        let id_del = id_del.clone();
-                        let _ = state_del.update(cx, |s, cx| {
-                            if let Some(p) = s.active_project_mut() {
-                                p.environments.retain(|e| e.id != id_del);
-                                if p.active_environment.as_deref() == Some(&id_del) {
-                                    p.active_environment = None;
+                    )
+                })
+                .footer({
+                    let state_del = state.clone();
+                    gpui_component::button::Button::new("confirm-env-delete")
+                        .primary()
+                        .small()
+                        .label("删除")
+                        .on_click(move |_, window, cx| {
+                            let id_del = id_del.clone();
+                            let _ = state_del.update(cx, |s, cx| {
+                                if let Some(p) = s.active_project_mut() {
+                                    p.environments.retain(|e| e.id != id_del);
+                                    if p.active_environment.as_deref() == Some(&id_del) {
+                                        p.active_environment = None;
+                                    }
+                                    s.notify_workspace(cx);
                                 }
-                                s.notify_workspace(cx);
-                            }
-                        });
-                        window.close_dialog(cx);
-                    })
-            })
+                            });
+                            window.close_dialog(cx);
+                        })
+                })
         });
     }
 
@@ -1296,7 +1286,7 @@ impl VerveApp {
                     let url_for_content = url_arc.clone();
                     dialog
                         .title("分享已创建")
-                        .content(move |content, _window, cx| {
+                        .content(move |content, _window, _cx| {
                             // Clone per-build since this `Fn` may run multiple times.
                             let url_content = (*url_for_content).clone();
                             let url_copy = (*url_for_content).clone();
@@ -1310,9 +1300,10 @@ impl VerveApp {
                                     .w(px(440.))
                                     .gap_3()
                                     .child(
-                                        div().text_sm().font_weight(FontWeight::SEMIBOLD).child(
-                                            format!("文档「{}」分享成功", title_text),
-                                        ),
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(format!("文档「{}」分享成功", title_text)),
                                     )
                                     .child(
                                         div()
@@ -1354,11 +1345,7 @@ impl VerveApp {
                                                 .items_center()
                                                 .justify_center()
                                                 .flex()
-                                                .child(
-                                                    img(qr_url.clone())
-                                                        .w(px(200.))
-                                                        .h(px(200.)),
-                                                ),
+                                                .child(img(qr_url.clone()).w(px(200.)).h(px(200.))),
                                         )
                                         .child(
                                             div()
@@ -1368,19 +1355,11 @@ impl VerveApp {
                                                 .child("扫描二维码访问"),
                                         )
                                     })
-                                    .child(
-                                        div()
-                                            .h(px(1.))
-                                            .w_full()
-                                            .bg(border)
-                                            .text_color(muted),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(muted).child(format!(
-                                            "有效期：{}  ·  访问限制：{}",
-                                            expire_label, access_label
-                                        )),
-                                    ),
+                                    .child(div().h(px(1.)).w_full().bg(border).text_color(muted))
+                                    .child(div().text_xs().text_color(muted).child(format!(
+                                        "有效期：{}  ·  访问限制：{}",
+                                        expire_label, access_label
+                                    ))),
                             )
                         })
                         .footer(
@@ -1488,10 +1467,7 @@ impl Render for VerveApp {
                         data.projects.iter().find(|p| p.id == project_id).cloned()
                     },
                 ));
-                log::info!(
-                    "share server started lazily on :{}",
-                    server::DEFAULT_PORT
-                );
+                log::info!("share server started lazily on :{}", server::DEFAULT_PORT);
             }
         }
         if self.pending_switcher_refresh {
@@ -1530,11 +1506,8 @@ impl Render for VerveApp {
                 PendingDialog::Environments => {
                     let state = self.state.clone();
                     cx.defer(move |cx| {
-                        let bounds = gpui::Bounds::centered(
-                            None,
-                            gpui::size(px(960.), px(620.)),
-                            cx,
-                        );
+                        let bounds =
+                            gpui::Bounds::centered(None, gpui::size(px(960.), px(620.)), cx);
                         let _ = cx.open_window(
                             gpui::WindowOptions {
                                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -1565,11 +1538,8 @@ impl Render for VerveApp {
                 PendingDialog::Settings => {
                     let state = self.state.clone();
                     cx.defer(move |cx| {
-                        let bounds = gpui::Bounds::centered(
-                            None,
-                            gpui::size(px(720.), px(560.)),
-                            cx,
-                        );
+                        let bounds =
+                            gpui::Bounds::centered(None, gpui::size(px(720.), px(560.)), cx);
                         let _ = cx.open_window(
                             gpui::WindowOptions {
                                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -1615,12 +1585,8 @@ impl Render for VerveApp {
                     _window,
                     cx,
                 ),
-                PendingDialog::ProjectSettings(idx) => {
-                    self.open_project_settings(idx, _window, cx)
-                }
-                PendingDialog::DeleteProject(idx) => {
-                    self.confirm_delete_project(idx, _window, cx)
-                }
+                PendingDialog::ProjectSettings(idx) => self.open_project_settings(idx, _window, cx),
+                PendingDialog::DeleteProject(idx) => self.confirm_delete_project(idx, _window, cx),
                 PendingDialog::DeleteEnv(id) => self.confirm_delete_env(id, _window, cx),
             }
         }
@@ -1674,9 +1640,7 @@ impl Render for VerveApp {
         // default, or the history list for the History view. ProjectManage is
         // NOT handled here — it takes over the whole body (see below).
         let side_left: gpui::AnyElement = match self.active_view {
-            SideView::Api | SideView::Environments | SideView::Mock => {
-                tree.into_any_element()
-            }
+            SideView::Api | SideView::Environments | SideView::Mock => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
             SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Ssh => {
                 tree.into_any_element() // unused (exclusive branch)
@@ -1686,11 +1650,7 @@ impl Render for VerveApp {
         // When a folder is selected, the center column is taken over by the
         // folder detail view (rendered inside RequestPanel) — no response or
         // console panes are shown, matching Apipost's exclusive folder view.
-        let folder_exclusive = self
-            .state
-            .read(cx)
-            .selected_folder
-            .is_some()
+        let folder_exclusive = self.state.read(cx).selected_folder.is_some()
             && self.state.read(cx).selected_request.is_none();
 
         // Center column: request (top) and response (bottom) in a vertical
@@ -1716,11 +1676,7 @@ impl Render for VerveApp {
                     v_resizable("verve-center")
                         .with_state(&center_state)
                         .on_resize(|state, _, cx| persist_center(state, cx))
-                        .child(
-                            resizable_panel()
-                                .child(request.clone())
-                                .overflow_hidden(),
-                        )
+                        .child(resizable_panel().child(request.clone()).overflow_hidden())
                         .child(
                             resizable_panel()
                                 .size(saved_resp)
@@ -1750,7 +1706,7 @@ impl Render for VerveApp {
         // opens an exclusive management surface, NOT a panel beside the API tree.
         // ProjectManage and Share are both full-body exclusive views: they
         // replace the entire workbench (rail + tree + request/response).
-        let exclusive_view = matches!(
+        let _exclusive_view = matches!(
             self.active_view,
             SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Ssh
         );
@@ -1808,7 +1764,15 @@ impl Render for VerveApp {
                             }
                             _ => div().into_any_element(),
                         };
-                        body.child(div().flex_1().min_w_0().h_full().min_h_0().overflow_hidden().child(panel))
+                        body.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(panel),
+                        )
                     })
                     .when(!exclusive_view, |body| {
                         body.child(
@@ -1965,7 +1929,7 @@ impl VerveApp {
                     "rail-api",
                     IconName::Network,
                     SideView::Api,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -1975,7 +1939,7 @@ impl VerveApp {
                     "rail-test",
                     IconName::Play,
                     SideView::AutoTest,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -1985,7 +1949,7 @@ impl VerveApp {
                     "rail-share",
                     IconName::BookOpen,
                     SideView::Share,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -1995,7 +1959,7 @@ impl VerveApp {
                     "rail-project",
                     IconName::LayoutDashboard,
                     SideView::ProjectManage,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -2019,7 +1983,7 @@ impl VerveApp {
                     "rail-mock",
                     IconName::Cpu,
                     SideView::Mock,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -2029,7 +1993,7 @@ impl VerveApp {
                     "rail-history",
                     IconName::Inbox,
                     SideView::History,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -2039,7 +2003,7 @@ impl VerveApp {
                     "rail-ssh",
                     IconName::SquareTerminal,
                     SideView::Ssh,
-                                        active,
+                    active,
                     &theme,
                     cx,
                 ))
@@ -2092,48 +2056,48 @@ impl VerveApp {
                         let theme_fg = cx.theme().muted_foreground;
                         let theme_accent = cx.theme().accent;
                         let cols = 3usize;
-                        let per = (names.len() + cols - 1) / cols;
+                        let per = names.len().div_ceil(cols);
                         // Build a single column of theme items.
-                        let build_items = |slice: &[String], offset: usize,
-                                           active: &str, ent: &gpui::Entity<VerveApp>| {
-                            v_flex()
-                                .w(px(140.))
-                                .gap(px(1.))
-                                .children(slice.iter().enumerate().map(move |(i, name)| {
-                                    let n = name.clone();
-                                    let is_active = n == active;
-                                    let ent = ent.clone();
-                                    div()
-                                        .id(format!("theme-opt-{}", offset + i))
-                                        .w_full()
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .rounded(px(4.))
-                                        .text_size(px(12.))
-                                        .when(is_active, |d| {
-                                            d.bg(gpui::black().opacity(0.3))
-                                                .text_color(gpui::white())
-                                        })
-                                        .when(!is_active, |d| {
-                                            d.text_color(theme_fg)
-                                        })
-                                        .hover(|d| d.bg(theme_accent.opacity(0.3)))
-                                        .child(n.clone())
-                                        .on_click(move |_, _window, cx: &mut App| {
-                                            crate::ui::themes::apply_theme(&n, cx);
-                                            let _ = ent.update(cx, |this, cx| {
-                                                this.theme_popover_open = false;
-                                                cx.notify();
-                                            });
-                                        })
-                                }))
-                        };
+                        let build_items =
+                            |slice: &[String],
+                             offset: usize,
+                             active: &str,
+                             ent: &gpui::Entity<VerveApp>| {
+                                v_flex().w(px(140.)).gap(px(1.)).children(
+                                    slice.iter().enumerate().map(move |(i, name)| {
+                                        let n = name.clone();
+                                        let is_active = n == active;
+                                        let ent = ent.clone();
+                                        div()
+                                            .id(format!("theme-opt-{}", offset + i))
+                                            .w_full()
+                                            .px(px(8.))
+                                            .py(px(4.))
+                                            .rounded(px(4.))
+                                            .text_size(px(12.))
+                                            .when(is_active, |d| {
+                                                d.bg(gpui::black().opacity(0.3))
+                                                    .text_color(gpui::white())
+                                            })
+                                            .when(!is_active, |d| d.text_color(theme_fg))
+                                            .hover(|d| d.bg(theme_accent.opacity(0.3)))
+                                            .child(n.clone())
+                                            .on_click(move |_, _window, cx: &mut App| {
+                                                crate::ui::themes::apply_theme(&n, cx);
+                                                let _ = ent.update(cx, |this, cx| {
+                                                    this.theme_popover_open = false;
+                                                    cx.notify();
+                                                });
+                                            })
+                                    }),
+                                )
+                            };
                         h_flex()
                             .gap(px(4.))
                             .max_h(px(420.))
                             .child(build_items(&names[..per], 0, &active, &entity))
-                            .child(build_items(&names[per..per*2], per, &active, &entity))
-                            .child(build_items(&names[per*2..], per*2, &active, &entity))
+                            .child(build_items(&names[per..per * 2], per, &active, &entity))
+                            .child(build_items(&names[per * 2..], per * 2, &active, &entity))
                     })
             })
     }
@@ -2924,11 +2888,14 @@ fn menu_item(
                     })
                     .hover(move |b| b.bg(theme_hover.danger.opacity(0.2)))
                     .child(IconName::Delete)
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx: &mut gpui::App| {
-                        cx.stop_propagation();
-                        let _ = window;
-                        (on_del)(cx);
-                    }),
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        move |_, window, cx: &mut gpui::App| {
+                            cx.stop_propagation();
+                            let _ = window;
+                            (on_del)(cx);
+                        },
+                    ),
             )
         })
         // The hover-revealed settings button (rightmost).
@@ -2952,11 +2919,14 @@ fn menu_item(
                     })
                     .hover(move |b| b.bg(theme_hover.border))
                     .child(IconName::Settings)
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx: &mut gpui::App| {
-                        cx.stop_propagation();
-                        let _ = window;
-                        (on_set)(cx);
-                    }),
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        move |_, window, cx: &mut gpui::App| {
+                            cx.stop_propagation();
+                            let _ = window;
+                            (on_set)(cx);
+                        },
+                    ),
             )
         })
         .on_click(move |ev, _window, cx: &mut gpui::App| {
@@ -2966,9 +2936,5 @@ fn menu_item(
 
 /// A thin separator between menu groups.
 fn menu_separator(theme: &gpui_component::Theme) -> impl IntoElement {
-    div()
-        .w_full()
-        .h(px(1.))
-        .my(px(2.))
-        .bg(theme.border)
+    div().w_full().h(px(1.)).my(px(2.)).bg(theme.border)
 }

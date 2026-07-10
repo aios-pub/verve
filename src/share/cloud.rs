@@ -31,7 +31,9 @@ pub const PROJECTS_DIR: &str = "projects";
 
 /// Resolve the cloud root: `<data_dir>/cloud/`.
 pub fn cloud_dir() -> Option<PathBuf> {
-    crate::state::persistence::data_dir().ok().map(|d| d.join(CLOUD_DIR))
+    crate::state::persistence::data_dir()
+        .ok()
+        .map(|d| d.join(CLOUD_DIR))
 }
 
 /// Resolve the projects directory: `<data_dir>/cloud/projects/`.
@@ -203,11 +205,9 @@ mod tests {
 
         let store = CloudStore::load();
         let mut project = Project::new("Cloud API");
-        project.requests.push(ApiRequest::new(
-            "Health",
-            RequestMethod::Get,
-            "/health",
-        ));
+        project
+            .requests
+            .push(ApiRequest::new("Health", RequestMethod::Get, "/health"));
         let pid = project.id.clone();
         store.upsert_project(project);
 

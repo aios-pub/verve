@@ -7,16 +7,17 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::tree::{TreeItem, TreeState, tree};
+use gpui_component::tree::{tree, TreeItem, TreeState};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _,
-    WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, list::ListItem, popover::Popover, v_flex,
+    h_flex,
+    list::ListItem,
+    popover::Popover,
+    v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
 
+use crate::state::models::{new_id, MoveTarget, Protocol, RequestMethod};
 use crate::state::{AppEvent, AppState};
-use crate::state::models::{MoveTarget, Protocol, RequestMethod, new_id};
 
 /// Tag embedded in a `TreeItem.id` so we can tell what a node refers to.
 /// Format: `folder:<id>` or `request:<id>`.
@@ -82,11 +83,7 @@ pub struct ProjectTreePanel {
 }
 
 impl ProjectTreePanel {
-    pub fn new(
-        state: Entity<AppState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree = cx.new(|cx| TreeState::new(cx));
         let rename_input = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search requests..."));
@@ -123,12 +120,7 @@ impl ProjectTreePanel {
         self.rebuild_tree(cx);
     }
 
-    fn on_state_event(
-        &mut self,
-        _src: Entity<AppState>,
-        ev: &AppEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
         match ev {
             AppEvent::WorkspaceChanged | AppEvent::SelectionChanged | AppEvent::RequestEdited => {
                 // Rebuild so renames/edits to request & folder names show up
@@ -481,7 +473,8 @@ impl Render for ProjectTreePanel {
                             };
                             let is_expanded = entry.is_expanded();
                             let view_for_add = view.clone();
-                            let badge_color = method.map(|m| crate::ui::method_colors::badge_color(m, cx));
+                            let badge_color =
+                                method.map(|m| crate::ui::method_colors::badge_color(m, cx));
                             let badge_label = method.map(|m| m.badge_label().to_string());
 
                             // Each row gets a unique group so the "..." button can
@@ -536,7 +529,7 @@ impl Render for ProjectTreePanel {
                                         .w_full()
                                         // Chevron (folders only): click toggles expand.
                                         .when(is_folder, |this| {
-                                            let tree = tree_for_chevron.clone();
+                                            let _tree = tree_for_chevron.clone();
                                             let fid = folder_node_id.clone();
                                             let view = view_for_more.clone();
                                             let chevron = if is_expanded {
@@ -562,10 +555,15 @@ impl Render for ProjectTreePanel {
                                                             let _ = view.update(cx, |this, cx| {
                                                                 // Toggle the collapsed-folders set; the tree
                                                                 // rebuild is driven by this set.
-                                                                if this.collapsed_folders.contains(&fid) {
-                                                                    this.collapsed_folders.remove(&fid);
+                                                                if this
+                                                                    .collapsed_folders
+                                                                    .contains(&fid)
+                                                                {
+                                                                    this.collapsed_folders
+                                                                        .remove(&fid);
                                                                 } else {
-                                                                    this.collapsed_folders.insert(fid.clone());
+                                                                    this.collapsed_folders
+                                                                        .insert(fid.clone());
                                                                 }
                                                                 this.rebuild_tree(cx);
                                                                 cx.notify();
@@ -575,9 +573,7 @@ impl Render for ProjectTreePanel {
                                             )
                                         })
                                         // Spacer for request rows (aligns with chevron width).
-                                        .when(!is_folder, |this| {
-                                            this.child(div().w(px(16.)))
-                                        })
+                                        .when(!is_folder, |this| this.child(div().w(px(16.))))
                                         .when_some(method, |this, _| {
                                             // Colored method badge (right-aligned, fixed width).
                                             this.child(
@@ -585,12 +581,19 @@ impl Render for ProjectTreePanel {
                                                     .w(px(34.))
                                                     .text_size(px(10.))
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(badge_color.unwrap_or(theme.muted_foreground))
+                                                    .text_color(
+                                                        badge_color
+                                                            .unwrap_or(theme.muted_foreground),
+                                                    )
                                                     .child(badge_label.unwrap_or_default()),
                                             )
                                         })
                                         .when(is_folder, |this| {
-                                            this.child(div().text_color(theme.muted_foreground).child(icon_name))
+                                            this.child(
+                                                div()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(icon_name),
+                                            )
                                         })
                                         .child(item.label.clone())
                                         .child(div().flex_1())
@@ -607,18 +610,18 @@ impl Render for ProjectTreePanel {
                                                     .opacity(0.0)
                                                     .text_color(theme.muted_foreground)
                                                     .group_hover(group.clone(), |this| {
-                                                        this.opacity(1.0).text_color(theme.foreground)
+                                                        this.opacity(1.0)
+                                                            .text_color(theme.foreground)
                                                     })
-                                                    .hover(|this| {
-                                                        this.bg(theme.border)
-                                                    })
+                                                    .hover(|this| this.bg(theme.border))
                                                     .child(IconName::Plus)
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         move |_, _window, cx: &mut App| {
                                                             cx.stop_propagation();
                                                             let _ = view.update(cx, |this, cx| {
-                                                                this.pending_folder_add = Some(fid.clone());
+                                                                this.pending_folder_add =
+                                                                    Some(fid.clone());
                                                                 this.folder_add_popover_open = true;
                                                                 cx.notify();
                                                             });
@@ -637,25 +640,27 @@ impl Render for ProjectTreePanel {
                                                 .group_hover(group.clone(), |this| {
                                                     this.opacity(1.0).text_color(theme.foreground)
                                                 })
-                                                .hover(|this| {
-                                                    this.bg(theme.border)
-                                                })
+                                                .hover(|this| this.bg(theme.border))
                                                 .child(IconName::EllipsisVertical)
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     move |_event, _window, cx: &mut App| {
                                                         cx.stop_propagation();
-                                                        let _ = view_for_more.update(cx, |this, cx| {
-                                                            if this.open_menu_node.as_deref() == Some(&node_for_more) {
-                                                                this.open_menu_node = None;
-                                                                this.menu_click_y = None;
-                                                            } else {
-                                                                this.open_menu_node = Some(node_for_more.clone());
-                                                                // Approximate Y from the window cursor.
-                                                                this.menu_click_y = None;
-                                                            }
-                                                            cx.notify();
-                                                        });
+                                                        let _ =
+                                                            view_for_more.update(cx, |this, cx| {
+                                                                if this.open_menu_node.as_deref()
+                                                                    == Some(&node_for_more)
+                                                                {
+                                                                    this.open_menu_node = None;
+                                                                    this.menu_click_y = None;
+                                                                } else {
+                                                                    this.open_menu_node =
+                                                                        Some(node_for_more.clone());
+                                                                    // Approximate Y from the window cursor.
+                                                                    this.menu_click_y = None;
+                                                                }
+                                                                cx.notify();
+                                                            });
                                                     },
                                                 ),
                                         ),
@@ -677,8 +682,7 @@ impl Render for ProjectTreePanel {
                             let drag_node = item.id.to_string();
                             let is_drop_target =
                                 self_ref_drop.as_deref() == Some(drag_node.as_str());
-                            let is_dragging =
-                                self_ref_drag.as_deref() == Some(drag_node.as_str());
+                            let is_dragging = self_ref_drag.as_deref() == Some(drag_node.as_str());
                             let view_drag = view.clone();
                             let view_hover = view.clone();
                             let view_drop = view.clone();
@@ -766,7 +770,13 @@ impl Render for ProjectTreePanel {
             )
             // Floating "..." action menu overlay (shown when a row's menu is open).
             .when_some(self.open_menu_node.clone(), |this, node| {
-                this.child(render_action_menu(node, self.menu_click_y, cx.entity(), _window, cx))
+                this.child(render_action_menu(
+                    node,
+                    self.menu_click_y,
+                    cx.entity(),
+                    _window,
+                    cx,
+                ))
             })
             // Folder "+" add overlay (centered picker, shown when folder_add_popover_open).
             .when(self.folder_add_popover_open, |this| {
@@ -947,24 +957,92 @@ fn action_menu_items(
 ) -> Vec<gpui::AnyElement> {
     let mut items: Vec<gpui::AnyElement> = Vec::new();
     if is_request {
-        items.push(menu_item("分享", IconName::ExternalLink, TreeAction::Share(node.into()), node.into(), view.clone(), theme));
-        items.push(menu_item("复制为 cURL", IconName::Copy, TreeAction::CopyAsCurl(node.into()), node.into(), view.clone(), theme));
-        items.push(menu_item("复制到其它分支", IconName::Copy, TreeAction::CopyToBranch(node.into()), node.into(), view.clone(), theme));
-        items.push(menu_item("移动至", IconName::ArrowRight, TreeAction::MoveTo(node.into()), node.into(), view.clone(), theme));
+        items.push(menu_item(
+            "分享",
+            IconName::ExternalLink,
+            TreeAction::Share(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
+        items.push(menu_item(
+            "复制为 cURL",
+            IconName::Copy,
+            TreeAction::CopyAsCurl(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
+        items.push(menu_item(
+            "复制到其它分支",
+            IconName::Copy,
+            TreeAction::CopyToBranch(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
+        items.push(menu_item(
+            "移动至",
+            IconName::ArrowRight,
+            TreeAction::MoveTo(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
         items.push(separator(theme));
-        items.push(menu_item("复制", IconName::Copy, TreeAction::Copy(node.into()), node.into(), view.clone(), theme));
-        items.push(menu_item("克隆", IconName::Redo, TreeAction::Clone(node.into()), node.into(), view.clone(), theme));
+        items.push(menu_item(
+            "复制",
+            IconName::Copy,
+            TreeAction::Copy(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
+        items.push(menu_item(
+            "克隆",
+            IconName::Redo,
+            TreeAction::Clone(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
         items.push(separator(theme));
-        items.push(menu_item("删除", IconName::Delete, TreeAction::Delete(node.into()), node.into(), view, theme));
+        items.push(menu_item(
+            "删除",
+            IconName::Delete,
+            TreeAction::Delete(node.into()),
+            node.into(),
+            view,
+            theme,
+        ));
     } else {
-        items.push(menu_item("重命名", IconName::File, TreeAction::Rename(node.into()), node.into(), view.clone(), theme));
-        items.push(menu_item("删除", IconName::Delete, TreeAction::Delete(node.into()), node.into(), view, theme));
+        items.push(menu_item(
+            "重命名",
+            IconName::File,
+            TreeAction::Rename(node.into()),
+            node.into(),
+            view.clone(),
+            theme,
+        ));
+        items.push(menu_item(
+            "删除",
+            IconName::Delete,
+            TreeAction::Delete(node.into()),
+            node.into(),
+            view,
+            theme,
+        ));
     }
     items
 }
 
 fn separator(theme: &gpui_component::Theme) -> gpui::AnyElement {
-    div().h(px(1.)).my(px(2.)).mx_2().bg(theme.border).into_any_element()
+    div()
+        .h(px(1.))
+        .my(px(2.))
+        .mx_2()
+        .bg(theme.border)
+        .into_any_element()
 }
 
 /// A colored icon tile for a new-request card.
@@ -1011,7 +1089,7 @@ fn picker_card(
         _ => Protocol::Http,
     };
     div()
-        .id(("picker-card-".to_string() + id))
+        .id("picker-card-".to_string() + id)
         .when(full_width, |this| this.w_full())
         .flex_1()
         .min_w_0()
@@ -1067,11 +1145,8 @@ fn picker_card(
                     s.notify_workspace(cx);
                 });
             } else {
-                let mut req = crate::state::models::ApiRequest::new(
-                    name,
-                    RequestMethod::Get,
-                    "{{baseUrl}}",
-                );
+                let mut req =
+                    crate::state::models::ApiRequest::new(name, RequestMethod::Get, "{{baseUrl}}");
                 req.protocol = proto;
                 let req_id = req.id.clone();
                 let fid = folder_id.clone();
@@ -1109,7 +1184,7 @@ fn import_card(
     full_width: bool,
 ) -> impl IntoElement {
     div()
-        .id(("import-card-".to_string() + id))
+        .id("import-card-".to_string() + id)
         .when(full_width, |this| this.w_full())
         .flex_1()
         .min_w_0()
@@ -1353,44 +1428,43 @@ pub enum TreeAction {
 impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
-    pub fn start_rename(
-        &mut self,
-        node: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
         // Look up the current name.
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         let rename_input = self.rename_input.clone();
         rename_input.update(cx, |s, cx| s.set_value(current, window, cx));
         let project = self.state.clone();
-        window.open_dialog(cx, move |dialog, window, _cx| {
+        window.open_dialog(cx, move |dialog, _window, _cx| {
             let node = node.clone();
             let project = project.clone();
             let rename_for_content = rename_input.clone();
             let rename_for_ok = rename_input.clone();
-            dialog.title("Rename").w(px(420.)).content(move |content, _, _| {
-                let rename_input = rename_for_content.clone();
-                content.child(
-                    v_flex()
-                        .p_4()
-                        .gap_2()
-                        .child("Enter a new name:")
-                        .child(Input::new(&rename_input)),
-                )
-            }).on_ok(move |_, window, cx| {
-                let new_name = rename_for_ok.read(cx).value().to_string();
-                if !new_name.trim().is_empty() {
-                    let _ = project.update(cx, |s, cx| {
-                        if let Some(project) = s.active_project_mut() {
-                            apply_rename(project, &node, &new_name);
-                            s.notify_workspace(cx);
-                        }
-                    });
-                }
-                let _ = window;
-                true
-            })
+            dialog
+                .title("Rename")
+                .w(px(420.))
+                .content(move |content, _, _| {
+                    let rename_input = rename_for_content.clone();
+                    content.child(
+                        v_flex()
+                            .p_4()
+                            .gap_2()
+                            .child("Enter a new name:")
+                            .child(Input::new(&rename_input)),
+                    )
+                })
+                .on_ok(move |_, window, cx| {
+                    let new_name = rename_for_ok.read(cx).value().to_string();
+                    if !new_name.trim().is_empty() {
+                        let _ = project.update(cx, |s, cx| {
+                            if let Some(project) = s.active_project_mut() {
+                                apply_rename(project, &node, &new_name);
+                                s.notify_workspace(cx);
+                            }
+                        });
+                    }
+                    let _ = window;
+                    true
+                })
         });
     }
 
@@ -1430,11 +1504,8 @@ impl ProjectTreePanel {
             Protocol::Markdown => "New Markdown",
             Protocol::Directory => "New Folder",
         };
-        let mut req = crate::state::models::ApiRequest::new(
-            name,
-            RequestMethod::Get,
-            "{{baseUrl}}",
-        );
+        let mut req =
+            crate::state::models::ApiRequest::new(name, RequestMethod::Get, "{{baseUrl}}");
         req.protocol = protocol;
         let req_id = req.id.clone();
         self.state.update(cx, |s, cx| {
@@ -1554,14 +1625,12 @@ impl ProjectTreePanel {
     ) {
         // Resolve request id + model snapshot for the actions that need it.
         let req_id = parse_request_id(node).map(|s| s.to_string());
-        let req_snapshot = req_id
-            .as_deref()
-            .and_then(|id| {
-                self.state
-                    .read(cx)
-                    .active_project()
-                    .and_then(|p| p.find_request(id).map(|(_, r)| r.clone()))
-            });
+        let req_snapshot = req_id.as_deref().and_then(|id| {
+            self.state
+                .read(cx)
+                .active_project()
+                .and_then(|p| p.find_request(id).map(|(_, r)| r.clone()))
+        });
 
         match action {
             TreeAction::Share(_) => {
@@ -1608,8 +1677,8 @@ impl ProjectTreePanel {
         let selected = self.state.read(cx).selected_request.clone();
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
-                let cloned =
-                    find_request_owned(&mut project.folders, &mut project.requests, &id).map(|r| {
+                let cloned = find_request_owned(&mut project.folders, &mut project.requests, &id)
+                    .map(|r| {
                         let mut dup = r.clone();
                         dup.id = new_id();
                         dup.name = format!("{} copy", r.name);

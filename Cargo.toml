@@ -66,8 +66,15 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee3
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = {version = "0.5.1"}
-gpui-component-assets = {version = "0.5.1"}
+# gpui-component is pulled from our fork (lijingrs/gpui-component) at the
+# `verve-fork` branch. This fork locks gpui to the same rev as the direct
+# dependency above (1d217ee) and adds two patches not yet in upstream:
+#   - ListItem::on_drag/on_drop/on_drag_hover (drag-and-drop for list/tree rows)
+#   - TreeState::ensure_visible/index_of (scroll-to-node)
+# Upstream PRs: https://github.com/longbridge/gpui-component/pull/2553 (#2554)
+# When those merge, switch back to the upstream repo.
+gpui-component = { git = "https://github.com/lijingrs/gpui-component", rev = "7268e295" }
+gpui-component-assets = { git = "https://github.com/lijingrs/gpui-component", rev = "7268e295" }
 reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 futures = "0.3"

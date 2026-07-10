@@ -43,7 +43,7 @@ build_macos() {
     build_release ""
 
     echo "📦 Creating .app bundle with cargo-bundle..."
-    cargo bundle --release --format app
+    cargo bundle --release --format osx
 
     APP_DIR="target/release/bundle/osx/Verve.app"
 

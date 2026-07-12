@@ -78,6 +78,9 @@ pub struct ProjectTreePanel {
     /// The tree node id the cursor is hovering over while dragging (drop
     /// target highlight). Cleared on drop.
     pub drop_target: Option<String>,
+    /// The tree node id currently being inline-renamed (Some when the rename
+    /// Input is shown in-place of the label). Set by start_rename / context menu.
+    pub renaming_node: Option<String>,
     _subs: Vec<gpui::Subscription>,
     focus_handle: FocusHandle,
 }
@@ -101,13 +104,15 @@ impl ProjectTreePanel {
             collapsed_folders: std::collections::HashSet::new(),
             dragging_node: None,
             drop_target: None,
+            renaming_node: None,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
         panel.rebuild_tree(cx);
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
-        panel._subs = vec![sub_search, sub_state];
+        let sub_rename = cx.subscribe(&panel.rename_input, Self::on_rename_input_event);
+        panel._subs = vec![sub_search, sub_state, sub_rename];
         panel
     }
 
@@ -118,6 +123,28 @@ impl ProjectTreePanel {
         cx: &mut Context<Self>,
     ) {
         self.rebuild_tree(cx);
+    }
+
+    /// Handle Enter (commit) and Blur (commit) on the inline rename Input.
+    fn on_rename_input_event(
+        &mut self,
+        _src: Entity<InputState>,
+        ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match ev {
+            InputEvent::PressEnter { .. } => {
+                self.commit_rename(cx);
+            }
+            InputEvent::Blur => {
+                // Only commit on blur if we're actually in rename mode (the
+                // Input might blur for other reasons).
+                if self.renaming_node.is_some() {
+                    self.commit_rename(cx);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
@@ -316,9 +343,9 @@ impl Render for ProjectTreePanel {
                 this.open_menu_node = None;
                 match action.clone() {
                     TreeAction::AddRequest(folder_id) => {
-                        this.add_request(folder_id, Protocol::Http, cx)
+                        this.add_request(folder_id, Protocol::Http, window, cx)
                     }
-                    TreeAction::AddFolder(folder_id) => this.add_folder(folder_id, cx),
+                    TreeAction::AddFolder(folder_id) => this.add_folder(folder_id, window, cx),
                     TreeAction::DuplicateRequest(id) => this.duplicate_request(id, cx),
                     // The "..." menu items + Delete/Rename all go through here.
                     other => {
@@ -401,11 +428,23 @@ impl Render for ProjectTreePanel {
                     .child(
                         tree(&self.tree, move |ix, entry, _selected, _window, cx| {
                             let item = entry.item();
-                            // Snapshot drag/drop state + theme for this row.
-                            let (self_ref_drag, self_ref_drop, theme) = {
+                            // Snapshot drag/drop + rename state + theme for this row.
+                            let (
+                                self_ref_drag,
+                                self_ref_drop,
+                                self_ref_renaming,
+                                theme,
+                                rename_ent,
+                            ) = {
                                 let p = view.read(cx);
                                 let theme = cx.theme().clone();
-                                (p.dragging_node.clone(), p.drop_target.clone(), theme)
+                                (
+                                    p.dragging_node.clone(),
+                                    p.drop_target.clone(),
+                                    p.renaming_node.clone(),
+                                    theme,
+                                    p.rename_input.clone(),
+                                )
                             };
                             let request_id = parse_request_id(&item.id).map(|s| s.to_string());
                             let is_folder = entry.is_folder();
@@ -595,7 +634,21 @@ impl Render for ProjectTreePanel {
                                                     .child(icon_name),
                                             )
                                         })
-                                        .child(item.label.clone())
+                                        // Inline rename Input replaces the label
+                                        // when this node is being renamed.
+                                        .child({
+                                            let is_renaming = self_ref_renaming.as_deref()
+                                                == Some(item.id.as_str());
+                                            if is_renaming {
+                                                Input::new(&rename_ent)
+                                                    .small()
+                                                    .appearance(false)
+                                                    .w(px(160.))
+                                                    .into_any_element()
+                                            } else {
+                                                div().child(item.label.clone()).into_any_element()
+                                            }
+                                        })
                                         .child(div().flex_1())
                                         // "+" add button (folders only): opens the protocol
                                         // picker popover; the chosen protocol creates a request
@@ -1129,20 +1182,10 @@ fn picker_card(
                 Protocol::Directory => "New Folder",
             };
             if matches!(proto, Protocol::Directory) {
-                let folder = crate::state::models::Folder::new(name);
-                let fid = folder_id.clone();
-                let _ = state_for_click.update(cx, |s, cx| {
-                    if let Some(project) = s.active_project_mut() {
-                        match &fid {
-                            Some(fid) => {
-                                if let Some(f) = find_folder_mut(&mut project.folders, fid) {
-                                    f.folders.push(folder);
-                                }
-                            }
-                            None => project.folders.push(folder),
-                        }
-                    }
-                    s.notify_workspace(cx);
+                // Open a name-input dialog instead of hardcoding "New Folder".
+                let _ = panel_for_close.update(cx, |this, cx| {
+                    this.add_folder(folder_id.clone(), _window, cx);
+                    cx.notify();
                 });
             } else {
                 let mut req =
@@ -1429,43 +1472,35 @@ impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
     pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
-        // Look up the current name.
+        // Look up the current name and pre-fill the inline rename Input.
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
-        let rename_input = self.rename_input.clone();
-        rename_input.update(cx, |s, cx| s.set_value(current, window, cx));
-        let project = self.state.clone();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let node = node.clone();
-            let project = project.clone();
-            let rename_for_content = rename_input.clone();
-            let rename_for_ok = rename_input.clone();
-            dialog
-                .title("Rename")
-                .w(px(420.))
-                .content(move |content, _, _| {
-                    let rename_input = rename_for_content.clone();
-                    content.child(
-                        v_flex()
-                            .p_4()
-                            .gap_2()
-                            .child("Enter a new name:")
-                            .child(Input::new(&rename_input)),
-                    )
-                })
-                .on_ok(move |_, window, cx| {
-                    let new_name = rename_for_ok.read(cx).value().to_string();
-                    if !new_name.trim().is_empty() {
-                        let _ = project.update(cx, |s, cx| {
-                            if let Some(project) = s.active_project_mut() {
-                                apply_rename(project, &node, &new_name);
-                                s.notify_workspace(cx);
-                            }
-                        });
+        self.rename_input
+            .update(cx, |s, cx| s.set_value(current, window, cx));
+        self.renaming_node = Some(node);
+        cx.notify();
+    }
+
+    /// Commit the inline rename: apply the new name to the model and exit
+    /// rename mode. Called on Enter or blur.
+    fn commit_rename(&mut self, cx: &mut Context<Self>) {
+        if let Some(node) = self.renaming_node.take() {
+            let new_name = self.rename_input.read(cx).value().to_string();
+            if !new_name.trim().is_empty() {
+                self.state.update(cx, |s, cx| {
+                    if let Some(project) = s.active_project_mut() {
+                        apply_rename(project, &node, &new_name);
+                        s.notify_workspace(cx);
                     }
-                    let _ = window;
-                    true
-                })
-        });
+                });
+            }
+            cx.notify();
+        }
+    }
+
+    /// Cancel the inline rename (Esc key).
+    fn cancel_rename(&mut self, cx: &mut Context<Self>) {
+        self.renaming_node = None;
+        cx.notify();
     }
 
     /// Resolve the current display name for a tree node id.
@@ -1486,11 +1521,12 @@ impl ProjectTreePanel {
         &mut self,
         folder_id: Option<String>,
         protocol: Protocol,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // 「目录」 creates a folder, not a request.
         if matches!(protocol, Protocol::Directory) {
-            self.add_folder(folder_id, cx);
+            self.add_folder(folder_id, window, cx);
             return;
         }
         let name = match protocol {
@@ -1560,20 +1596,56 @@ impl ProjectTreePanel {
         cx.notify();
     }
 
-    pub fn add_folder(&mut self, folder_id: Option<String>, cx: &mut Context<Self>) {
-        let folder = crate::state::models::Folder::new("New Folder");
-        self.state.update(cx, |s, cx| {
-            if let Some(project) = s.active_project_mut() {
-                match &folder_id {
-                    Some(fid) => {
-                        if let Some(f) = find_folder_mut(&mut project.folders, fid) {
-                            f.folders.push(folder);
+    pub fn add_folder(
+        &mut self,
+        folder_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name_input = self.rename_input.clone();
+        name_input.update(cx, |s, cx| s.set_value("New Folder", window, cx));
+        let project = self.state.clone();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let folder_id = folder_id.clone();
+            let project = project.clone();
+            let name_for_content = name_input.clone();
+            let name_for_ok = name_input.clone();
+            dialog
+                .title("新建目录")
+                .w(px(420.))
+                .content(move |content, _, _| {
+                    let name_input = name_for_content.clone();
+                    content.child(
+                        v_flex()
+                            .p_4()
+                            .gap_2()
+                            .child("请输入目录名称：")
+                            .child(Input::new(&name_input)),
+                    )
+                })
+                .on_ok(move |_, _window, cx| {
+                    let name = name_for_ok.read(cx).value().to_string();
+                    let name = if name.trim().is_empty() {
+                        "New Folder".to_string()
+                    } else {
+                        name.trim().to_string()
+                    };
+                    let folder = crate::state::models::Folder::new(&name);
+                    let _ = project.update(cx, |s, cx| {
+                        if let Some(project) = s.active_project_mut() {
+                            match &folder_id {
+                                Some(fid) => {
+                                    if let Some(f) = find_folder_mut(&mut project.folders, fid) {
+                                        f.folders.push(folder);
+                                    }
+                                }
+                                None => project.folders.push(folder),
+                            }
                         }
-                    }
-                    None => project.folders.push(folder),
-                }
-            }
-            s.notify_workspace(cx);
+                        s.notify_workspace(cx);
+                    });
+                    true
+                })
         });
     }
 

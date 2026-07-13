@@ -81,9 +81,11 @@ pub struct ProjectTreePanel {
     /// The tree node id currently being inline-renamed (Some when the rename
     /// Input is shown in-place of the label). Set by start_rename / context menu.
     pub renaming_node: Option<String>,
-    /// Guard flag: the rename Input was just focused — ignore the next Blur
-    /// event to prevent the re-render cycle from immediately committing.
-    pub rename_just_started: bool,
+    /// Guard: how many Blur events to ignore after starting a rename. The
+    /// re-render cycle (set_selected_item → notify, cx.notify) can fire
+    /// multiple Blur events on the Input. Set to a few in start_rename,
+    /// decremented on each Blur.
+    pub rename_blur_skips: u32,
     /// Re-entrancy guard: on_select_folder/on_select_request is currently
     /// running (emitting SelectionChanged). Prevents the tree observer from
     /// re-processing the same selection.
@@ -112,7 +114,7 @@ impl ProjectTreePanel {
             dragging_node: None,
             drop_target: None,
             renaming_node: None,
-            rename_just_started: false,
+            rename_blur_skips: 0,
             selecting: false,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
@@ -179,14 +181,14 @@ impl ProjectTreePanel {
     ) {
         match ev {
             InputEvent::PressEnter { .. } => {
-                self.rename_just_started = false;
+                self.rename_blur_skips = 0;
                 self.commit_rename(cx);
             }
             InputEvent::Blur => {
-                // Ignore the Blur that fires immediately after focus due to
-                // re-render — only commit on a genuine user-initiated blur.
-                if self.rename_just_started {
-                    self.rename_just_started = false;
+                // Ignore Blur events that fire during the re-render cycle
+                // right after start_rename focuses the Input.
+                if self.rename_blur_skips > 0 {
+                    self.rename_blur_skips -= 1;
                     return;
                 }
                 if self.renaming_node.is_some() {
@@ -1566,10 +1568,10 @@ impl ProjectTreePanel {
         self.tree.update(cx, |t, cx| {
             t.set_selected_item(Some(&item), cx);
         });
-        // Focus the Input so the user can immediately type. Set the guard flag
-        // so the next Blur (fired by the re-render cycle) doesn't immediately
-        // commit the rename.
-        self.rename_just_started = true;
+        // Focus the Input so the user can immediately type. Set the blur-skip
+        // counter to a few so the re-render cycle (set_selected_item → notify,
+        // cx.notify) doesn't immediately commit via Blur events.
+        self.rename_blur_skips = 5;
         self.rename_input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
@@ -1577,7 +1579,7 @@ impl ProjectTreePanel {
     /// Commit the inline rename: apply the new name to the model and exit
     /// rename mode. Called on Enter or blur.
     fn commit_rename(&mut self, cx: &mut Context<Self>) {
-        self.rename_just_started = false;
+        self.rename_blur_skips = 0;
         if let Some(node) = self.renaming_node.take() {
             let new_name = self.rename_input.read(cx).value().to_string();
             if !new_name.trim().is_empty() {
@@ -1594,7 +1596,7 @@ impl ProjectTreePanel {
 
     /// Cancel the inline rename (Esc key).
     fn cancel_rename(&mut self, cx: &mut Context<Self>) {
-        self.rename_just_started = false;
+        self.rename_blur_skips = 0;
         self.renaming_node = None;
         cx.notify();
     }

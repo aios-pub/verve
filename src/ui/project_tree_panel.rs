@@ -184,8 +184,12 @@ impl ProjectTreePanel {
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
         match ev {
             AppEvent::WorkspaceChanged | AppEvent::SelectionChanged | AppEvent::RequestEdited => {
-                // Rebuild so renames/edits to request & folder names show up
-                // live in the tree.
+                // Don't rebuild while inline-renaming — rebuild_tree resets the
+                // framework's selected_ix and can shift indices, causing the
+                // rename Input to disappear or move to the wrong row.
+                if self.renaming_node.is_some() {
+                    return;
+                }
                 self.rebuild_tree(cx);
             }
             AppEvent::LocateActive => {
@@ -1509,7 +1513,19 @@ impl ProjectTreePanel {
         // Look up the current name and pre-fill the inline rename Input.
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
-            .update(cx, |s, cx| s.set_value(current, window, cx));
+            .update(cx, |s, cx| s.set_value(current.clone(), window, cx));
+        // Set the AppState selection to this node so the correct panel shows
+        // and rebuild_tree won't shift the tree indices.
+        if let Some(fid) = parse_folder_id(&node) {
+            self.on_select_folder(fid.to_string(), cx);
+        } else if let Some(rid) = parse_request_id(&node) {
+            self.on_select_request(rid.to_string(), cx);
+        }
+        // Set the tree framework's selection to this node so the row highlights.
+        let item = TreeItem::new(node.clone(), current);
+        self.tree.update(cx, |t, cx| {
+            t.set_selected_item(Some(&item), cx);
+        });
         self.renaming_node = Some(node);
         // Focus the Input so the user can immediately type.
         self.rename_input.update(cx, |s, cx| s.focus(window, cx));

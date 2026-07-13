@@ -84,6 +84,10 @@ pub struct ProjectTreePanel {
     /// Guard flag: the rename Input was just focused — ignore the next Blur
     /// event to prevent the re-render cycle from immediately committing.
     pub rename_just_started: bool,
+    /// Re-entrancy guard: on_select_folder/on_select_request is currently
+    /// running (emitting SelectionChanged). Prevents the tree observer from
+    /// re-processing the same selection.
+    pub selecting: bool,
     _subs: Vec<gpui::Subscription>,
     focus_handle: FocusHandle,
 }
@@ -109,6 +113,7 @@ impl ProjectTreePanel {
             drop_target: None,
             renaming_node: None,
             rename_just_started: false,
+            selecting: false,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -139,8 +144,10 @@ impl ProjectTreePanel {
     /// (including empty folders) since it fires on any click the framework
     /// processes, regardless of ListItem::on_click propagation quirks.
     fn on_tree_selection_changed(&mut self, _tree: Entity<TreeState>, cx: &mut Context<Self>) {
-        // Don't interfere while the user is inline-renaming.
-        if self.renaming_node.is_some() {
+        // Don't interfere while inline-renaming or while a selection is being
+        // propagated (on_select_folder/request sets this guard to prevent
+        // re-entrant observer calls).
+        if self.renaming_node.is_some() || self.selecting {
             return;
         }
         // Resolve the entry's node id from the tree state via public API.
@@ -267,21 +274,25 @@ impl ProjectTreePanel {
     }
 
     fn on_select_request(&mut self, request_id: String, cx: &mut Context<Self>) {
+        self.selecting = true;
         self.state.update(cx, |s, cx| {
             s.selected_request = Some(request_id);
             s.selected_folder = None;
             cx.emit(AppEvent::SelectionChanged);
         });
+        self.selecting = false;
     }
 
     /// Select a folder node: clears the request selection and emits
     /// SelectionChanged so the center panel swaps to the folder detail view.
     fn on_select_folder(&mut self, folder_id: String, cx: &mut Context<Self>) {
+        self.selecting = true;
         self.state.update(cx, |s, cx| {
             s.selected_folder = Some(folder_id);
             s.selected_request = None;
             cx.emit(AppEvent::SelectionChanged);
         });
+        self.selecting = false;
     }
 
     /// Apply a drag-and-drop: move the dragged node (`source`) relative to the

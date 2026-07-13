@@ -78,14 +78,6 @@ pub struct ProjectTreePanel {
     /// The tree node id the cursor is hovering over while dragging (drop
     /// target highlight). Cleared on drop.
     pub drop_target: Option<String>,
-    /// The tree node id currently being inline-renamed (Some when the rename
-    /// Input is shown in-place of the label). Set by start_rename / context menu.
-    pub renaming_node: Option<String>,
-    /// Guard: how many Blur events to ignore after starting a rename. The
-    /// re-render cycle (set_selected_item → notify, cx.notify) can fire
-    /// multiple Blur events on the Input. Set to a few in start_rename,
-    /// decremented on each Blur.
-    pub rename_blur_skips: u32,
     _subs: Vec<gpui::Subscription>,
     focus_handle: FocusHandle,
 }
@@ -109,16 +101,13 @@ impl ProjectTreePanel {
             collapsed_folders: std::collections::HashSet::new(),
             dragging_node: None,
             drop_target: None,
-            renaming_node: None,
-            rename_blur_skips: 0,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
         panel.rebuild_tree(cx);
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
-        let sub_rename = cx.subscribe(&panel.rename_input, Self::on_rename_input_event);
-        panel._subs = vec![sub_search, sub_state, sub_rename];
+        panel._subs = vec![sub_search, sub_state];
         panel
     }
 
@@ -131,46 +120,14 @@ impl ProjectTreePanel {
         self.rebuild_tree(cx);
     }
 
-    /// Handle Enter (commit) and Blur (commit) on the inline rename Input.
-    fn on_rename_input_event(
-        &mut self,
-        _src: Entity<InputState>,
-        ev: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
-        match ev {
-            InputEvent::PressEnter { .. } => {
-                self.rename_blur_skips = 0;
-                self.commit_rename(cx);
-            }
-            InputEvent::Blur => {
-                // Ignore Blur events that fire during the re-render cycle
-                // right after start_rename focuses the Input.
-                if self.rename_blur_skips > 0 {
-                    self.rename_blur_skips -= 1;
-                    return;
-                }
-                if self.renaming_node.is_some() {
-                    self.commit_rename(cx);
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
         match ev {
             AppEvent::WorkspaceChanged | AppEvent::RequestEdited => {
                 // Structural change or content edit — rebuild the tree.
-                if self.renaming_node.is_some() {
-                    return;
-                }
                 self.rebuild_tree(cx);
             }
             AppEvent::SelectionChanged => {
                 // Selection changed — just re-render so the highlight updates.
-                // Do NOT rebuild or sync_tree_selection (those call set_items/
-                // set_selected_item which trigger notify loops).
                 cx.notify();
             }
             AppEvent::LocateActive => {
@@ -447,23 +404,11 @@ impl Render for ProjectTreePanel {
                     .child(
                         tree(&self.tree, move |ix, entry, _selected, _window, cx| {
                             let item = entry.item();
-                            // Snapshot drag/drop + rename state + theme for this row.
-                            let (
-                                self_ref_drag,
-                                self_ref_drop,
-                                self_ref_renaming,
-                                theme,
-                                rename_ent,
-                            ) = {
+                            // Snapshot drag/drop state + theme for this row.
+                            let (self_ref_drag, self_ref_drop, theme) = {
                                 let p = view.read(cx);
                                 let theme = cx.theme().clone();
-                                (
-                                    p.dragging_node.clone(),
-                                    p.drop_target.clone(),
-                                    p.renaming_node.clone(),
-                                    theme,
-                                    p.rename_input.clone(),
-                                )
+                                (p.dragging_node.clone(), p.drop_target.clone(), theme)
                             };
                             let request_id = parse_request_id(&item.id).map(|s| s.to_string());
                             let is_folder = entry.is_folder();
@@ -652,21 +597,7 @@ impl Render for ProjectTreePanel {
                                                     .child(icon_name),
                                             )
                                         })
-                                        // Inline rename Input replaces the label
-                                        // when this node is being renamed.
-                                        .child({
-                                            let is_renaming = self_ref_renaming.as_deref()
-                                                == Some(item.id.as_str());
-                                            if is_renaming {
-                                                Input::new(&rename_ent)
-                                                    .small()
-                                                    .appearance(false)
-                                                    .w(px(160.))
-                                                    .into_any_element()
-                                            } else {
-                                                div().child(item.label.clone()).into_any_element()
-                                            }
-                                        })
+                                        .child(item.label.clone())
                                         .child(div().flex_1())
                                         // "+" add button (folders only): opens the protocol
                                         // picker popover; the chosen protocol creates a request
@@ -1490,42 +1421,43 @@ impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
     pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
-        // Look up the current name and pre-fill the inline rename Input.
+        // Look up the current name and pre-fill the rename Input.
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
             .update(cx, |s, cx| s.set_value(current, window, cx));
-        // Set renaming_node — the render closure checks this to show the Input.
-        self.renaming_node = Some(node);
-        // Focus the Input so the user can immediately type. Set the blur-skip
-        // counter so the re-render cycle doesn't immediately commit.
-        self.rename_blur_skips = 3;
-        self.rename_input.update(cx, |s, cx| s.focus(window, cx));
-        cx.notify();
-    }
-
-    /// Commit the inline rename: apply the new name to the model and exit
-    /// rename mode. Called on Enter or blur.
-    fn commit_rename(&mut self, cx: &mut Context<Self>) {
-        self.rename_blur_skips = 0;
-        if let Some(node) = self.renaming_node.take() {
-            let new_name = self.rename_input.read(cx).value().to_string();
-            if !new_name.trim().is_empty() {
-                self.state.update(cx, |s, cx| {
-                    if let Some(project) = s.active_project_mut() {
-                        apply_rename(project, &node, &new_name);
-                        s.notify_workspace(cx);
+        let project = self.state.clone();
+        let rename_input = self.rename_input.clone();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let node = node.clone();
+            let project = project.clone();
+            let input_for_content = rename_input.clone();
+            let input_for_ok = rename_input.clone();
+            dialog
+                .title("重命名")
+                .w(px(420.))
+                .content(move |content, _, _| {
+                    let input = input_for_content.clone();
+                    content.child(
+                        v_flex()
+                            .p_4()
+                            .gap_2()
+                            .child("请输入新名称：")
+                            .child(Input::new(&input)),
+                    )
+                })
+                .on_ok(move |_, _window, cx| {
+                    let new_name = input_for_ok.read(cx).value().to_string();
+                    if !new_name.trim().is_empty() {
+                        let _ = project.update(cx, |s, cx| {
+                            if let Some(project) = s.active_project_mut() {
+                                apply_rename(project, &node, &new_name);
+                                s.notify_workspace(cx);
+                            }
+                        });
                     }
-                });
-            }
-            cx.notify();
-        }
-    }
-
-    /// Cancel the inline rename (Esc key).
-    fn cancel_rename(&mut self, cx: &mut Context<Self>) {
-        self.rename_blur_skips = 0;
-        self.renaming_node = None;
-        cx.notify();
+                    true
+                })
+        });
     }
 
     /// Resolve the current display name for a tree node id.

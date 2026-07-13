@@ -1433,19 +1433,8 @@ impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
     pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
-        // Select the node so the highlight matches.
-        if let Some(fid) = parse_folder_id(&node) {
-            self.on_select_folder(fid.to_string(), cx);
-        } else if let Some(rid) = parse_request_id(&node) {
-            self.on_select_request(rid.to_string(), cx);
-        }
-        // Also set the framework's selected_ix to this node.
-        let current_name = self.current_name_for_node(&node, cx).unwrap_or_default();
-        let tree_item = TreeItem::new(node.clone(), current_name.clone());
-        self.tree.update(cx, |t, cx| {
-            t.set_selected_item(Some(&tree_item), cx);
-        });
         // Look up the current name and pre-fill the rename Input.
+        let current_name = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
             .update(cx, |s, cx| s.set_value(current_name, window, cx));
         let project = self.state.clone();

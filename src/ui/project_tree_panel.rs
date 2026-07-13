@@ -227,7 +227,21 @@ impl ProjectTreePanel {
             }
         }
 
-        self.tree.update(cx, |t, cx| t.set_items(items, cx));
+        self.tree.update(cx, |t, cx| {
+            t.set_items(items, cx);
+            // set_items clears selected_ix — restore it from AppState so the
+            // currently-selected node stays highlighted after a rebuild.
+            let st = self.state.read(cx);
+            if let Some(fid) = &st.selected_folder {
+                let node = folder_node(fid);
+                let item = TreeItem::new(node.clone(), node);
+                t.set_selected_item(Some(&item), cx);
+            } else if let Some(rid) = &st.selected_request {
+                let node = request_node(rid);
+                let item = TreeItem::new(node.clone(), node);
+                t.set_selected_item(Some(&item), cx);
+            }
+        });
     }
 
     fn on_select_request(&mut self, request_id: String, cx: &mut Context<Self>) {
@@ -1514,19 +1528,21 @@ impl ProjectTreePanel {
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
             .update(cx, |s, cx| s.set_value(current.clone(), window, cx));
-        // Set the AppState selection to this node so the correct panel shows
-        // and rebuild_tree won't shift the tree indices.
+        // Set renaming_node FIRST so on_state_event skips rebuild_tree when the
+        // selection events fire below (rebuild would reset the framework's
+        // selected_ix and break the inline Input).
+        self.renaming_node = Some(node.clone());
+        // Set the AppState selection to this node so the correct panel shows.
         if let Some(fid) = parse_folder_id(&node) {
             self.on_select_folder(fid.to_string(), cx);
         } else if let Some(rid) = parse_request_id(&node) {
             self.on_select_request(rid.to_string(), cx);
         }
         // Set the tree framework's selection to this node so the row highlights.
-        let item = TreeItem::new(node.clone(), current);
+        let item = TreeItem::new(node, current);
         self.tree.update(cx, |t, cx| {
             t.set_selected_item(Some(&item), cx);
         });
-        self.renaming_node = Some(node);
         // Focus the Input so the user can immediately type.
         self.rename_input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();

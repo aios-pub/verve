@@ -549,10 +549,6 @@ impl Render for ProjectTreePanel {
                                 }
                             };
 
-                            let view_for_click = view.clone();
-                            let req_for_click = request_id.clone();
-                            // The same folder id is reused for the row click.
-                            let folder_for_click = folder_id.clone();
                             let node_for_more = item.id.to_string();
                             let view_for_more = view.clone();
                             // Tree entity + folder node for the chevron toggle.
@@ -769,18 +765,12 @@ impl Render for ProjectTreePanel {
                                                     },
                                                 ),
                                         ),
-                                )
-                                .on_click(move |_, _window, cx: &mut App| {
-                                    if let Some(id) = req_for_click.clone() {
-                                        let _ = view_for_click.update(cx, |this, cx| {
-                                            this.on_select_request(id, cx);
-                                        });
-                                    } else if let Some(fid) = folder_for_click.clone() {
-                                        let _ = view_for_click.update(cx, |this, cx| {
-                                            this.on_select_folder(fid, cx);
-                                        });
-                                    }
-                                });
+                                );
+                            // NOTE: Row selection is handled entirely by the
+                            // tree framework's on_entry_click → selected_ix
+                            // change → on_tree_selection_changed observer.
+                            // Do NOT add an on_click here — it would double-fire
+                            // on_select_folder/request and cause rebuild loops.
 
                             // --- Drag & drop wiring (attached directly to the
                             // ListItem, which forwards to its base div). ---

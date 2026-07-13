@@ -86,10 +86,6 @@ pub struct ProjectTreePanel {
     /// multiple Blur events on the Input. Set to a few in start_rename,
     /// decremented on each Blur.
     pub rename_blur_skips: u32,
-    /// Re-entrancy guard: on_select_folder/on_select_request is currently
-    /// running (emitting SelectionChanged). Prevents the tree observer from
-    /// re-processing the same selection.
-    pub selecting: bool,
     _subs: Vec<gpui::Subscription>,
     focus_handle: FocusHandle,
 }
@@ -115,7 +111,6 @@ impl ProjectTreePanel {
             drop_target: None,
             renaming_node: None,
             rename_blur_skips: 0,
-            selecting: false,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -123,11 +118,7 @@ impl ProjectTreePanel {
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
         let sub_rename = cx.subscribe(&panel.rename_input, Self::on_rename_input_event);
-        // Observe tree selection changes: when the framework's on_entry_click
-        // sets selected_ix, sync the AppState selection (request or folder).
-        let tree_entity = panel.tree.clone();
-        let sub_tree = cx.observe(&tree_entity, Self::on_tree_selection_changed);
-        panel._subs = vec![sub_search, sub_state, sub_rename, sub_tree];
+        panel._subs = vec![sub_search, sub_state, sub_rename];
         panel
     }
 
@@ -138,38 +129,6 @@ impl ProjectTreePanel {
         cx: &mut Context<Self>,
     ) {
         self.rebuild_tree(cx);
-    }
-
-    /// When the tree framework's internal selection (selected_ix) changes —
-    /// e.g. via on_entry_click — sync it to AppState so the center panel shows
-    /// the right detail view. This is the reliable path for folder selection
-    /// (including empty folders) since it fires on any click the framework
-    /// processes, regardless of ListItem::on_click propagation quirks.
-    fn on_tree_selection_changed(&mut self, _tree: Entity<TreeState>, cx: &mut Context<Self>) {
-        // Don't interfere while inline-renaming or while a selection is being
-        // propagated (on_select_folder/request sets this guard to prevent
-        // re-entrant observer calls).
-        if self.renaming_node.is_some() || self.selecting {
-            return;
-        }
-        // Resolve the entry's node id from the tree state via public API.
-        let item = match self.tree.read(cx).selected_item() {
-            Some(item) => item.clone(),
-            None => return,
-        };
-        let node = item.id.to_string();
-        // Only update if the selection actually changed in AppState.
-        if let Some(req_id) = parse_request_id(&node) {
-            let req_id = req_id.to_string();
-            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
-                self.on_select_request(req_id, cx);
-            }
-        } else if let Some(fid) = parse_folder_id(&node) {
-            let fid = fid.to_string();
-            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
-                self.on_select_folder(fid, cx);
-            }
-        }
     }
 
     /// Handle Enter (commit) and Blur (commit) on the inline rename Input.
@@ -209,13 +168,10 @@ impl ProjectTreePanel {
                 self.rebuild_tree(cx);
             }
             AppEvent::SelectionChanged => {
-                // Selection changed — DON'T rebuild (that would reset
-                // selected_ix). Just sync the framework's highlight to match
-                // the new AppState selection.
-                if self.renaming_node.is_some() {
-                    return;
-                }
-                self.sync_tree_selection(cx);
+                // Selection changed — just re-render so the highlight updates.
+                // Do NOT rebuild or sync_tree_selection (those call set_items/
+                // set_selected_item which trigger notify loops).
+                cx.notify();
             }
             AppEvent::LocateActive => {
                 self.locate_active(cx);
@@ -253,48 +209,24 @@ impl ProjectTreePanel {
         }
 
         self.tree.update(cx, |t, cx| t.set_items(items, cx));
-        // After set_items (which clears selected_ix), sync the highlight.
-        self.sync_tree_selection(cx);
-    }
-
-    /// Sync the tree framework's selected_ix to match the AppState selection.
-    /// Called after rebuild_tree or SelectionChanged — does NOT rebuild.
-    fn sync_tree_selection(&self, cx: &mut Context<Self>) {
-        let st = self.state.read(cx);
-        let node = if let Some(fid) = &st.selected_folder {
-            folder_node(fid)
-        } else if let Some(rid) = &st.selected_request {
-            request_node(rid)
-        } else {
-            return;
-        };
-        // Build a minimal TreeItem with just the id for lookup.
-        let item = TreeItem::new(node.clone(), node);
-        self.tree.update(cx, |t, cx| {
-            t.set_selected_item(Some(&item), cx);
-        });
     }
 
     fn on_select_request(&mut self, request_id: String, cx: &mut Context<Self>) {
-        self.selecting = true;
         self.state.update(cx, |s, cx| {
             s.selected_request = Some(request_id);
             s.selected_folder = None;
             cx.emit(AppEvent::SelectionChanged);
         });
-        self.selecting = false;
     }
 
     /// Select a folder node: clears the request selection and emits
     /// SelectionChanged so the center panel swaps to the folder detail view.
     fn on_select_folder(&mut self, folder_id: String, cx: &mut Context<Self>) {
-        self.selecting = true;
         self.state.update(cx, |s, cx| {
             s.selected_folder = Some(folder_id);
             s.selected_request = None;
             cx.emit(AppEvent::SelectionChanged);
         });
-        self.selecting = false;
     }
 
     /// Apply a drag-and-drop: move the dragged node (`source`) relative to the
@@ -586,6 +518,9 @@ impl Render for ProjectTreePanel {
 
                             let node_for_more = item.id.to_string();
                             let view_for_more = view.clone();
+                            let view_for_click = view.clone();
+                            let req_for_click = request_id.clone();
+                            let folder_for_click = folder_id.clone();
                             // Tree entity + folder node for the chevron toggle.
                             let tree_for_chevron = view.read(cx).tree.clone();
                             let folder_node_id = if is_folder {
@@ -800,12 +735,18 @@ impl Render for ProjectTreePanel {
                                                     },
                                                 ),
                                         ),
-                                );
-                            // NOTE: Row selection is handled entirely by the
-                            // tree framework's on_entry_click → selected_ix
-                            // change → on_tree_selection_changed observer.
-                            // Do NOT add an on_click here — it would double-fire
-                            // on_select_folder/request and cause rebuild loops.
+                                )
+                                .on_click(move |_, _window, cx: &mut App| {
+                                    if let Some(id) = req_for_click.clone() {
+                                        let _ = view_for_click.update(cx, |this, cx| {
+                                            this.on_select_request(id, cx);
+                                        });
+                                    } else if let Some(fid) = folder_for_click.clone() {
+                                        let _ = view_for_click.update(cx, |this, cx| {
+                                            this.on_select_folder(fid, cx);
+                                        });
+                                    }
+                                });
 
                             // --- Drag & drop wiring (attached directly to the
                             // ListItem, which forwards to its base div). ---
@@ -1552,26 +1493,12 @@ impl ProjectTreePanel {
         // Look up the current name and pre-fill the inline rename Input.
         let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
-            .update(cx, |s, cx| s.set_value(current.clone(), window, cx));
-        // Set renaming_node FIRST so on_state_event skips rebuild_tree when the
-        // selection events fire below (rebuild would reset the framework's
-        // selected_ix and break the inline Input).
-        self.renaming_node = Some(node.clone());
-        // Set the AppState selection to this node so the correct panel shows.
-        if let Some(fid) = parse_folder_id(&node) {
-            self.on_select_folder(fid.to_string(), cx);
-        } else if let Some(rid) = parse_request_id(&node) {
-            self.on_select_request(rid.to_string(), cx);
-        }
-        // Set the tree framework's selection to this node so the row highlights.
-        let item = TreeItem::new(node, current);
-        self.tree.update(cx, |t, cx| {
-            t.set_selected_item(Some(&item), cx);
-        });
+            .update(cx, |s, cx| s.set_value(current, window, cx));
+        // Set renaming_node — the render closure checks this to show the Input.
+        self.renaming_node = Some(node);
         // Focus the Input so the user can immediately type. Set the blur-skip
-        // counter to a few so the re-render cycle (set_selected_item → notify,
-        // cx.notify) doesn't immediately commit via Blur events.
-        self.rename_blur_skips = 5;
+        // counter so the re-render cycle doesn't immediately commit.
+        self.rename_blur_skips = 3;
         self.rename_input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }

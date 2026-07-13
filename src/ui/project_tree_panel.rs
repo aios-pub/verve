@@ -112,7 +112,11 @@ impl ProjectTreePanel {
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
         let sub_rename = cx.subscribe(&panel.rename_input, Self::on_rename_input_event);
-        panel._subs = vec![sub_search, sub_state, sub_rename];
+        // Observe tree selection changes: when the framework's on_entry_click
+        // sets selected_ix, sync the AppState selection (request or folder).
+        let tree_entity = panel.tree.clone();
+        let sub_tree = cx.observe(&tree_entity, Self::on_tree_selection_changed);
+        panel._subs = vec![sub_search, sub_state, sub_rename, sub_tree];
         panel
     }
 
@@ -123,6 +127,36 @@ impl ProjectTreePanel {
         cx: &mut Context<Self>,
     ) {
         self.rebuild_tree(cx);
+    }
+
+    /// When the tree framework's internal selection (selected_ix) changes —
+    /// e.g. via on_entry_click — sync it to AppState so the center panel shows
+    /// the right detail view. This is the reliable path for folder selection
+    /// (including empty folders) since it fires on any click the framework
+    /// processes, regardless of ListItem::on_click propagation quirks.
+    fn on_tree_selection_changed(&mut self, _tree: Entity<TreeState>, cx: &mut Context<Self>) {
+        // Don't interfere while the user is inline-renaming.
+        if self.renaming_node.is_some() {
+            return;
+        }
+        // Resolve the entry's node id from the tree state via public API.
+        let item = match self.tree.read(cx).selected_item() {
+            Some(item) => item.clone(),
+            None => return,
+        };
+        let node = item.id.to_string();
+        // Only update if the selection actually changed in AppState.
+        if let Some(req_id) = parse_request_id(&node) {
+            let req_id = req_id.to_string();
+            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
+                self.on_select_request(req_id, cx);
+            }
+        } else if let Some(fid) = parse_folder_id(&node) {
+            let fid = fid.to_string();
+            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
+                self.on_select_folder(fid, cx);
+            }
+        }
     }
 
     /// Handle Enter (commit) and Blur (commit) on the inline rename Input.
@@ -1477,6 +1511,8 @@ impl ProjectTreePanel {
         self.rename_input
             .update(cx, |s, cx| s.set_value(current, window, cx));
         self.renaming_node = Some(node);
+        // Focus the Input so the user can immediately type.
+        self.rename_input.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
 

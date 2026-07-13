@@ -107,7 +107,8 @@ impl ProjectTreePanel {
         panel.rebuild_tree(cx);
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
-        panel._subs = vec![sub_search, sub_state];
+        let sub_tree = cx.observe(&panel.tree, Self::on_tree_selection_changed);
+        panel._subs = vec![sub_search, sub_state, sub_tree];
         panel
     }
 
@@ -118,6 +119,30 @@ impl ProjectTreePanel {
         cx: &mut Context<Self>,
     ) {
         self.rebuild_tree(cx);
+    }
+
+    /// The tree framework's on_entry_click set a new selected_ix. Sync it to
+    /// AppState so the center panel shows the right detail view. This is the
+    /// ONLY selection path — ListItem::on_click is unreliable because the
+    /// framework's on_mouse_down fires cx.notify() which re-renders and breaks
+    /// the click chain.
+    fn on_tree_selection_changed(&mut self, _tree: Entity<TreeState>, cx: &mut Context<Self>) {
+        let item = match self.tree.read(cx).selected_item() {
+            Some(item) => item.clone(),
+            None => return,
+        };
+        let node = item.id.to_string();
+        if let Some(req_id) = parse_request_id(&node) {
+            let req_id = req_id.to_string();
+            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
+                self.on_select_request(req_id, cx);
+            }
+        } else if let Some(fid) = parse_folder_id(&node) {
+            let fid = fid.to_string();
+            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
+                self.on_select_folder(fid, cx);
+            }
+        }
     }
 
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
@@ -463,9 +488,6 @@ impl Render for ProjectTreePanel {
 
                             let node_for_more = item.id.to_string();
                             let view_for_more = view.clone();
-                            let view_for_click = view.clone();
-                            let req_for_click = request_id.clone();
-                            let folder_for_click = folder_id.clone();
                             // Tree entity + folder node for the chevron toggle.
                             let tree_for_chevron = view.read(cx).tree.clone();
                             let folder_node_id = if is_folder {
@@ -666,18 +688,7 @@ impl Render for ProjectTreePanel {
                                                     },
                                                 ),
                                         ),
-                                )
-                                .on_click(move |_, _window, cx: &mut App| {
-                                    if let Some(id) = req_for_click.clone() {
-                                        let _ = view_for_click.update(cx, |this, cx| {
-                                            this.on_select_request(id, cx);
-                                        });
-                                    } else if let Some(fid) = folder_for_click.clone() {
-                                        let _ = view_for_click.update(cx, |this, cx| {
-                                            this.on_select_folder(fid, cx);
-                                        });
-                                    }
-                                });
+                                );
 
                             // --- Drag & drop wiring (attached directly to the
                             // ListItem, which forwards to its base div). ---
@@ -1421,10 +1432,21 @@ impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
     pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Select the node so the highlight matches.
+        if let Some(fid) = parse_folder_id(&node) {
+            self.on_select_folder(fid.to_string(), cx);
+        } else if let Some(rid) = parse_request_id(&node) {
+            self.on_select_request(rid.to_string(), cx);
+        }
+        // Also set the framework's selected_ix to this node.
+        let current_name = self.current_name_for_node(&node, cx).unwrap_or_default();
+        let tree_item = TreeItem::new(node.clone(), current_name.clone());
+        self.tree.update(cx, |t, cx| {
+            t.set_selected_item(Some(&tree_item), cx);
+        });
         // Look up the current name and pre-fill the rename Input.
-        let current = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input
-            .update(cx, |s, cx| s.set_value(current, window, cx));
+            .update(cx, |s, cx| s.set_value(current_name, window, cx));
         let project = self.state.clone();
         let rename_input = self.rename_input.clone();
         window.open_dialog(cx, move |dialog, _window, _cx| {

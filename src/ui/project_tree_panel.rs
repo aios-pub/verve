@@ -183,14 +183,21 @@ impl ProjectTreePanel {
 
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
         match ev {
-            AppEvent::WorkspaceChanged | AppEvent::SelectionChanged | AppEvent::RequestEdited => {
-                // Don't rebuild while inline-renaming — rebuild_tree resets the
-                // framework's selected_ix and can shift indices, causing the
-                // rename Input to disappear or move to the wrong row.
+            AppEvent::WorkspaceChanged | AppEvent::RequestEdited => {
+                // Structural change or content edit — rebuild the tree.
                 if self.renaming_node.is_some() {
                     return;
                 }
                 self.rebuild_tree(cx);
+            }
+            AppEvent::SelectionChanged => {
+                // Selection changed — DON'T rebuild (that would reset
+                // selected_ix). Just sync the framework's highlight to match
+                // the new AppState selection.
+                if self.renaming_node.is_some() {
+                    return;
+                }
+                self.sync_tree_selection(cx);
             }
             AppEvent::LocateActive => {
                 self.locate_active(cx);
@@ -227,20 +234,26 @@ impl ProjectTreePanel {
             }
         }
 
+        self.tree.update(cx, |t, cx| t.set_items(items, cx));
+        // After set_items (which clears selected_ix), sync the highlight.
+        self.sync_tree_selection(cx);
+    }
+
+    /// Sync the tree framework's selected_ix to match the AppState selection.
+    /// Called after rebuild_tree or SelectionChanged — does NOT rebuild.
+    fn sync_tree_selection(&self, cx: &mut Context<Self>) {
+        let st = self.state.read(cx);
+        let node = if let Some(fid) = &st.selected_folder {
+            folder_node(fid)
+        } else if let Some(rid) = &st.selected_request {
+            request_node(rid)
+        } else {
+            return;
+        };
+        // Build a minimal TreeItem with just the id for lookup.
+        let item = TreeItem::new(node.clone(), node);
         self.tree.update(cx, |t, cx| {
-            t.set_items(items, cx);
-            // set_items clears selected_ix — restore it from AppState so the
-            // currently-selected node stays highlighted after a rebuild.
-            let st = self.state.read(cx);
-            if let Some(fid) = &st.selected_folder {
-                let node = folder_node(fid);
-                let item = TreeItem::new(node.clone(), node);
-                t.set_selected_item(Some(&item), cx);
-            } else if let Some(rid) = &st.selected_request {
-                let node = request_node(rid);
-                let item = TreeItem::new(node.clone(), node);
-                t.set_selected_item(Some(&item), cx);
-            }
+            t.set_selected_item(Some(&item), cx);
         });
     }
 

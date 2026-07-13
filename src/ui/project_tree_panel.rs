@@ -123,17 +123,39 @@ impl ProjectTreePanel {
     fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
         match ev {
             AppEvent::WorkspaceChanged | AppEvent::RequestEdited => {
-                // Structural change or content edit — rebuild the tree.
                 self.rebuild_tree(cx);
+                self.sync_selection_from_tree(cx);
             }
             AppEvent::SelectionChanged => {
-                // Selection changed — just re-render so the highlight updates.
                 cx.notify();
             }
             AppEvent::LocateActive => {
                 self.locate_active(cx);
             }
             _ => {}
+        }
+    }
+
+    /// Check if the tree framework's selected_ix points to a different node
+    /// than AppState's selection. If so, sync AppState to match the tree.
+    /// Called on every state event to catch framework-driven selection changes
+    /// (on_entry_click) that bypass ListItem handlers.
+    fn sync_selection_from_tree(&mut self, cx: &mut Context<Self>) {
+        let item = match self.tree.read(cx).selected_item() {
+            Some(item) => item.clone(),
+            None => return,
+        };
+        let node = item.id.to_string();
+        if let Some(req_id) = parse_request_id(&node) {
+            let req_id = req_id.to_string();
+            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
+                self.on_select_request(req_id, cx);
+            }
+        } else if let Some(fid) = parse_folder_id(&node) {
+            let fid = fid.to_string();
+            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
+                self.on_select_folder(fid, cx);
+            }
         }
     }
 
@@ -303,6 +325,10 @@ fn parse_folder_id(node: &str) -> Option<&str> {
 
 impl Render for ProjectTreePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Sync any framework-driven selection change (from on_entry_click)
+        // to AppState before rendering. This runs on every render, catching
+        // clicks that bypass our own handlers.
+        self.sync_selection_from_tree(cx);
         let theme = cx.theme().clone();
         let view = cx.entity();
         let _ = view;
@@ -463,11 +489,6 @@ impl Render for ProjectTreePanel {
 
                             let node_for_more = item.id.to_string();
                             let view_for_more = view.clone();
-                            // Capture for the content-area on_click (the
-                            // reliable selection path).
-                            let view_for_select = view.clone();
-                            let req_for_select = request_id.clone();
-                            let folder_for_select = folder_id.clone();
                             // Tree entity + folder node for the chevron toggle.
                             let tree_for_chevron = view.read(cx).tree.clone();
                             let folder_node_id = if is_folder {
@@ -527,28 +548,10 @@ impl Render for ProjectTreePanel {
                                 })
                                 .child(
                                     h_flex()
-                                        .id(("tree-row-content", ix))
                                         .group(group.clone())
                                         .gap_1p5()
                                         .items_center()
                                         .w_full()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_, _window, cx: &mut App| {
-                                                if let Some(id) = req_for_select.clone() {
-                                                    let _ =
-                                                        view_for_select.update(cx, |this, cx| {
-                                                            this.on_select_request(id, cx);
-                                                        });
-                                                } else if let Some(fid) = folder_for_select.clone()
-                                                {
-                                                    let _ =
-                                                        view_for_select.update(cx, |this, cx| {
-                                                            this.on_select_folder(fid, cx);
-                                                        });
-                                                }
-                                            },
-                                        )
                                         // Chevron (folders only): click toggles expand.
                                         .when(is_folder, |this| {
                                             let _tree = tree_for_chevron.clone();

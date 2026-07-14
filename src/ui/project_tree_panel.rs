@@ -107,7 +107,8 @@ impl ProjectTreePanel {
         panel.rebuild_tree(cx);
         let sub_search = cx.subscribe(&panel.search, Self::on_search_change);
         let sub_state = cx.subscribe(&panel.state, Self::on_state_event);
-        panel._subs = vec![sub_search, sub_state];
+        let sub_tree = cx.observe(&panel.tree, Self::on_tree_notify);
+        panel._subs = vec![sub_search, sub_state, sub_tree];
         panel
     }
 
@@ -120,27 +121,11 @@ impl ProjectTreePanel {
         self.rebuild_tree(cx);
     }
 
-    fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
-        match ev {
-            AppEvent::WorkspaceChanged | AppEvent::RequestEdited => {
-                self.rebuild_tree(cx);
-                self.sync_selection_from_tree(cx);
-            }
-            AppEvent::SelectionChanged => {
-                cx.notify();
-            }
-            AppEvent::LocateActive => {
-                self.locate_active(cx);
-            }
-            _ => {}
-        }
-    }
-
-    /// Check if the tree framework's selected_ix points to a different node
-    /// than AppState's selection. If so, sync AppState to match the tree.
-    /// Called on every state event to catch framework-driven selection changes
-    /// (on_entry_click) that bypass ListItem handlers.
-    fn sync_selection_from_tree(&mut self, cx: &mut Context<Self>) {
+    /// Called whenever the tree entity notifies (on_entry_click sets
+    /// selected_ix + notify, right-click sets right_clicked_ix + notify).
+    /// Sync the framework's selected_ix → AppState. The dedup check prevents
+    /// loops: if AppState already matches, no action is taken.
+    fn on_tree_notify(&mut self, _tree: Entity<TreeState>, cx: &mut Context<Self>) {
         let item = match self.tree.read(cx).selected_item() {
             Some(item) => item.clone(),
             None => return,
@@ -156,6 +141,21 @@ impl ProjectTreePanel {
             if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
                 self.on_select_folder(fid, cx);
             }
+        }
+    }
+
+    fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
+        match ev {
+            AppEvent::WorkspaceChanged | AppEvent::RequestEdited => {
+                self.rebuild_tree(cx);
+            }
+            AppEvent::SelectionChanged => {
+                cx.notify();
+            }
+            AppEvent::LocateActive => {
+                self.locate_active(cx);
+            }
+            _ => {}
         }
     }
 
@@ -325,10 +325,6 @@ fn parse_folder_id(node: &str) -> Option<&str> {
 
 impl Render for ProjectTreePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Sync any framework-driven selection change (from on_entry_click)
-        // to AppState before rendering. This runs on every render, catching
-        // clicks that bypass our own handlers.
-        self.sync_selection_from_tree(cx);
         let theme = cx.theme().clone();
         let view = cx.entity();
         let _ = view;

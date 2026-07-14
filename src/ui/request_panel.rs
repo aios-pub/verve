@@ -1817,7 +1817,7 @@ impl Render for RequestPanel {
                         ),
                 )
                 .child(
-                    // Combined URL bar (Apipost-style): method chip on the left,
+                    // Combined URL bar (postman-style): method chip on the left,
                     // URL in the middle, Send/Stop on the right.
                     h_flex()
                         .px_3()

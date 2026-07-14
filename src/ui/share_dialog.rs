@@ -1,4 +1,4 @@
-//! The share configuration dialog (Apipost-style, screenshots 2 & 3).
+//! The share configuration dialog (postman-style, screenshots 2 & 3).
 //!
 //! Opened via `window.open_dialog` from two entry points: the title-bar
 //! "share project" button (scope = Project) and the request-panel "share single
@@ -7,7 +7,7 @@
 //! for the dropdown/radio/checkbox selections — and on confirm emits a
 //! [`ShareConfig`] that the caller persists + serves.
 //!
-//! Sections (matching Apipost exactly):
+//! Sections (matching postman exactly):
 //! - 有效期 (expiration): dropdown — 永久有效 / 1 / 7 / 30 / 90 / 180 / 365 天
 //! - 分享方式 (share methods): checkboxes — 链接 / 二维码 / 导出 HTML
 //! - 访问限制 (access control): radio — 公开 / 密码 (+ password input)

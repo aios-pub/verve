@@ -1,6 +1,6 @@
 //! HTML document generation for the share system — layered, structured builder.
 //!
-//! Produces a fully self-contained Apipost-style documentation page using a
+//! Produces a fully self-contained postman-style documentation page using a
 //! lightweight [`Html`] builder that guarantees tag closure via RAII. The page
 //! is assembled from independent layers: head → header → sidebar → content
 //! (modules → requests → kv-tables / auth / body / examples) → script.

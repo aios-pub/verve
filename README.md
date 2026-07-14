@@ -49,8 +49,8 @@ A native desktop app built with Rust + GPUI
 ### 🎨 More
 - i18n: Simplified Chinese (default) / English
 - 22 built-in themes (Catppuccin, Gruvbox, Tokyo Night, etc.)
-- Import: Postman v2.1 / OpenAPI 3 / Apipost 7+ (full format compatibility)
-- Export: Markdown / JSON / Apipost format (round-trip compatible)
+- Import: Postman v2.1 / OpenAPI 3 / postman 7+ (full format compatibility)
+- Export: Markdown / JSON / postman format (round-trip compatible)
 - Configurable home view · Cross-platform packaging (macOS / Linux / Windows)
 
 ---
@@ -154,7 +154,7 @@ After donating, please note your GitHub username or email in WeChat, and I'll se
 - ✅ Document sharing (HTML generation / strict access control / verve-server cloud)
 - ✅ Git version control (multi-workspace / auto-commit / branch management)
 - ✅ i18n (Chinese / English)
-- ✅ Import/Export (Postman / OpenAPI / Apipost round-trip compatible)
+- ✅ Import/Export (Postman / OpenAPI / postman round-trip compatible)
 - ✅ Cross-platform packaging (macOS / Linux / Windows)
 
 ### Planned

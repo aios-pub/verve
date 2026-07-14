@@ -774,7 +774,7 @@ tr.expired{{opacity:.5}}
 <p class="subtitle">上传项目 · 创建分享 · 在线浏览 API 文档</p>
 
 <div class="card"><h2>📤 上传项目</h2>
-<p style="color:#6b7280;font-size:13px;margin:0 0 8px">粘贴 Verve/Postman/Apipost 导出的项目 JSON（单个 <code>Project</code> 对象）。</p>
+<p style="color:#6b7280;font-size:13px;margin:0 0 8px">粘贴 Verve/Postman/postman 导出的项目 JSON（单个 <code>Project</code> 对象）。</p>
 <textarea id="project-json" placeholder='{{"name":"我的项目","requests":[...]}}'></textarea>
 <div id="upload-msg" class="msg"></div>
 <button onclick="uploadProject()">上传项目</button>

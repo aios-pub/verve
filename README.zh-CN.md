@@ -49,8 +49,8 @@ HTTP 调试 · SSH 终端 · 文档分享 · Git 版本控制
 ### 🎨 其他
 - 国际化：简体中文（默认）/ English
 - 22 个内置主题（Catppuccin、Gruvbox、Tokyo Night 等）
-- 导入：Postman v2.1 / OpenAPI 3 / Apipost 7+（完全格式兼容）
-- 导出：Markdown / JSON / Apipost 格式（双向兼容）
+- 导入：Postman v2.1 / OpenAPI 3 / postman 7+（完全格式兼容）
+- 导出：Markdown / JSON / postman 格式（双向兼容）
 - 可配置首页指向 · 跨平台打包（macOS / Linux / Windows）
 
 ---
@@ -154,7 +154,7 @@ Verve 当前为开源预览版，持续迭代中。
 - ✅ 文档分享（HTML 生成 / 严格访问控制 / verve-server 云端）
 - ✅ Git 版本同步（多工作空间 / 自动提交 / 分支管理）
 - ✅ 国际化（中文 / English）
-- ✅ 导入导出（Postman / OpenAPI / Apipost 双向兼容）
+- ✅ 导入导出（Postman / OpenAPI / postman 双向兼容）
 - ✅ 跨平台打包（macOS / Linux / Windows）
 
 ### 计划中

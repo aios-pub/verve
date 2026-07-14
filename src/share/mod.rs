@@ -1,4 +1,4 @@
-//! Document-sharing system (Apipost-style).
+//! Document-sharing system (postman-style).
 //!
 //! Generates self-contained HTML documentation for a project / folder / single
 //! request and hosts it on an HTTP server with **strict** access control
@@ -13,7 +13,7 @@
 //! Modules:
 //! - [`models`] — `ShareConfig` and friends.
 //! - [`persist`] — `shares.json` load/save.
-//! - [`html`] — Apipost-style HTML document generation.
+//! - [`html`] — postman-style HTML document generation.
 //! - [`server`] — the HTTP server core (routing + strict enforcement).
 //! - [`cloud`] — file-backed project/share store for the cloud binary.
 //! - [`qrcode`] — QR code generation for the 二维码 share method.

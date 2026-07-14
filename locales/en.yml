@@ -179,7 +179,7 @@ admin:
   title: "🗂️ Verve Documentation"
   subtitle: Upload projects · Create shares · Browse API docs online
   upload: 📤 Upload Project
-  upload_placeholder: Paste a Verve/Postman/Apipost exported project JSON (a single Project object).
+  upload_placeholder: Paste a Verve/Postman/postman exported project JSON (a single Project object).
   upload_btn: Upload Project
   create_share: 🔗 Create Share
   share_title_label: Document Title

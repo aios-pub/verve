@@ -1176,7 +1176,7 @@ impl VerveApp {
                 Ok(s) => s,
                 Err(_) => return,
             },
-            crate::export::Format::Apipost => match crate::export::project_to_apipost(&project) {
+            crate::export::Format::postman => match crate::export::project_to_postman(&project) {
                 Ok(s) => s,
                 Err(_) => return,
             },
@@ -1264,7 +1264,7 @@ impl VerveApp {
                     }
                 }
 
-                // Open the link in the system browser (Apipost opens the doc
+                // Open the link in the system browser (postman opens the doc
                 // immediately after creating a share).
                 cx.open_url(&url);
 
@@ -1399,7 +1399,7 @@ impl VerveApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import collection (Apipost / Postman v2.1 / OpenAPI 3 JSON)".into()),
+            prompt: Some("Import collection (postman / Postman v2.1 / OpenAPI 3 JSON)".into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |this, cx| {
@@ -1413,8 +1413,8 @@ impl VerveApp {
                         } else if contents.contains("\"project_id\"")
                             && contents.contains("\"target_type\"")
                         {
-                            // Apipost export format.
-                            crate::import::apipost(&contents)
+                            // postman export format.
+                            crate::import::postman(&contents)
                         } else {
                             crate::import::postman_v2_1(&contents)
                         };
@@ -1649,12 +1649,12 @@ impl Render for VerveApp {
 
         // When a folder is selected, the center column is taken over by the
         // folder detail view (rendered inside RequestPanel) — no response or
-        // console panes are shown, matching Apipost's exclusive folder view.
+        // console panes are shown, matching postman's exclusive folder view.
         let folder_exclusive = self.state.read(cx).selected_folder.is_some()
             && self.state.read(cx).selected_request.is_none();
 
         // Center column: request (top) and response (bottom) in a vertical
-        // resizable split — the Apipost-style request/response stack. The
+        // resizable split — the postman-style request/response stack. The
         // console docks below when toggled on. A selected folder collapses
         // this to the request panel alone.
         let center = v_flex()
@@ -1702,7 +1702,7 @@ impl Render for VerveApp {
 
         // ProjectManage is a full-bleed settings view: it replaces the entire
         // workbench (tree + request/response) with its own two-column layout.
-        // This matches Apipost, where the project-management activity rail item
+        // This matches postman, where the project-management activity rail item
         // opens an exclusive management surface, NOT a panel beside the API tree.
         // ProjectManage and Share are both full-body exclusive views: they
         // replace the entire workbench (rail + tree + request/response).
@@ -1859,7 +1859,7 @@ impl VerveApp {
         });
     }
 
-    /// The far-left vertical activity rail (Apipost-style icon sidebar).
+    /// The far-left vertical activity rail (postman-style icon sidebar).
     fn render_activity_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let active = self.active_view;

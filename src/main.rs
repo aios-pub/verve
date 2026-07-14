@@ -46,7 +46,7 @@ fn main() {
         // Load all built-in themes (Catppuccin, Gruvbox, Tokyo Night, etc.).
         ui::themes::load_builtin_themes(cx);
 
-        // Default to the dark theme to match the Apipost reference design.
+        // Default to the dark theme to match the Postman reference design.
         gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
 
         // Disable the framework's built-in active-highlight border overlay —

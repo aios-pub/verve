@@ -429,11 +429,11 @@ pub struct KeyValue {
     #[serde(default)]
     pub field_type: FieldType,
     /// Whether this field is required (metadata; shown as a red `*` in docs).
-    /// Defaults to `true` (Apipost convention: parameters are required unless
+    /// Defaults to `true` (postman convention: parameters are required unless
     /// explicitly marked optional).
     #[serde(default = "default_true")]
     pub required: bool,
-    /// Free-form description (shown in the manager tables, like Apipost).
+    /// Free-form description (shown in the manager tables, like postman).
     #[serde(default)]
     pub description: String,
 }
@@ -473,7 +473,7 @@ pub struct RequestBody {
     pub form_data: Vec<KeyValue>,
     #[serde(default)]
     pub urlencoded: Vec<KeyValue>,
-    /// Visual field breakdown of a Raw JSON body (Apipost `raw_parameter`).
+    /// Visual field breakdown of a Raw JSON body (postman `raw_parameter`).
     /// Populated when the user edits the Raw body via the "可视化编辑" mode.
     /// Each entry corresponds to a top-level key in the JSON object. Editing
     /// these syncs back to `raw` and vice versa.

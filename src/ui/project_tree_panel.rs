@@ -453,7 +453,7 @@ impl Render for ProjectTreePanel {
                             };
 
                             // For requests, look up the method to render a
-                            // colored badge (Apipost-style). For folders show
+                            // colored badge (postman-style). For folders show
                             // the folder icon instead.
                             let method = if !is_folder {
                                 request_id.as_ref().and_then(|id| {

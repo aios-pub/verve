@@ -1,4 +1,4 @@
-//! HTTP method colors, matching the Apipost palette.
+//! HTTP method colors, matching the postman palette.
 //!
 //! Each method gets a consistent hue used for:
 //! - the colored badge before a request name in the tree,

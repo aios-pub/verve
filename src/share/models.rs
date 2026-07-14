@@ -1,4 +1,4 @@
-//! Data models for the document-sharing system (Apipost-style).
+//! Data models for the document-sharing system (postman-style).
 //!
 //! A [`ShareConfig`] is the complete recipe for one shareable document: which
 //! scope (whole project / a single request / a folder), how long it stays

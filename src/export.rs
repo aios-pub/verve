@@ -1,4 +1,4 @@
-//! Exporters: render a project to Markdown, JSON, or Apipost format.
+//! Exporters: render a project to Markdown, JSON, or postman format.
 
 use crate::state::models::{
     ApiRequest, AuthConfig, AuthType, BodyType, Folder, KeyValue, Project, RequestMethod,
@@ -10,15 +10,15 @@ use serde_json::json;
 pub enum Format {
     Markdown,
     Json,
-    /// Apipost 7+ export JSON (round-trip compatible with `import::apipost`).
-    Apipost,
+    /// postman 7+ export JSON (round-trip compatible with `import::postman`).
+    postman,
 }
 
 impl Format {
     pub fn extension(&self) -> &'static str {
         match self {
             Format::Markdown => "md",
-            Format::Json | Format::Apipost => "json",
+            Format::Json | Format::postman => "json",
         }
     }
 
@@ -26,7 +26,7 @@ impl Format {
         match self {
             Format::Markdown => "Markdown",
             Format::Json => "JSON",
-            Format::Apipost => "Apipost",
+            Format::postman => "postman",
         }
     }
 }
@@ -150,19 +150,19 @@ pub fn project_to_json(project: &Project) -> serde_json::Result<String> {
 }
 
 // ===========================================================================
-// Apipost 7+ export format
+// postman 7+ export format
 // ===========================================================================
 
-/// Render a project as an Apipost-compatible JSON string. The output is
-/// round-trip compatible: importing it back via `import::apipost` reproduces
+/// Render a project as an postman-compatible JSON string. The output is
+/// round-trip compatible: importing it back via `import::postman` reproduces
 /// the same folder/request tree, bodies, params, and auth.
-pub fn project_to_apipost(project: &Project) -> serde_json::Result<String> {
-    let doc = build_apipost_doc(project);
+pub fn project_to_postman(project: &Project) -> serde_json::Result<String> {
+    let doc = build_postman_doc(project);
     serde_json::to_string_pretty(&doc)
 }
 
-/// Build the Apipost JSON document (`serde_json::Value`) from a Verve project.
-fn build_apipost_doc(project: &Project) -> serde_json::Value {
+/// Build the postman JSON document (`serde_json::Value`) from a Verve project.
+fn build_postman_doc(project: &Project) -> serde_json::Value {
     use serde_json::{json, Map};
 
     // --- global.envs ---
@@ -193,11 +193,11 @@ fn build_apipost_doc(project: &Project) -> serde_json::Value {
 
     // --- global.global_param ---
     let global_param = json!({
-        "header": json!({ "parameter": kvs_to_apipost_params(&project.global_headers) }),
-        "query": json!({ "parameter": kvs_to_apipost_params(&project.global_params) }),
+        "header": json!({ "parameter": kvs_to_postman_params(&project.global_headers) }),
+        "query": json!({ "parameter": kvs_to_postman_params(&project.global_params) }),
         "body": json!({ "parameter": [] }),
         "cookie": json!({ "parameter": [] }),
-        "auth": empty_apipost_auth(),
+        "auth": empty_postman_auth(),
         "pre_tasks": [],
         "post_tasks": [],
     });
@@ -207,11 +207,11 @@ fn build_apipost_doc(project: &Project) -> serde_json::Value {
 
     // Root-level requests (parent_id = "0").
     for req in &project.requests {
-        apis.push(api_to_apipost_node(req, "0"));
+        apis.push(api_to_postman_node(req, "0"));
     }
     // Walk folders recursively, emitting folder nodes + their request children.
     for folder in &project.folders {
-        folder_to_apipost_nodes(folder, "0", &mut apis);
+        folder_to_postman_nodes(folder, "0", &mut apis);
     }
 
     json!({
@@ -244,7 +244,7 @@ fn build_apipost_doc(project: &Project) -> serde_json::Value {
 }
 
 /// Recursively emit a folder node + its API children + sub-folder nodes.
-fn folder_to_apipost_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde_json::Value>) {
+fn folder_to_postman_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde_json::Value>) {
     let folder_id = format!("folder_{}", &folder.id[..8.min(folder.id.len())]);
     out.push(json!({
         "target_id": folder_id,
@@ -254,18 +254,18 @@ fn folder_to_apipost_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde
         "description": folder.description,
     }));
     for req in &folder.requests {
-        out.push(api_to_apipost_node(req, &folder_id));
+        out.push(api_to_postman_node(req, &folder_id));
     }
     for sub in &folder.folders {
-        folder_to_apipost_nodes(sub, &folder_id, out);
+        folder_to_postman_nodes(sub, &folder_id, out);
     }
 }
 
-/// Convert a Verve ApiRequest into an Apipost API node.
-fn api_to_apipost_node(req: &ApiRequest, parent_id: &str) -> serde_json::Value {
+/// Convert a Verve ApiRequest into an postman API node.
+fn api_to_postman_node(req: &ApiRequest, parent_id: &str) -> serde_json::Value {
     use crate::state::models::Protocol;
 
-    // Map Verve Protocol → Apipost target_type. Apipost distinguishes protocol
+    // Map Verve Protocol → postman target_type. postman distinguishes protocol
     // kinds via target_type ("api" = HTTP, "socketio", "sse", "websocket2").
     let (target_type, protocol_str) = match req.protocol {
         Protocol::SocketIo => ("socketio", ""),
@@ -292,18 +292,18 @@ fn api_to_apipost_node(req: &ApiRequest, parent_id: &str) -> serde_json::Value {
         "mark_id": mark_id,
         "description": req.description,
         "request": {
-            "auth": auth_to_apipost(&req.auth),
-            "body": body_to_apipost(&req.body),
-            "header": json!({ "parameter": kvs_to_apipost_params(&req.headers) }),
+            "auth": auth_to_postman(&req.auth),
+            "body": body_to_postman(&req.body),
+            "header": json!({ "parameter": kvs_to_postman_params(&req.headers) }),
             "query": {
                 "query_add_equal": 1,
-                "parameter": kvs_to_apipost_params(&req.params),
+                "parameter": kvs_to_postman_params(&req.params),
             },
             "cookie": {
                 "cookie_encode": 1,
-                "parameter": kvs_to_apipost_params(&req.cookies),
+                "parameter": kvs_to_postman_params(&req.cookies),
             },
-            "restful": json!({ "parameter": kvs_to_apipost_params(&req.path) }),
+            "restful": json!({ "parameter": kvs_to_postman_params(&req.path) }),
             "pre_tasks": [],
             "post_tasks": [],
         },
@@ -313,8 +313,8 @@ fn api_to_apipost_node(req: &ApiRequest, parent_id: &str) -> serde_json::Value {
     })
 }
 
-/// Convert a slice of KeyValue into Apipost parameter objects.
-fn kvs_to_apipost_params(kvs: &[KeyValue]) -> Vec<serde_json::Value> {
+/// Convert a slice of KeyValue into postman parameter objects.
+fn kvs_to_postman_params(kvs: &[KeyValue]) -> Vec<serde_json::Value> {
     kvs.iter()
         .map(|kv| {
             json!({
@@ -334,7 +334,7 @@ fn kvs_to_apipost_params(kvs: &[KeyValue]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Map Verve FieldType → Apipost field_type string.
+/// Map Verve FieldType → postman field_type string.
 fn field_type_to_str(ft: crate::state::models::FieldType) -> &'static str {
     use crate::state::models::FieldType;
     match ft {
@@ -348,8 +348,8 @@ fn field_type_to_str(ft: crate::state::models::FieldType) -> &'static str {
     }
 }
 
-/// Convert a Verve RequestBody into the Apipost body object.
-fn body_to_apipost(body: &crate::state::models::RequestBody) -> serde_json::Value {
+/// Convert a Verve RequestBody into the postman body object.
+fn body_to_postman(body: &crate::state::models::RequestBody) -> serde_json::Value {
     match body.body_type {
         BodyType::None => json!({
             "mode": "none",
@@ -360,21 +360,21 @@ fn body_to_apipost(body: &crate::state::models::RequestBody) -> serde_json::Valu
         }),
         BodyType::FormData => json!({
             "mode": "form-data",
-            "parameter": kvs_to_apipost_params(&body.form_data),
+            "parameter": kvs_to_postman_params(&body.form_data),
             "raw": "",
             "raw_parameter": [],
             "binary": {},
         }),
         BodyType::Urlencoded => json!({
             "mode": "urlencoded",
-            "parameter": kvs_to_apipost_params(&body.urlencoded),
+            "parameter": kvs_to_postman_params(&body.urlencoded),
             "raw": "",
             "raw_parameter": [],
             "binary": {},
         }),
         BodyType::Raw => {
-            // Apipost uses "json" (not "raw") as the mode for JSON bodies —
-            // the dominant case. Map the language back to Apipost's mode names.
+            // postman uses "json" (not "raw") as the mode for JSON bodies —
+            // the dominant case. Map the language back to postman's mode names.
             let mode = match body.raw_language {
                 crate::state::models::RawLanguage::Json => "json",
                 crate::state::models::RawLanguage::Xml => "xml",
@@ -386,7 +386,7 @@ fn body_to_apipost(body: &crate::state::models::RequestBody) -> serde_json::Valu
             let raw_parameter: Vec<serde_json::Value> = body
                 .raw_parameter
                 .iter()
-                .flat_map(|kv| kvs_to_apipost_params(std::slice::from_ref(kv)))
+                .flat_map(|kv| kvs_to_postman_params(std::slice::from_ref(kv)))
                 .collect();
             json!({
                 "mode": mode,
@@ -400,8 +400,8 @@ fn body_to_apipost(body: &crate::state::models::RequestBody) -> serde_json::Valu
     }
 }
 
-/// Convert a Verve AuthConfig into the Apipost auth object.
-fn auth_to_apipost(auth: &AuthConfig) -> serde_json::Value {
+/// Convert a Verve AuthConfig into the postman auth object.
+fn auth_to_postman(auth: &AuthConfig) -> serde_json::Value {
     match auth.auth_type {
         AuthType::Bearer => json!({
             "type": "bearer",
@@ -434,8 +434,8 @@ fn auth_to_apipost(auth: &AuthConfig) -> serde_json::Value {
     }
 }
 
-/// An empty Apipost auth object (for global_param where type = "").
-fn empty_apipost_auth() -> serde_json::Value {
+/// An empty postman auth object (for global_param where type = "").
+fn empty_postman_auth() -> serde_json::Value {
     json!({
         "type": "",
         "kv": { "key": "", "value": "", "in": "" },
@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn apipost_export_round_trip() {
+    fn postman_export_round_trip() {
         // Build a project with: 2 root requests (one with form-data + bearer,
         // one with raw body), 1 folder containing 1 request, an environment
         // with variables, and a global header.
@@ -532,14 +532,14 @@ mod tests {
         folder.requests.push(req3);
         project.folders.push(folder);
 
-        // --- Export to Apipost JSON ---
-        let json_str = project_to_apipost(&project).unwrap();
+        // --- Export to postman JSON ---
+        let json_str = project_to_postman(&project).unwrap();
         assert!(!json_str.is_empty());
         assert!(json_str.contains("\"project_id\""));
         assert!(json_str.contains("\"target_type\""));
 
         // --- Re-import the exported JSON ---
-        let reimported = crate::import::apipost(&json_str).unwrap();
+        let reimported = crate::import::postman(&json_str).unwrap();
 
         // Project metadata preserved.
         assert_eq!(reimported.name, "测试项目");

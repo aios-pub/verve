@@ -1,4 +1,4 @@
-//! Importers: convert external formats (Postman v2.1, OpenAPI 3, Apipost)
+//! Importers: convert external formats (Postman v2.1, OpenAPI 3, postman)
 //! into the Verve project model.
 
 use crate::state::models::*;
@@ -194,10 +194,10 @@ pub fn openapi_v3(json: &str) -> anyhow::Result<Project> {
 }
 
 // ===========================================================================
-// Apipost (Apipost 7+ export format)
+// postman (postman 7+ export format)
 // ===========================================================================
 //
-// The Apipost JSON has this top-level shape (only the fields we use are
+// The postman JSON has this top-level shape (only the fields we use are
 // modelled; everything else is ignored via `#[serde(default)]`):
 //
 //   {
@@ -217,30 +217,30 @@ pub fn openapi_v3(json: &str) -> anyhow::Result<Project> {
 // Folder/request nesting is via `parent_id` ("0" = root). We build a flat
 // list then assemble the tree.
 
-/// Top-level Apipost export document.
+/// Top-level postman export document.
 #[derive(serde::Deserialize)]
-struct ApipostDoc {
+struct postmanDoc {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     intro: Option<String>,
     #[serde(default)]
-    global: ApipostGlobal,
+    global: postmanGlobal,
     #[serde(default)]
-    apis: Vec<ApipostNode>,
+    apis: Vec<postmanNode>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostGlobal {
+struct postmanGlobal {
     #[serde(default)]
-    envs: Vec<ApipostEnv>,
+    envs: Vec<postmanEnv>,
     #[serde(default)]
-    global_param: ApipostGlobalParam,
+    global_param: postmanGlobalParam,
     // Status-code dictionary / describe library / marks are ignored for now.
 }
 
 #[derive(serde::Deserialize)]
-struct ApipostEnv {
+struct postmanEnv {
     #[serde(default)]
     name: Option<String>,
     /// env_var_list is a free-form map of key → value strings.
@@ -249,27 +249,27 @@ struct ApipostEnv {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostGlobalParam {
+struct postmanGlobalParam {
     #[serde(default)]
-    header: ApipostParamSection,
+    header: postmanParamSection,
     #[serde(default)]
-    query: ApipostParamSection,
+    query: postmanParamSection,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostParamSection {
+struct postmanParamSection {
     #[serde(default)]
-    parameter: Vec<ApipostParam>,
+    parameter: Vec<postmanParam>,
 }
 
 /// A single key/value parameter (header / query / form-data / cookie).
 #[derive(serde::Deserialize)]
-struct ApipostParam {
+struct postmanParam {
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
     value: Option<String>,
-    /// 1 = enabled, -1 = disabled (Apipost convention).
+    /// 1 = enabled, -1 = disabled (postman convention).
     #[serde(default)]
     is_checked: i32,
     #[serde(default)]
@@ -283,7 +283,7 @@ struct ApipostParam {
     file_name: Option<String>,
 }
 
-impl ApipostParam {
+impl postmanParam {
     fn to_kv(&self) -> KeyValue {
         let mut kv = KeyValue::new(
             self.key.clone().unwrap_or_default(),
@@ -308,7 +308,7 @@ impl ApipostParam {
 
 /// A node in the apis array — either a folder or an API.
 #[derive(serde::Deserialize)]
-struct ApipostNode {
+struct postmanNode {
     /// "folder" or "api" (sometimes "http-api").
     #[serde(default)]
     target_type: Option<String>,
@@ -327,60 +327,60 @@ struct ApipostNode {
     #[serde(default)]
     mark_id: Option<String>,
     #[serde(default)]
-    request: ApipostRequest,
+    request: postmanRequest,
     /// Tags array (strings).
     #[serde(default)]
     tags: Vec<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostRequest {
+struct postmanRequest {
     #[serde(default)]
-    body: ApipostBody,
+    body: postmanBody,
     #[serde(default)]
-    header: ApipostParamSection,
+    header: postmanParamSection,
     #[serde(default)]
-    query: ApipostQuerySection,
+    query: postmanQuerySection,
     #[serde(default)]
-    cookie: ApipostParamSection,
+    cookie: postmanParamSection,
     #[serde(default)]
-    restful: ApipostParamSection,
+    restful: postmanParamSection,
     #[serde(default)]
-    auth: ApipostAuth,
+    auth: postmanAuth,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostQuerySection {
+struct postmanQuerySection {
     #[serde(default)]
-    parameter: Vec<ApipostParam>,
+    parameter: Vec<postmanParam>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostBody {
+struct postmanBody {
     /// "none" | "form-data" | "urlencoded" | "raw" | "binary"
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
-    parameter: Vec<ApipostParam>,
+    parameter: Vec<postmanParam>,
     #[serde(default)]
     raw: Option<String>,
-    /// Visual field descriptions for raw JSON bodies (Apipost raw_parameter).
+    /// Visual field descriptions for raw JSON bodies (postman raw_parameter).
     #[serde(default)]
-    raw_parameter: Vec<ApipostParam>,
+    raw_parameter: Vec<postmanParam>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostAuth {
+struct postmanAuth {
     #[serde(default)]
-    kv: ApipostAuthKv,
+    kv: postmanAuthKv,
     #[serde(default)]
-    bearer: ApipostAuthBearer,
+    bearer: postmanAuthBearer,
     #[serde(default)]
-    basic: ApipostAuthBasic,
+    basic: postmanAuthBasic,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostAuthKv {
+struct postmanAuthKv {
     #[serde(default)]
     #[allow(dead_code)]
     key: Option<String>,
@@ -393,29 +393,29 @@ struct ApipostAuthKv {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostAuthBearer {
+struct postmanAuthBearer {
     #[serde(default)]
     key: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct ApipostAuthBasic {
+struct postmanAuthBasic {
     #[serde(default)]
     username: Option<String>,
     #[serde(default)]
     password: Option<String>,
 }
 
-/// Convert an Apipost export JSON string into a Verve project. Maps the
+/// Convert an postman export JSON string into a Verve project. Maps the
 /// project name, description, environments, global params, and the full
 /// folder/request tree with body/headers/query/auth.
-pub fn apipost(json: &str) -> anyhow::Result<Project> {
+pub fn postman(json: &str) -> anyhow::Result<Project> {
     // Parse with serde_json::Value first so we can pull the auth `type` field
     // (a Rust keyword) that the typed structs above can't capture directly.
     let root: serde_json::Value = serde_json::from_str(json)?;
-    let doc: ApipostDoc = serde_json::from_value(root.clone())?;
+    let doc: postmanDoc = serde_json::from_value(root.clone())?;
 
-    let name = doc.name.unwrap_or_else(|| "Imported Apipost".to_string());
+    let name = doc.name.unwrap_or_else(|| "Imported postman".to_string());
     let mut project = Project::new(name);
     project.description = doc.intro.unwrap_or_default();
 
@@ -457,7 +457,7 @@ pub fn apipost(json: &str) -> anyhow::Result<Project> {
         .collect();
 
     // Build the folder/request tree from the flat apis list.
-    let (folders, requests) = build_apipost_tree(&doc.apis, &root);
+    let (folders, requests) = build_postman_tree(&doc.apis, &root);
     project.folders = folders;
     project.requests = requests;
 
@@ -466,13 +466,13 @@ pub fn apipost(json: &str) -> anyhow::Result<Project> {
 
 /// Recursively build the (folders, root_requests) tree from the flat apis
 /// array, using `parent_id` to establish nesting.
-fn build_apipost_tree(
-    nodes: &[ApipostNode],
+fn build_postman_tree(
+    nodes: &[postmanNode],
     root: &serde_json::Value,
 ) -> (Vec<Folder>, Vec<ApiRequest>) {
     // Index nodes by id for quick lookup, separating folders from APIs.
-    let mut folders: Vec<&ApipostNode> = Vec::new();
-    let mut apis: Vec<&ApipostNode> = Vec::new();
+    let mut folders: Vec<&postmanNode> = Vec::new();
+    let mut apis: Vec<&postmanNode> = Vec::new();
     for node in nodes {
         match node.target_type.as_deref() {
             Some("folder") => folders.push(node),
@@ -484,13 +484,13 @@ fn build_apipost_tree(
     let root_apis: Vec<ApiRequest> = apis
         .iter()
         .filter(|n| is_root(n.parent_id.as_deref()))
-        .map(|n| convert_apipost_api(n, root))
+        .map(|n| convert_postman_api(n, root))
         .collect();
 
     let root_folders: Vec<Folder> = folders
         .iter()
         .filter(|n| is_root(n.parent_id.as_deref()))
-        .map(|f| build_apipost_folder(f, &folders, &apis, root))
+        .map(|f| build_postman_folder(f, &folders, &apis, root))
         .collect();
 
     (root_folders, root_apis)
@@ -502,10 +502,10 @@ fn is_root(parent_id: Option<&str>) -> bool {
 
 /// Recursively build a folder, collecting its direct API children and
 /// recursing into sub-folders.
-fn build_apipost_folder(
-    folder: &ApipostNode,
-    all_folders: &[&ApipostNode],
-    all_apis: &[&ApipostNode],
+fn build_postman_folder(
+    folder: &postmanNode,
+    all_folders: &[&postmanNode],
+    all_apis: &[&postmanNode],
     root: &serde_json::Value,
 ) -> Folder {
     let fid = folder.target_id.clone().unwrap_or_default();
@@ -515,20 +515,20 @@ fn build_apipost_folder(
     f.requests = all_apis
         .iter()
         .filter(|n| n.parent_id.as_deref() == Some(fid.as_str()))
-        .map(|n| convert_apipost_api(n, root))
+        .map(|n| convert_postman_api(n, root))
         .collect();
 
     f.folders = all_folders
         .iter()
         .filter(|n| n.parent_id.as_deref() == Some(fid.as_str()))
-        .map(|sub| build_apipost_folder(sub, all_folders, all_apis, root))
+        .map(|sub| build_postman_folder(sub, all_folders, all_apis, root))
         .collect();
 
     f
 }
 
-/// Convert a single Apipost API node into a Verve ApiRequest.
-fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiRequest {
+/// Convert a single postman API node into a Verve ApiRequest.
+fn convert_postman_api(node: &postmanNode, root: &serde_json::Value) -> ApiRequest {
     let method = node
         .method
         .as_deref()
@@ -555,7 +555,7 @@ fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiReque
         .filter_map(|t| t.as_str().map(|s| s.to_string()))
         .collect();
 
-    // Protocol from target_type (Apipost encodes the protocol kind there).
+    // Protocol from target_type (postman encodes the protocol kind there).
     api.protocol = match node.target_type.as_deref() {
         Some("socketio") => Protocol::SocketIo,
         Some("sse") => Protocol::Sse,
@@ -606,7 +606,7 @@ fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiReque
             urlencoded: body.parameter.iter().map(|p| p.to_kv()).collect(),
             ..Default::default()
         },
-        // Apipost uses "json" (not "raw") for JSON bodies — the text lives in
+        // postman uses "json" (not "raw") for JSON bodies — the text lives in
         // the `raw` field. "xml" and "text" are analogous for their types.
         "raw" | "json" | "xml" | "text" | "html" | "javascript" => {
             let raw_text = body.raw.clone().unwrap_or_default();
@@ -647,13 +647,13 @@ fn convert_apipost_api(node: &ApipostNode, root: &serde_json::Value) -> ApiReque
         })
         .unwrap_or_default();
 
-    api.auth = convert_apipost_auth(&auth_type_str, &node.request.auth);
+    api.auth = convert_postman_auth(&auth_type_str, &node.request.auth);
 
     api
 }
 
-/// Map Apipost auth type → Verve AuthConfig.
-fn convert_apipost_auth(type_str: &str, auth: &ApipostAuth) -> AuthConfig {
+/// Map postman auth type → Verve AuthConfig.
+fn convert_postman_auth(type_str: &str, auth: &postmanAuth) -> AuthConfig {
     match type_str {
         "bearer" => AuthConfig {
             auth_type: AuthType::Bearer,
@@ -744,8 +744,8 @@ mod tests {
     }
 
     #[test]
-    fn apipost_import() {
-        // A trimmed version of the real Apipost export format (same structure,
+    fn postman_import() {
+        // A trimmed version of the real postman export format (same structure,
         // fewer auth sub-objects / examples for brevity).
         let json = r#"{
             "project_id": "1fe63e",
@@ -803,7 +803,7 @@ mod tests {
             ]
         }"#;
 
-        let project = apipost(json).unwrap();
+        let project = postman(json).unwrap();
 
         // Project metadata.
         assert_eq!(project.name, "李靖的私有项目");

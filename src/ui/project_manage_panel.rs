@@ -11,7 +11,7 @@
 //!   │                │  ...            │                   │
 //!   └────────────────┴────────────────┴───────────────────┘
 //!
-//! Sections map to Apipost's project-management areas. Git operations live
+//! Sections map to postman's project-management areas. Git operations live
 //! under "分支管理" (Branch Management); basic project metadata under
 //! "基本设置" (Basic Settings).
 
@@ -1245,7 +1245,7 @@ impl ProjectManagePanel {
         let ent_import = cx.entity();
         let ent_md = cx.entity();
         let ent_json = cx.entity();
-        let ent_apipost = cx.entity();
+        let ent_postman = cx.entity();
         v_flex()
             .size_full()
             .id("io-scroll")
@@ -1306,14 +1306,14 @@ impl ProjectManagePanel {
                                     }),
                             )
                             .child(
-                                Button::new("io-export-apipost")
+                                Button::new("io-export-postman")
                                     .ghost()
                                     .small()
                                     .icon(IconName::File)
-                                    .label("导出 Apipost")
+                                    .label("导出 postman")
                                     .on_click(move |_, _w, cx: &mut App| {
-                                        let _ = ent_apipost.update(cx, |_, cx| {
-                                            cx.emit(ManageEvent::Export(crate::export::Format::Apipost))
+                                        let _ = ent_postman.update(cx, |_, cx| {
+                                            cx.emit(ManageEvent::Export(crate::export::Format::postman))
                                         });
                                     }),
                             ),

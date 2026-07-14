@@ -179,7 +179,7 @@ admin:
   title: "🗂️ Verve 文档管理"
   subtitle: 上传项目 · 创建分享 · 在线浏览 API 文档
   upload: 📤 上传项目
-  upload_placeholder: 粘贴 Verve/Postman/Apipost 导出的项目 JSON（单个 Project 对象）。
+  upload_placeholder: 粘贴 Verve/Postman/postman 导出的项目 JSON（单个 Project 对象）。
   upload_btn: 上传项目
   create_share: 🔗 创建分享
   share_title_label: 文档标题

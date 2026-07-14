@@ -1702,7 +1702,12 @@ impl ProjectTreePanel {
                 self.delete_node(node.to_string(), cx);
             }
             TreeAction::Rename(_) => {
-                self.start_rename(node.to_string(), window, cx);
+                // Defer the rename dialog to the next event loop tick so the
+                // popup menu has fully closed before we open the dialog.
+                let node = node.to_string();
+                cx.defer_in(window, move |this, window, cx| {
+                    this.start_rename(node, window, cx);
+                });
             }
             _ => {}
         }

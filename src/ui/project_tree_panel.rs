@@ -432,8 +432,16 @@ impl Render for ProjectTreePanel {
                                 let theme = cx.theme().clone();
                                 (p.dragging_node.clone(), p.drop_target.clone(), theme)
                             };
+                            // IMPORTANT: derive is_folder from the node-id prefix
+                            // (folder:...), NOT from entry.is_folder(). The tree
+                            // framework defines is_folder() as children.len() > 0, so
+                            // an EMPTY folder would be treated as a leaf request,
+                            // breaking its selection highlight, chevron, icon, and
+                            // context-menu routing. The prefix is the only reliable
+                            // signal.
                             let request_id = parse_request_id(&item.id).map(|s| s.to_string());
-                            let is_folder = entry.is_folder();
+                            let folder_id = parse_folder_id(&item.id).map(|s| s.to_string());
+                            let is_folder = folder_id.is_some();
                             let icon_name = if is_folder {
                                 if entry.is_expanded() {
                                     IconName::FolderOpen
@@ -455,15 +463,6 @@ impl Render for ProjectTreePanel {
                                         .active_project()
                                         .and_then(|p| p.find_request(id).map(|(_, r)| r.method))
                                 })
-                            } else {
-                                None
-                            };
-
-                            // For folder rows, capture the folder id up-front: it
-                            // drives row selection, the "+" add button, and the
-                            // click-to-select-folder behavior.
-                            let folder_id = if is_folder {
-                                parse_folder_id(&item.id).map(|s| s.to_string())
                             } else {
                                 None
                             };
@@ -946,7 +945,14 @@ fn menu_item(
         .hover(|this| this.bg(theme.accent.opacity(0.5)))
         .child(div().text_color(theme.muted_foreground).child(icon))
         .child(label)
-        .on_click(move |_, window, cx: &mut App| {
+        // Use on_mouse_down (not on_click) so the action fires on press, and
+        // stop_propagation so the backdrop's on_mouse_down (which would close
+        // the menu and trigger a re-render that destroys this element) doesn't
+        // race ahead and eat the click. With on_click the element must survive
+        // from mouse-down to mouse-up; the backdrop's close→re-render breaks
+        // that invariant, which is why the first click did nothing.
+        .on_mouse_down(MouseButton::Left, move |_, window, cx: &mut App| {
+            cx.stop_propagation();
             let action = action.clone();
             let node = node.clone();
             let _ = view.update(cx, |this, cx| {
@@ -1428,7 +1434,34 @@ pub enum TreeAction {
 impl ProjectTreePanel {
     /// Open a rename dialog for the given tree node (`request:<id>` or
     /// `folder:<id>`), pre-filled with the current name.
+    ///
+    /// Before opening the dialog, this syncs the tree's `selected_ix` to the
+    /// renamed node and updates AppState's selection so the highlight follows
+    /// the right-clicked node (right-click only sets `right_clicked_ix`, which
+    /// is invisible to the render callback's `selected` flag).
     pub fn start_rename(&mut self, node: String, window: &mut Window, cx: &mut Context<Self>) {
+        // 1. Sync AppState selection to the renamed node (so the detail panel
+        //    and highlight both follow).
+        if let Some(req_id) = parse_request_id(&node) {
+            let req_id = req_id.to_string();
+            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
+                self.on_select_request(req_id, cx);
+            }
+        } else if let Some(fid) = parse_folder_id(&node) {
+            let fid = fid.to_string();
+            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
+                self.on_select_folder(fid, cx);
+            }
+        }
+        // 2. Sync the tree framework's selected_ix to the renamed node so the
+        //    row highlight follows. set_selected_item() also expands collapsed
+        //    ancestors so the node is visible.
+        self.tree.update(cx, |t, cx| {
+            // Build a minimal TreeItem to match by id.
+            let dummy = TreeItem::new(node.as_str(), "");
+            t.set_selected_item(Some(&dummy), cx);
+        });
+
         // Look up the current name and pre-fill the rename Input.
         let current_name = self.current_name_for_node(&node, cx).unwrap_or_default();
         self.rename_input

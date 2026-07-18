@@ -14,6 +14,8 @@ use gpui_component::{
     h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
 
+use std::path::PathBuf;
+
 use crate::ssh::client::SshConnection;
 use crate::ssh::host_store;
 use crate::ssh::models::SshHost;
@@ -28,6 +30,13 @@ pub enum SshEvent {
     Connect(String),
 }
 
+/// Reply sent from the UI back to the pump thread after the user chooses a
+/// file path for an rz/sz transfer.
+enum ZmPathReply {
+    Save(Option<PathBuf>),
+    Send(Option<PathBuf>),
+}
+
 /// Messages from the SSH pump thread back to GPUI's executor.
 enum PumpMsg {
     Data(Vec<u8>),
@@ -38,6 +47,17 @@ enum PumpMsg {
     Closed(Option<u32>),
     Error(String),
     Disconnected,
+    /// ZMODEM UI event (started/progress/completed/error).
+    ZmEvent(crate::ssh::zmodem::ZmEvent),
+    /// ZMODEM needs a save path for an incoming file. UI must reply via reply_tx.
+    ZmNeedSavePath {
+        suggested_name: String,
+        reply_tx: tokio::sync::mpsc::UnboundedSender<ZmPathReply>,
+    },
+    /// ZMODEM needs a file to send. UI must reply via reply_tx.
+    ZmNeedFileToSend {
+        reply_tx: tokio::sync::mpsc::UnboundedSender<ZmPathReply>,
+    },
 }
 
 /// Which view is active within a session tab.
@@ -64,6 +84,8 @@ pub struct TerminalSession {
     pub resize_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>>,
     /// Status of the connection.
     pub status: SessionStatus,
+    /// Active ZMODEM transfer state (if any).
+    pub zm_state: ZmUiState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +95,34 @@ pub enum SessionStatus {
     Reconnecting(usize), // attempt number
     Error(String),
     Closed,
+}
+
+/// Active ZMODEM transfer state (GPUI UI-side mirror of what the pump actor reports).
+#[derive(Clone)]
+struct ZmUiState {
+    active: bool,
+    filename: String,
+    total: u64,
+    transferred: u64,
+    role: crate::ssh::zmodem::ZmRole,
+    done: bool,
+    error: Option<String>,
+    cancelled: bool,
+}
+
+impl Default for ZmUiState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            filename: String::new(),
+            total: 0,
+            transferred: 0,
+            role: crate::ssh::zmodem::ZmRole::ReceiveFromRemote,
+            done: false,
+            error: None,
+            cancelled: false,
+        }
+    }
 }
 
 pub struct SshPanel {
@@ -571,20 +621,97 @@ impl SshPanel {
                 let pump_tx_clone = pump_tx.clone();
                 let terminal_clone = terminal_for_task.clone();
 
+                // Channel for UI -> pump thread replies (chosen file paths
+                // for rz/sz dialogs). Clones of the sender are sent to the UI
+                // inside PumpMsg::ZmPathReplyTx so it can reply back.
+                let (path_reply_tx, mut path_reply_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<ZmPathReply>();
+
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                     rt.block_on(async move {
+                        use crate::ssh::zmodem::{ZmodemDetector, ZmodemSession};
                         let mut disconnected = false;
+                        let mut input_tx: Option<
+                            tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+                        > = None;
+                        let mut detector = ZmodemDetector::new();
+                        // Active zmodem session, if any.
+                        let mut zm: Option<ZmodemSession> = None;
+                        // After a cancel, ignore any data for a short grace
+                        // period so lrzsz's abort response isn't re-parsed as
+                        // a new trigger and the terminal isn't polluted.
+                        let mut cancel_grace_bytes_remaining: usize = 0;
+
+                        // Helper: drain outgoing bytes + events.
+                        let mut drain_zm = |zm: &mut ZmodemSession,
+                                            input_tx: &Option<
+                            tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+                        >,
+                                            pump_tx: &tokio::sync::mpsc::UnboundedSender<
+                            PumpMsg,
+                        >,
+                                            reply_tx: &tokio::sync::mpsc::UnboundedSender<ZmPathReply>| {
+                            let outgoing = zm.drain_outgoing();
+                            if !outgoing.is_empty() {
+                                if let Some(tx) = input_tx {
+                                    let _ = tx.send(outgoing);
+                                }
+                            }
+                            for ev in zm.pop_events() {
+                                // Attach a reply sender for prompt events so
+                                // the UI can reply with the chosen path.
+                                let wrapped = match ev {
+                                    crate::ssh::zmodem::ZmEvent::NeedSavePath { suggested_name } => {
+                                        PumpMsg::ZmNeedSavePath {
+                                            suggested_name,
+                                            reply_tx: reply_tx.clone(),
+                                        }
+                                    }
+                                    crate::ssh::zmodem::ZmEvent::NeedFileToSend => {
+                                        PumpMsg::ZmNeedFileToSend {
+                                            reply_tx: reply_tx.clone(),
+                                        }
+                                    }
+                                    other => PumpMsg::ZmEvent(other),
+                                };
+                                let _ = pump_tx.send(wrapped);
+                            }
+                        };
+
                         loop {
                             tokio::select! {
                                 Some(conn) = conn_rx.recv() => {
                                     let _ = pump_tx_clone.send(PumpMsg::Connected(conn));
                                 }
                                 Some(tx) = input_tx_rx.recv() => {
+                                    input_tx = Some(tx.clone());
                                     let _ = pump_tx_clone.send(PumpMsg::InputTx(tx));
                                 }
                                 Some(rtx) = resize_tx_rx.recv() => {
                                     let _ = pump_tx_clone.send(PumpMsg::ResizeTx(rtx));
+                                }
+                                Some(reply) = path_reply_rx.recv() => {
+                                    // UI replied to a path prompt. Feed it
+                                    // into the zmodem session.
+                                    if let Some(session) = zm.as_mut() {
+                                        match reply {
+                                            ZmPathReply::Save(path) => session.provide_save_path(path),
+                                            ZmPathReply::Send(path) => session.provide_file_to_send(path),
+                                        }
+                                        session.resume();
+                                        drain_zm(session, &input_tx, &pump_tx_clone, &path_reply_tx);
+                                        if session.is_done() {
+                                            zm = None;
+                                            detector.reset();
+                                            // Swallow up to 2 KB of trailing data
+                                            // (lrzsz's cancel/error messages are
+                                            // short and should be displayed,
+                                            // but we skip any leftover ZMODEM
+                                            // frames to prevent re-trigger).
+                                            cancel_grace_bytes_remaining = 2048;
+                                        }
+                                    }
                                 }
                                 msg = rx.recv() => {
                                     let Some(msg) = msg else {
@@ -593,7 +720,55 @@ impl SshPanel {
                                     };
                                     match msg {
                                         crate::ssh::client::SshOutput::Data(data) => {
-                                            let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                            if let Some(session) = zm.as_mut() {
+                                                session.feed(&data);
+                                                drain_zm(session, &input_tx, &pump_tx_clone, &path_reply_tx);
+                                                if session.is_done() {
+                                                    zm = None;
+                                                    detector.reset();
+                                                    // Briefly disable trigger detection
+                                                    // to swallow any leftover ZMODEM
+                                                    // frames after our ZCAN; bytes still
+                                                    // flow to the terminal so the user
+                                                    // sees the shell prompt.
+                                                    cancel_grace_bytes_remaining = 2048;
+                                                }
+                                            } else {
+                                                let mut remaining = &data[..];
+                                                if cancel_grace_bytes_remaining > 0 {
+                                                    let skip = remaining.len().min(cancel_grace_bytes_remaining);
+                                                    cancel_grace_bytes_remaining -= skip;
+                                                    remaining = &remaining[skip..];
+                                                    if remaining.is_empty() {
+                                                        // All skipped; forward none.
+                                                        // But we still want visible
+                                                        // output (shell error messages).
+                                                        // Forward the whole chunk to
+                                                        // the terminal — the grace
+                                                        // period only disables trigger
+                                                        // detection.
+                                                        let _ = pump_tx_clone.send(PumpMsg::Data(data.clone()));
+                                                        continue;
+                                                    }
+                                                }
+                                                let to_scan = remaining.to_vec();
+                                                if let Some(_trigger_idx) = detector.feed(&to_scan) {
+                                                    // Trigger only in non-grace portion.
+                                                    let mut session = ZmodemSession::new();
+                                                    session.feed(&data);
+                                                    drain_zm(&mut session, &input_tx, &pump_tx_clone, &path_reply_tx);
+                                                    if !session.is_done() {
+                                                        zm = Some(session);
+                                                    } else {
+                                                        detector.reset();
+                                                        cancel_grace_bytes_remaining = 2048;
+                                                        // Forward any non-ZMODEM bytes.
+                                                        let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                                    }
+                                                } else {
+                                                    let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                                }
+                                            }
                                         }
                                         crate::ssh::client::SshOutput::Closed(code) => {
                                             let _ = pump_tx_clone.send(PumpMsg::Closed(code));
@@ -696,6 +871,50 @@ impl SshPanel {
                             got_disconnected = true;
                             break;
                         }
+                        PumpMsg::ZmEvent(ev) => {
+                            if let Some(panel) = panel_for_task.upgrade() {
+                                let hid = host_id.clone();
+                                let _ = panel.update(cx, move |this, cx| {
+                                    this.handle_zm_event(&hid, ev, cx);
+                                });
+                            }
+                        }
+                        PumpMsg::ZmNeedSavePath {
+                            suggested_name,
+                            reply_tx,
+                        } => {
+                            // Ask the user where to save. We run a synchronous
+                            // channel receive on a background thread so the
+                            // rfd dialog works, then send the reply.
+                            let tx = reply_tx.clone();
+                            cx.background_executor().spawn(async move {
+                                let (tx2, rx2) = std::sync::mpsc::channel::<Option<PathBuf>>();
+                                std::thread::spawn(move || {
+                                    let res = rfd::FileDialog::new()
+                                        .set_file_name(&suggested_name)
+                                        .save_file();
+                                    let _ = tx2.send(res.map(|p| p.to_path_buf()));
+                                });
+                                let chosen = rx2.recv().ok().flatten();
+                                let _ = tx.send(ZmPathReply::Save(chosen));
+                            }).detach();
+                        }
+                        PumpMsg::ZmNeedFileToSend { reply_tx } => {
+                            // Native open-file dialog via rfd (same pattern as
+                            // SFTP uploads; GPUI's prompt_for_paths isn't
+                            // accessible from AsyncApp so we use rfd on a
+                            // dedicated thread).
+                            let tx = reply_tx.clone();
+                            cx.background_executor().spawn(async move {
+                                let (tx2, rx2) = std::sync::mpsc::channel::<Option<PathBuf>>();
+                                std::thread::spawn(move || {
+                                    let res = rfd::FileDialog::new().pick_file();
+                                    let _ = tx2.send(res.map(|p| p.to_path_buf()));
+                                });
+                                let chosen = rx2.recv().ok().flatten();
+                                let _ = tx.send(ZmPathReply::Send(chosen));
+                            }).detach();
+                        }
                     }
                 }
 
@@ -739,6 +958,7 @@ impl SshPanel {
             input_tx: None,
             resize_tx: None,
             status: SessionStatus::Connecting,
+            zm_state: ZmUiState::default(),
         });
         self.active_tab = self.sessions.len() - 1;
         cx.notify();
@@ -802,6 +1022,12 @@ impl SshPanel {
             .get(active)
             .map(|s| s.connection.is_some())
             .unwrap_or(false);
+
+        let active_zm_state = self
+            .sessions
+            .get(active)
+            .map(|s| s.zm_state.clone())
+            .unwrap_or_default();
 
         v_flex()
             .size_full()
@@ -921,6 +1147,59 @@ impl SshPanel {
                     .overflow_hidden()
                     .child(content),
             )
+            // ZMODEM progress bar: visible during an active transfer, and
+            // briefly after success/error. Cancelled transfers don't show.
+            .when(
+                active_zm_state.active
+                    || (active_zm_state.done && !active_zm_state.cancelled)
+                    || active_zm_state.error.is_some(),
+                |c| {
+                    let zm = &active_zm_state;
+                    let pct = if zm.total == 0 {
+                        0.0
+                    } else {
+                        (zm.transferred as f64 / zm.total as f64).clamp(0.0, 1.0)
+                    };
+                    let bar_w = 220.0 * pct;
+                    let arrow = match zm.role {
+                        crate::ssh::zmodem::ZmRole::SendToRemote => "↑",
+                        crate::ssh::zmodem::ZmRole::ReceiveFromRemote => "↓",
+                    };
+                    let label = if let Some(err) = &zm.error {
+                        format!("{arrow} rz/sz 错误: {err}")
+                    } else if zm.done {
+                        format!("{arrow} {} 传输完成", zm.filename)
+                    } else {
+                        format!(
+                            "{arrow} {}  {} / {}",
+                            zm.filename,
+                            crate::ssh::sftp::humanize_size(zm.transferred),
+                            crate::ssh::sftp::humanize_size(zm.total),
+                        )
+                    };
+                    c.child(
+                        h_flex()
+                            .h(px(22.))
+                            .px_3()
+                            .gap_2()
+                            .items_center()
+                            .border_t_1()
+                            .border_color(border)
+                            .bg(theme.muted)
+                            .child(div().text_xs().child(label))
+                            .when(!zm.done && zm.error.is_none(), |row| {
+                                row.child(
+                                    div()
+                                        .w(px(220.))
+                                        .h(px(6.))
+                                        .rounded(px(3.))
+                                        .bg(border)
+                                        .child(div().w(px(bar_w as f32)).h_full().rounded(px(3.)).bg(accent)),
+                                )
+                            }),
+                    )
+                },
+            )
             // Status bar.
             .child(
                 h_flex()
@@ -996,6 +1275,68 @@ impl SshPanel {
             }
             if self.sessions.is_empty() {
                 self.active_tab = 0;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Apply a ZMODEM event received from the pump thread to the session
+    /// matching `host_id`.
+    fn handle_zm_event(
+        &mut self,
+        host_id: &str,
+        ev: crate::ssh::zmodem::ZmEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ssh::zmodem::ZmEvent::*;
+        let Some(s) = self.sessions.iter_mut().find(|s| s.host_id == host_id) else {
+            return;
+        };
+        match ev {
+            Started {
+                filename,
+                total,
+                role,
+            } => {
+                s.zm_state = ZmUiState {
+                    active: true,
+                    filename,
+                    total,
+                    transferred: 0,
+                    role,
+                    done: false,
+                    error: None,
+                    cancelled: false,
+                };
+            }
+            Progress {
+                transferred,
+                total,
+                ..
+            } => {
+                s.zm_state.transferred = transferred;
+                s.zm_state.total = total;
+            }
+            Completed { filename, .. } => {
+                s.zm_state.active = false;
+                s.zm_state.done = true;
+                s.zm_state.filename = filename;
+            }
+            Cancelled => {
+                // User (or remote) cancelled; cleanly return to terminal.
+                s.zm_state.active = false;
+                s.zm_state.done = true;
+                s.zm_state.cancelled = true;
+                s.zm_state.error = None;
+            }
+            Error { message } => {
+                s.zm_state.active = false;
+                s.zm_state.done = true;
+                s.zm_state.error = Some(message);
+            }
+            NeedSavePath { .. } | NeedFileToSend => {
+                // These are intercepted at the pump match arms (we convert
+                // them to dedicated PumpMsg variants) and never reach here.
             }
         }
         cx.notify();

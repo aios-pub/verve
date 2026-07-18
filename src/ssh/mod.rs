@@ -8,6 +8,7 @@ pub mod models;
 pub mod sftp;
 pub mod terminal;
 pub mod vault;
+pub mod zmodem;
 
 /// Global mutex for serializing HOME-dependent tests across all ssh submodules.
 #[cfg(test)]

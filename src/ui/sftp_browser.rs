@@ -28,6 +28,8 @@ pub enum SftpCmd {
     Mkdir { parent: String, name: String },
     Rename { from: String, to: String },
     Remove { path: String, is_dir: bool },
+    /// Recursively remove a directory and all its contents (like `rm -rf`).
+    RemoveDirAll { path: String },
     Upload { local: PathBuf, remote: String, id: String },
     Download { remote: String, local: PathBuf, id: String },
 }
@@ -94,8 +96,22 @@ impl SftpBrowser {
             SftpEvent::MkdirDone { parent } => {
                 let _ = self.send_cmd(SftpCmd::ListDir { path: parent });
             }
-            SftpEvent::RenameDone | SftpEvent::RemoveDone => {
+            SftpEvent::RenameDone => {
                 self.refresh(cx);
+            }
+            SftpEvent::RemoveDone { removed_path } => {
+                // If we're currently inside (or equal to) the removed path,
+                // jump to parent; otherwise just refresh the current dir.
+                let cur = self.current_path.trim_end_matches('/');
+                let rm = removed_path.trim_end_matches('/');
+                let should_cd_up = cur == rm
+                    || rm == "/"
+                    || cur.starts_with(&format!("{}/", rm));
+                if should_cd_up {
+                    self.cd_parent(cx);
+                } else {
+                    self.refresh(cx);
+                }
             }
             SftpEvent::Transfer(tp) => match tp {
                 TransferProgress::Started {
@@ -180,6 +196,26 @@ impl SftpBrowser {
         }
     }
 
+    /// Navigate to the parent directory. At root this is a no-op.
+    pub fn cd_parent(&mut self, cx: &mut Context<Self>) {
+        let path = self.current_path.trim_end_matches('/');
+        if path.is_empty() || path == "/" {
+            return;
+        }
+        let parent = match path.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(idx) => path[..idx].to_string(),
+            None => return,
+        };
+        self.cd(parent, cx);
+    }
+
+    /// Alias for refresh used by the UI.
+    pub fn retry(&mut self, cx: &mut Context<Self>) {
+        self.error = None;
+        self.refresh(cx);
+    }
+
     /// Enqueue a single upload.
     pub fn enqueue_upload(&mut self, local: PathBuf, _cx: &mut Context<Self>) {
         let filename = local
@@ -261,6 +297,68 @@ impl SftpBrowser {
             }
         })
         .detach();
+    }
+
+    /// Open a confirmation dialog before deleting a remote path. For directories,
+    /// warns that all contents will be removed and uses recursive delete.
+    pub fn confirm_delete(
+        &mut self,
+        path: String,
+        name: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity();
+        let name_for_content = name.clone();
+        let name_for_footer = name.clone();
+        let path_for_content = path.clone();
+        let path_for_footer = path.clone();
+        let entity_for_footer = entity.clone();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let body_content = if is_dir {
+                format!(
+                    "确定要删除「{}」及其下所有文件/子文件夹吗？此操作不可撤销。",
+                    name_for_content
+                )
+            } else {
+                format!("确定要删除「{}」吗？此操作不可撤销。", name_for_content)
+            };
+            let title = if is_dir { "删除文件夹" } else { "删除文件" };
+            let confirm_label = if is_dir { "删除全部" } else { "删除" };
+            dialog
+                .title(title)
+                .content(move |content, _, _| {
+                    content.child(
+                        v_flex().p_4().w(px(360.)).gap_2().child(
+                            div()
+                                .text_sm()
+                                .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
+                                .child(body_content.clone()),
+                        ),
+                    )
+                })
+                .footer({
+                    let path = path_for_footer.clone();
+                    let entity = entity_for_footer.clone();
+                    Button::new("sftp-del-confirm")
+                        .primary()
+                        .small()
+                        .label(confirm_label)
+                        .on_click(move |_ev, window, cx| {
+                            window.close_dialog(cx);
+                            let path = path.clone();
+                            let _ = entity.update(cx, move |this, _cx| {
+                                if is_dir {
+                                    let _ = this.send_cmd(SftpCmd::RemoveDirAll { path });
+                                } else {
+                                    let _ = this.send_cmd(SftpCmd::Remove { path, is_dir });
+                                }
+                            });
+                        })
+                })
+        });
+        let _ = (path_for_content, name_for_footer);
     }
 
     /// Open a dialog with a text input for the new folder name, then send
@@ -350,6 +448,16 @@ impl Render for SftpBrowser {
                     .border_b_1()
                     .border_color(border)
                     .bg(theme.muted)
+                    .child(
+                        Button::new("sftp-parent")
+                            .ghost()
+                            .xsmall()
+                            .label("← 上级")
+                            .tooltip("返回上级目录")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cd_parent(cx);
+                            })),
+                    )
                     .child(
                         Button::new("sftp-refresh")
                             .ghost()
@@ -452,11 +560,38 @@ impl Render for SftpBrowser {
                             );
                         } else if let Some(err) = error {
                             rows.push(
-                                div()
-                                    .p_3()
-                                    .text_sm()
-                                    .text_color(theme.danger)
-                                    .child(format!("错误: {err}"))
+                                v_flex()
+                                    .p_4()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.danger)
+                                            .child(format!("错误: {err}")),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("sftp-err-retry")
+                                                    .primary()
+                                                    .xsmall()
+                                                    .label("重试")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.retry(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("sftp-err-up")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .label("返回上级")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.error = None;
+                                                        this.cd_parent(cx);
+                                                    })),
+                                            ),
+                                    )
                                     .into_any_element(),
                             );
                         } else if entries.is_empty() {
@@ -491,6 +626,7 @@ impl Render for SftpBrowser {
                                 let path_for_cd = entry.path.clone();
                                 let e_is_dir = entry.is_dir;
                                 let name = entry.name.clone();
+                                let name_for_del = name.clone();
                                 rows.push(
                                     h_flex()
                                         .h(px(28.))
@@ -545,15 +681,19 @@ impl Render for SftpBrowser {
                                                         .label("🗑")
                                                         .text_color(theme.danger)
                                                         .tooltip("删除")
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            let path = path_for_dl.clone();
-                                                            let is_dir = e_is_dir;
-                                                            let _ = this.send_cmd(SftpCmd::Remove {
-                                                                path,
-                                                                is_dir,
-                                                            });
-                                                            cx.notify();
-                                                        })),
+                                                        .on_click({
+                                                            let path_for_dl = path_for_dl.clone();
+                                                            let name_for_btn = name_for_del.clone();
+                                                            cx.listener(move |this, _, window, cx| {
+                                                                this.confirm_delete(
+                                                                    path_for_dl.clone(),
+                                                                    name_for_btn.clone(),
+                                                                    e_is_dir,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            })
+                                                        }),
                                                 ),
                                         )
                                         .into_any_element(),
@@ -720,7 +860,14 @@ fn spawn_sftp_actor(
                                 sftp.remove_file(&path).await
                             };
                             let ev = match res {
-                                Ok(()) => SftpEvent::RemoveDone,
+                                Ok(()) => SftpEvent::RemoveDone { removed_path: path },
+                                Err(e) => SftpEvent::Error { message: e },
+                            };
+                            let _ = event_tx.send(ev);
+                        }
+                        SftpCmd::RemoveDirAll { path } => {
+                            let ev = match sftp.remove_dir_all(&path).await {
+                                Ok(()) => SftpEvent::RemoveDone { removed_path: path },
                                 Err(e) => SftpEvent::Error { message: e },
                             };
                             let _ = event_tx.send(ev);
@@ -791,7 +938,7 @@ pub enum SftpEvent {
         parent: String,
     },
     RenameDone,
-    RemoveDone,
+    RemoveDone { removed_path: String },
     Transfer(TransferProgress),
     Error {
         message: String,

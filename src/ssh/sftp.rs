@@ -187,6 +187,54 @@ impl SftpSessionWrapper {
             .map_err(|e| format!("删除目录失败: {e}"))
     }
 
+    /// Recursively remove a directory and all of its contents (files,
+    /// subdirectories, symlinks). Mirrors `rm -rf`.
+    ///
+    /// Strategy: for each child entry, first try `remove_file` (works for
+    /// regular files and symlinks, including symlinks to directories). If
+    /// that fails with an error that looks like "this is a directory", fall
+    /// back to recursing. This handles servers whose readdir attrs do not
+    /// reliably report the file type (missing permissions field, etc.).
+    pub async fn remove_dir_all(&self, path: &str) -> Result<(), String> {
+        // Normalize: strip trailing slashes, but "/" must stay as "/".
+        let path = if path == "/" {
+            "/"
+        } else {
+            path.trim_end_matches('/')
+        };
+        if path.is_empty() {
+            return Err("拒绝删除根目录".into());
+        }
+        let entries = self.list_dir(path).await?;
+        for entry in entries {
+            let child = &entry.path;
+            if entry.is_dir {
+                // Reported as a directory: recurse.
+                Box::pin(self.remove_dir_all(child)).await?;
+            } else {
+                // Try as a file (also covers symlinks). On failure, fall back
+                // to treating it as a directory (covers mislabeled entries).
+                match self.remove_file(child).await {
+                    Ok(()) => {}
+                    Err(file_err) => {
+                        match Box::pin(self.remove_dir_all(child)).await {
+                            Ok(()) => {}
+                            Err(dir_err) => {
+                                return Err(format!(
+                                    "删除 {} 失败（文件: {}；目录: {}）",
+                                    child, file_err, dir_err
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.remove_dir(path).await.map_err(|e| {
+            format!("删除目录 {} 失败（可能非空）: {}", path, e)
+        })
+    }
+
     /// Rename (move) a remote path.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), String> {
         self.sftp

@@ -116,12 +116,15 @@ gix = { version = "0.69", default-features = false, features = [
 
 # SSH client: russh (pure-Rust, no C deps) + terminal model + secure storage.
 russh = "0.60"
+russh-sftp = "2.3"
 alacritty_terminal = "0.24"
 aes-gcm = "0.10"
 argon2 = "0.5"
 zeroize = "1"
 secrecy = "0.8"
 bincode = "1"
+# Native file open/save dialogs for SFTP upload/download (cross-platform, async-safe).
+rfd = "0.15"
 # Semantic version comparison for the auto-update check.
 semver = "1"
 

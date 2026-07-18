@@ -14,9 +14,11 @@ use gpui_component::{
     h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
 
+use crate::ssh::client::SshConnection;
 use crate::ssh::host_store;
 use crate::ssh::models::SshHost;
 use crate::ssh::terminal::TerminalView;
+use crate::ui::sftp_browser::SftpBrowser;
 
 /// Events the SSH panel emits upward.
 #[derive(Clone, Debug)]
@@ -31,15 +33,31 @@ enum PumpMsg {
     Data(Vec<u8>),
     InputTx(tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
     ResizeTx(tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>),
+    /// A connection has been established (used to make Sftp available on demand).
+    Connected(crate::ssh::client::SshConnection),
     Closed(Option<u32>),
     Error(String),
     Disconnected,
 }
 
+/// Which view is active within a session tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionView {
+    Terminal,
+    Sftp,
+}
+
 /// One active terminal session.
 pub struct TerminalSession {
     pub host_name: String,
+    pub host_id: String,
     pub terminal: Entity<TerminalView>,
+    /// SFTP file browser, initialized lazily when the user first switches to
+    /// the Files view.
+    pub sftp_browser: Option<Entity<SftpBrowser>>,
+    pub view: SessionView,
+    /// Shared authenticated SSH connection (used to open SFTP on demand).
+    pub connection: Option<SshConnection>,
     /// Input sender for writing keystrokes to SSH.
     pub input_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     /// Resize sender for terminal size changes.
@@ -452,6 +470,8 @@ impl SshPanel {
     /// Start a new SSH session.
     fn start_session(&mut self, host: SshHost, cx: &mut Context<Self>) {
         let host_name = host.name.clone();
+        let host_id = host.id.clone();
+        let host_id_for_session = host_id.clone();
 
         // Force-switch to English input method on macOS when opening a new
         // SSH session. Uses AppleScript to select the ABC/US keyboard layout.
@@ -473,6 +493,8 @@ impl SshPanel {
         // Spawn the SSH connection on a background Tokio task.
         let terminal_for_task = terminal.clone();
         let host_for_task = host.clone();
+        // Weak entity reference so we can stash the SshConnection on the session.
+        let panel_for_task = cx.entity().downgrade();
 
         cx.spawn(async move |_this, cx| {
             let mut attempt = 0usize;
@@ -489,6 +511,11 @@ impl SshPanel {
                 >();
                 let (resize_tx_tx, mut resize_tx_rx) = tokio::sync::mpsc::unbounded_channel::<
                     tokio::sync::mpsc::UnboundedSender<crate::ssh::client::ResizeCmd>,
+                >();
+                // The SshConnection is sent back to the UI once established so
+                // the SFTP view can open_sftp() on demand.
+                let (conn_tx, mut conn_rx) = tokio::sync::mpsc::unbounded_channel::<
+                    crate::ssh::client::SshConnection,
                 >();
 
                 // Show connecting / reconnecting status.
@@ -508,13 +535,23 @@ impl SshPanel {
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                     rt.block_on(async move {
-                        match crate::ssh::client::connect(&host_connect, 180, 50).await {
-                            Ok(mut session) => {
-                                let _ = input_tx_tx.send(session.input_tx);
-                                let _ = resize_tx_tx.send(session.resize_tx);
-                                while let Some(msg) = session.output_rx.recv().await {
-                                    if tx.send(msg).is_err() {
-                                        break;
+                        match crate::ssh::client::SshConnection::connect(&host_connect).await {
+                            Ok(conn) => {
+                                // Open a PTY shell on this connection.
+                                match conn.open_shell(180, 50).await {
+                                    Ok(mut session) => {
+                                        let _ = conn_tx.send(conn);
+                                        let _ = input_tx_tx.send(session.input_tx);
+                                        let _ = resize_tx_tx.send(session.resize_tx);
+                                        while let Some(msg) = session.output_rx.recv().await {
+                                            if tx.send(msg).is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("SSH open_shell attempt {}: {e}", attempt);
+                                        let _ = tx.send(crate::ssh::client::SshOutput::Error(e));
                                     }
                                 }
                             }
@@ -540,6 +577,9 @@ impl SshPanel {
                         let mut disconnected = false;
                         loop {
                             tokio::select! {
+                                Some(conn) = conn_rx.recv() => {
+                                    let _ = pump_tx_clone.send(PumpMsg::Connected(conn));
+                                }
                                 Some(tx) = input_tx_rx.recv() => {
                                     let _ = pump_tx_clone.send(PumpMsg::InputTx(tx));
                                 }
@@ -579,6 +619,27 @@ impl SshPanel {
                 let mut got_disconnected = false;
                 while let Some(msg) = pump_rx.recv().await {
                     match msg {
+                        PumpMsg::Connected(conn) => {
+                            // Stash the SshConnection on the matching session
+                            // immediately so the Files-view toggle becomes
+                            // usable and can open_sftp() on demand.
+                            if let Some(panel) = panel_for_task.upgrade() {
+                                let hid = host_id.clone();
+                                let _ = panel.update(cx, move |this, cx| {
+                                    if let Some(s) =
+                                        this.sessions.iter_mut().find(|s| s.host_id == hid)
+                                    {
+                                        s.connection = Some(conn);
+                                        s.status = SessionStatus::Connected;
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                            let _ = terminal_clone.update(cx, |tv, cx| {
+                                tv.status_connected();
+                                cx.notify();
+                            });
+                        }
                         PumpMsg::Data(data) => {
                             let _ = terminal_clone.update(cx, |tv, cx| {
                                 tv.feed(&data);
@@ -605,6 +666,19 @@ impl SshPanel {
                                 tv.feed(m.as_bytes());
                                 cx.notify();
                             });
+                            // Mark the session as closed so the SFTP toggle is
+                            // disabled again.
+                            if let Some(panel) = panel_for_task.upgrade() {
+                                let hid = host_id.clone();
+                                let _ = panel.update(cx, move |this, cx| {
+                                    if let Some(s) =
+                                        this.sessions.iter_mut().find(|s| s.host_id == hid)
+                                    {
+                                        s.status = SessionStatus::Closed;
+                                        cx.notify();
+                                    }
+                                });
+                            }
                             got_disconnected = false;
                             break;
                         }
@@ -657,7 +731,11 @@ impl SshPanel {
         // Add the session tab.
         self.sessions.push(TerminalSession {
             host_name,
+            host_id: host_id_for_session,
             terminal,
+            sftp_browser: None,
+            view: SessionView::Terminal,
+            connection: None,
             input_tx: None,
             resize_tx: None,
             status: SessionStatus::Connecting,
@@ -666,7 +744,7 @@ impl SshPanel {
         cx.notify();
     }
 
-    /// Render the multi-tab terminal view.
+    /// Render the multi-tab terminal/SFTP view.
     fn render_terminal_view(
         &mut self,
         cx: &mut Context<Self>,
@@ -679,23 +757,51 @@ impl SshPanel {
         let accent = theme.accent;
         let active = self.active_tab;
 
-        // Safety: we know sessions is non-empty (checked in render).
-        let active_terminal = self
+        let active_view = self
             .sessions
             .get(active)
-            .map(|s| s.terminal.clone())
-            .unwrap_or_else(|| {
-                self.sessions
-                    .first()
-                    .map(|s| s.terminal.clone())
-                    .expect("sessions non-empty")
-            });
+            .map(|s| s.view)
+            .unwrap_or(SessionView::Terminal);
+
+        // Lazily initialize the SFTP browser if the active tab is in Sftp view
+        // and the browser hasn't been created yet.
+        self.ensure_active_sftp_browser(cx);
+
+        // Resolve the content element based on view mode.
+        let content: AnyElement = if active_view == SessionView::Sftp {
+            self.sessions
+                .get(active)
+                .and_then(|s| s.sftp_browser.clone())
+                .map(|b| b.into_any_element())
+                .unwrap_or_else(|| {
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_4()
+                        .text_color(muted)
+                        .text_sm()
+                        .child("正在打开 SFTP…")
+                        .into_any_element()
+                })
+        } else {
+            self.sessions
+                .get(active)
+                .map(|s| s.terminal.clone().into_any_element())
+                .unwrap_or_else(|| div().into_any_element())
+        };
 
         let active_status = self
             .sessions
             .get(active)
             .map(|s| s.status.clone())
             .unwrap_or(SessionStatus::Closed);
+
+        // Whether the active tab has a connection ready (for enabling Files button).
+        let active_has_conn = self
+            .sessions
+            .get(active)
+            .map(|s| s.connection.is_some())
+            .unwrap_or(false);
 
         v_flex()
             .size_full()
@@ -705,7 +811,6 @@ impl SshPanel {
             .text_color(fg)
             // Tab bar — sits at the very top, SAME LINE as the macOS
             // traffic-light buttons. Left padding (78px) clears them.
-            // No top spacing — the bar IS the top bar (like Safari tabs).
             .child(
                 h_flex()
                     .h(px(38.))
@@ -713,6 +818,7 @@ impl SshPanel {
                     .when(!cfg!(target_os = "macos"), |this| this.pl_2())
                     .pr_2()
                     .items_center()
+                    .gap_1()
                     .border_b_1()
                     .border_color(border)
                     .bg(theme.muted)
@@ -757,20 +863,63 @@ impl SshPanel {
                             .icon(IconName::Plus)
                             .tooltip("新建连接")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                // Show host list overlay — keep existing sessions alive.
                                 this.show_host_picker = true;
                                 cx.notify();
                             })),
+                    )
+                    .child(div().flex_1())
+                    // View toggle: Terminal / Files
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .pr_2()
+                            .child(
+                                Button::new("ssh-view-terminal")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("终端")
+                                    .when(active_view == SessionView::Terminal, |b| {
+                                        b.primary()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
+                                            s.view = SessionView::Terminal;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child({
+                                let can_open = active_has_conn;
+                                Button::new("ssh-view-files")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("文件")
+                                    .when(active_view == SessionView::Sftp, |b| b.primary())
+                                    .tooltip(if can_open {
+                                        "文件浏览器（SFTP）"
+                                    } else {
+                                        "等待连接建立…"
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !can_open {
+                                            return;
+                                        }
+                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
+                                            s.view = SessionView::Sftp;
+                                        }
+                                        cx.notify();
+                                    }))
+                            }),
                     ),
             )
-            // Terminal area — scrollable so all content is visible.
+            // Content area.
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .id("ssh-terminal-area")
-                    .overflow_y_scroll()
-                    .child(active_terminal.clone()),
+                    .id("ssh-content-area")
+                    .overflow_hidden()
+                    .child(content),
             )
             // Status bar.
             .child(
@@ -804,6 +953,36 @@ impl SshPanel {
                     )
                     .child(div().flex_1()),
             )
+    }
+
+    /// Lazily create + bind the SFTP browser for the active session when the
+    /// user switches to Files view.
+    fn ensure_active_sftp_browser(&mut self, cx: &mut Context<Self>) {
+        let idx = self.active_tab;
+        let Some(session) = self.sessions.get_mut(idx) else {
+            return;
+        };
+        if session.view != SessionView::Sftp {
+            return;
+        }
+        if session.sftp_browser.is_some() {
+            return;
+        }
+        // Need a live connection to open SFTP.
+        let Some(conn) = session.connection.clone() else {
+            return;
+        };
+        let host_name = session.host_name.clone();
+        // Create the browser entity with a placeholder path. bind_sftp_browser
+        // will open SFTP, canonicalize "~", spawn the actor, and kick off listing.
+        let browser = cx.new(|cx| {
+            let mut b = SftpBrowser::new(host_name, "~".to_string(), cx);
+            crate::ui::sftp_browser::bind_sftp_browser(&mut b, conn, cx);
+            b
+        });
+        session.sftp_browser = Some(browser);
+
+        cx.notify();
     }
 
     /// Close a terminal session by tab index.

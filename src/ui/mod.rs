@@ -14,6 +14,7 @@ pub mod response_panel;
 pub mod settings_window;
 pub mod share_dialog;
 pub mod share_panel;
+pub mod sftp_browser;
 pub mod ssh_host_dialog;
 pub mod ssh_panel;
 pub mod theme;

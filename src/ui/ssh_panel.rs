@@ -15,6 +15,7 @@ use gpui_component::{
 };
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ssh::client::SshConnection;
 use crate::ssh::host_store;
@@ -37,6 +38,13 @@ enum ZmPathReply {
     Send(Option<PathBuf>),
 }
 
+/// Monotonic counter so session uids are unique even when two sessions are
+/// created within the same nanosecond.
+static SESSION_UID_COUNTER: AtomicU64 = AtomicU64::new(1);
+fn rand_session_seed() -> u64 {
+    SESSION_UID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Messages from the SSH pump thread back to GPUI's executor.
 enum PumpMsg {
     Data(Vec<u8>),
@@ -47,15 +55,21 @@ enum PumpMsg {
     Closed(Option<u32>),
     Error(String),
     Disconnected,
-    /// ZMODEM UI event (started/progress/completed/error).
-    ZmEvent(crate::ssh::zmodem::ZmEvent),
+    /// ZMODEM UI event (started/progress/completed/error). Carries the
+    /// originating session's uid so multi-tab events are routed correctly.
+    ZmEvent {
+        uid: u64,
+        event: crate::ssh::zmodem::ZmEvent,
+    },
     /// ZMODEM needs a save path for an incoming file. UI must reply via reply_tx.
     ZmNeedSavePath {
+        uid: u64,
         suggested_name: String,
         reply_tx: tokio::sync::mpsc::UnboundedSender<ZmPathReply>,
     },
     /// ZMODEM needs a file to send. UI must reply via reply_tx.
     ZmNeedFileToSend {
+        uid: u64,
         reply_tx: tokio::sync::mpsc::UnboundedSender<ZmPathReply>,
     },
 }
@@ -71,6 +85,10 @@ pub enum SessionView {
 pub struct TerminalSession {
     pub host_name: String,
     pub host_id: String,
+    /// Unique-per-session random id (u64) so concurrent tabs for the same
+    /// host can route ZMODEM events independently (host_id is shared across
+    /// all tabs for the same host, which would cause cross-tab bleed).
+    pub session_uid: u64,
     pub terminal: Entity<TerminalView>,
     /// SFTP file browser, initialized lazily when the user first switches to
     /// the Files view.
@@ -522,6 +540,14 @@ impl SshPanel {
         let host_name = host.name.clone();
         let host_id = host.id.clone();
         let host_id_for_session = host_id.clone();
+        // Generate a unique per-session id so concurrent tabs for the same
+        // host don't bleed zmodem events into each other.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let session_uid = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ rand_session_seed();
 
         // Force-switch to English input method on macOS when opening a new
         // SSH session. Uses AppleScript to select the ABC/US keyboard layout.
@@ -545,6 +571,7 @@ impl SshPanel {
         let host_for_task = host.clone();
         // Weak entity reference so we can stash the SshConnection on the session.
         let panel_for_task = cx.entity().downgrade();
+        let session_uid_for_task = session_uid;
 
         cx.spawn(async move |_this, cx| {
             let mut attempt = 0usize;
@@ -638,12 +665,30 @@ impl SshPanel {
                         let mut detector = ZmodemDetector::new();
                         // Active zmodem session, if any.
                         let mut zm: Option<ZmodemSession> = None;
-                        // After a cancel, ignore any data for a short grace
-                        // period so lrzsz's abort response isn't re-parsed as
-                        // a new trigger and the terminal isn't polluted.
-                        let mut cancel_grace_bytes_remaining: usize = 0;
+                        // After an abort/error, briefly suspend trigger
+                        // detection so lrzsz's in-flight retransmit frames
+                        // aren't re-parsed as a new session (which would pop
+                        // a phantom file dialog). TIME based, not byte based:
+                        // a byte-count grace swallows a deliberately
+                        // re-run `rz`/`sz`, because the terminal output
+                        // between two transfers is far smaller than any sane
+                        // byte budget. Clean completions get NO grace — the
+                        // closing handshake already drained the wire, so a
+                        // following transfer must be detected immediately.
+                        let mut zm_grace_until: Option<std::time::Instant> = None;
+                        let zm_grace = |cancelled: bool| -> Option<std::time::Instant> {
+                            if cancelled {
+                                Some(
+                                    std::time::Instant::now()
+                                        + std::time::Duration::from_millis(1500),
+                                )
+                            } else {
+                                None
+                            }
+                        };
 
                         // Helper: drain outgoing bytes + events.
+                        let zm_uid = session_uid;
                         let mut drain_zm = |zm: &mut ZmodemSession,
                                             input_tx: &Option<
                             tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
@@ -664,16 +709,21 @@ impl SshPanel {
                                 let wrapped = match ev {
                                     crate::ssh::zmodem::ZmEvent::NeedSavePath { suggested_name } => {
                                         PumpMsg::ZmNeedSavePath {
+                                            uid: zm_uid,
                                             suggested_name,
                                             reply_tx: reply_tx.clone(),
                                         }
                                     }
                                     crate::ssh::zmodem::ZmEvent::NeedFileToSend => {
                                         PumpMsg::ZmNeedFileToSend {
+                                            uid: zm_uid,
                                             reply_tx: reply_tx.clone(),
                                         }
                                     }
-                                    other => PumpMsg::ZmEvent(other),
+                                    other => PumpMsg::ZmEvent {
+                                        uid: zm_uid,
+                                        event: other,
+                                    },
                                 };
                                 let _ = pump_tx.send(wrapped);
                             }
@@ -702,14 +752,9 @@ impl SshPanel {
                                         session.resume();
                                         drain_zm(session, &input_tx, &pump_tx_clone, &path_reply_tx);
                                         if session.is_done() {
+                                            zm_grace_until = zm_grace(session.was_cancelled());
                                             zm = None;
                                             detector.reset();
-                                            // Swallow up to 2 KB of trailing data
-                                            // (lrzsz's cancel/error messages are
-                                            // short and should be displayed,
-                                            // but we skip any leftover ZMODEM
-                                            // frames to prevent re-trigger).
-                                            cancel_grace_bytes_remaining = 2048;
                                         }
                                     }
                                 }
@@ -724,49 +769,40 @@ impl SshPanel {
                                                 session.feed(&data);
                                                 drain_zm(session, &input_tx, &pump_tx_clone, &path_reply_tx);
                                                 if session.is_done() {
+                                                    zm_grace_until = zm_grace(session.was_cancelled());
                                                     zm = None;
                                                     detector.reset();
-                                                    // Briefly disable trigger detection
-                                                    // to swallow any leftover ZMODEM
-                                                    // frames after our ZCAN; bytes still
-                                                    // flow to the terminal so the user
-                                                    // sees the shell prompt.
-                                                    cancel_grace_bytes_remaining = 2048;
                                                 }
                                             } else {
-                                                let mut remaining = &data[..];
-                                                if cancel_grace_bytes_remaining > 0 {
-                                                    let skip = remaining.len().min(cancel_grace_bytes_remaining);
-                                                    cancel_grace_bytes_remaining -= skip;
-                                                    remaining = &remaining[skip..];
-                                                    if remaining.is_empty() {
-                                                        // All skipped; forward none.
-                                                        // But we still want visible
-                                                        // output (shell error messages).
-                                                        // Forward the whole chunk to
-                                                        // the terminal — the grace
-                                                        // period only disables trigger
-                                                        // detection.
-                                                        let _ = pump_tx_clone.send(PumpMsg::Data(data.clone()));
-                                                        continue;
-                                                    }
-                                                }
-                                                let to_scan = remaining.to_vec();
-                                                if let Some(_trigger_idx) = detector.feed(&to_scan) {
-                                                    // Trigger only in non-grace portion.
-                                                    let mut session = ZmodemSession::new();
-                                                    session.feed(&data);
-                                                    drain_zm(&mut session, &input_tx, &pump_tx_clone, &path_reply_tx);
-                                                    if !session.is_done() {
-                                                        zm = Some(session);
+                                                // Post-abort grace window: keep
+                                                // forwarding bytes to the terminal
+                                                // (abort messages stay visible) but
+                                                // don't scan for a new trigger, so
+                                                // in-flight lrzsz retransmits can't
+                                                // spawn a phantom session.
+                                                let in_grace = zm_grace_until
+                                                    .map(|t| std::time::Instant::now() < t)
+                                                    .unwrap_or(false);
+                                                if in_grace {
+                                                    let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                                } else {
+                                                    zm_grace_until = None;
+                                                    if let Some(_trigger_idx) = detector.feed(&data) {
+                                                        let mut session = ZmodemSession::new();
+                                                        session.feed(&data);
+                                                        drain_zm(&mut session, &input_tx, &pump_tx_clone, &path_reply_tx);
+                                                        if !session.is_done() {
+                                                            zm = Some(session);
+                                                        } else {
+                                                            zm_grace_until =
+                                                                zm_grace(session.was_cancelled());
+                                                            detector.reset();
+                                                            // Forward any non-ZMODEM bytes.
+                                                            let _ = pump_tx_clone.send(PumpMsg::Data(data));
+                                                        }
                                                     } else {
-                                                        detector.reset();
-                                                        cancel_grace_bytes_remaining = 2048;
-                                                        // Forward any non-ZMODEM bytes.
                                                         let _ = pump_tx_clone.send(PumpMsg::Data(data));
                                                     }
-                                                } else {
-                                                    let _ = pump_tx_clone.send(PumpMsg::Data(data));
                                                 }
                                             }
                                         }
@@ -792,6 +828,7 @@ impl SshPanel {
 
                 // Receive pump messages on GPUI's executor and update the terminal.
                 let mut got_disconnected = false;
+                let session_uid = session_uid_for_task;
                 while let Some(msg) = pump_rx.recv().await {
                     match msg {
                         PumpMsg::Connected(conn) => {
@@ -799,10 +836,12 @@ impl SshPanel {
                             // immediately so the Files-view toggle becomes
                             // usable and can open_sftp() on demand.
                             if let Some(panel) = panel_for_task.upgrade() {
-                                let hid = host_id.clone();
+                                let uid = session_uid;
                                 let _ = panel.update(cx, move |this, cx| {
-                                    if let Some(s) =
-                                        this.sessions.iter_mut().find(|s| s.host_id == hid)
+                                    if let Some(s) = this
+                                        .sessions
+                                        .iter_mut()
+                                        .find(|s| s.session_uid == uid)
                                     {
                                         s.connection = Some(conn);
                                         s.status = SessionStatus::Connected;
@@ -841,13 +880,13 @@ impl SshPanel {
                                 tv.feed(m.as_bytes());
                                 cx.notify();
                             });
-                            // Mark the session as closed so the SFTP toggle is
-                            // disabled again.
                             if let Some(panel) = panel_for_task.upgrade() {
-                                let hid = host_id.clone();
+                                let uid = session_uid;
                                 let _ = panel.update(cx, move |this, cx| {
-                                    if let Some(s) =
-                                        this.sessions.iter_mut().find(|s| s.host_id == hid)
+                                    if let Some(s) = this
+                                        .sessions
+                                        .iter_mut()
+                                        .find(|s| s.session_uid == uid)
                                     {
                                         s.status = SessionStatus::Closed;
                                         cx.notify();
@@ -871,21 +910,21 @@ impl SshPanel {
                             got_disconnected = true;
                             break;
                         }
-                        PumpMsg::ZmEvent(ev) => {
+                        PumpMsg::ZmEvent { uid, event } => {
                             if let Some(panel) = panel_for_task.upgrade() {
-                                let hid = host_id.clone();
                                 let _ = panel.update(cx, move |this, cx| {
-                                    this.handle_zm_event(&hid, ev, cx);
+                                    this.handle_zm_event(uid, event, cx);
                                 });
                             }
                         }
                         PumpMsg::ZmNeedSavePath {
+                            uid: _uid,
                             suggested_name,
                             reply_tx,
                         } => {
-                            // Ask the user where to save. We run a synchronous
-                            // channel receive on a background thread so the
-                            // rfd dialog works, then send the reply.
+                            // Ask the user where to save. We run the dialog on
+                            // a dedicated thread (rfd requires a platform event
+                            // loop) and send the reply through the channel.
                             let tx = reply_tx.clone();
                             cx.background_executor().spawn(async move {
                                 let (tx2, rx2) = std::sync::mpsc::channel::<Option<PathBuf>>();
@@ -899,11 +938,11 @@ impl SshPanel {
                                 let _ = tx.send(ZmPathReply::Save(chosen));
                             }).detach();
                         }
-                        PumpMsg::ZmNeedFileToSend { reply_tx } => {
-                            // Native open-file dialog via rfd (same pattern as
-                            // SFTP uploads; GPUI's prompt_for_paths isn't
-                            // accessible from AsyncApp so we use rfd on a
-                            // dedicated thread).
+                        PumpMsg::ZmNeedFileToSend {
+                            uid: _uid,
+                            reply_tx,
+                        } => {
+                            // Native open-file dialog via rfd.
                             let tx = reply_tx.clone();
                             cx.background_executor().spawn(async move {
                                 let (tx2, rx2) = std::sync::mpsc::channel::<Option<PathBuf>>();
@@ -951,6 +990,7 @@ impl SshPanel {
         self.sessions.push(TerminalSession {
             host_name,
             host_id: host_id_for_session,
+            session_uid,
             terminal,
             sftp_browser: None,
             view: SessionView::Terminal,
@@ -1281,15 +1321,16 @@ impl SshPanel {
     }
 
     /// Apply a ZMODEM event received from the pump thread to the session
-    /// matching `host_id`.
+    /// matching `uid` (unique per-session id, not host_id, so multiple tabs
+    /// for the same host route events independently).
     fn handle_zm_event(
         &mut self,
-        host_id: &str,
+        uid: u64,
         ev: crate::ssh::zmodem::ZmEvent,
         cx: &mut Context<Self>,
     ) {
         use crate::ssh::zmodem::ZmEvent::*;
-        let Some(s) = self.sessions.iter_mut().find(|s| s.host_id == host_id) else {
+        let Some(s) = self.sessions.iter_mut().find(|s| s.session_uid == uid) else {
             return;
         };
         match ev {

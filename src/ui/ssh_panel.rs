@@ -205,8 +205,6 @@ impl Render for SshPanel {
         }
         let theme = cx.theme().clone();
         let bg = theme.background;
-        let border = theme.border;
-        let muted = theme.muted_foreground;
         let fg = theme.foreground;
         let _accent = theme.accent;
 
@@ -234,48 +232,16 @@ impl Render for SshPanel {
             return terminal_view.into_any_element();
         }
 
+        // No panel-local header: the app title bar already shows the SSH
+        // context (title, host count, "new host" action) — see
+        // `VerveApp::render_ssh_title_bar`. A second bar here would stack two
+        // headers on top of each other.
         v_flex()
             .size_full()
             .min_h_0()
             .overflow_hidden()
             .bg(bg)
             .text_color(fg)
-            // Header bar — sits at the very top, SAME LINE as traffic-light
-            // buttons. Left padding (78px) clears them (like the API title bar).
-            .child(
-                h_flex()
-                    .h(px(44.))
-                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-                    .when(!cfg!(target_os = "macos"), |this| this.pl_4())
-                    .pr_4()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("SSH 管理"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(muted)
-                            .text_sm()
-                            .pl_3()
-                            .child(format!("{} 台主机", self.hosts.len())),
-                    )
-                    .child(
-                        Button::new("ssh-new-host")
-                            .primary()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("新建主机")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_host_dialog(None, window, cx);
-                            })),
-                    ),
-            )
             // Body: host card grid.
             .child(
                 div()
@@ -468,6 +434,17 @@ impl SshPanel {
             );
 
         grid.into_any_element()
+    }
+
+    /// Number of saved hosts — shown as a badge in the app's SSH title bar.
+    pub fn host_count(&self) -> usize {
+        self.hosts.len()
+    }
+
+    /// Open the "new host" dialog from outside the panel (the app title bar's
+    /// primary action).
+    pub fn open_new_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_host_dialog(None, window, cx);
     }
 
     /// Open the host dialog for new or editing.

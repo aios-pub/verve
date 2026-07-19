@@ -2102,7 +2102,20 @@ impl VerveApp {
             })
     }
 
-    fn render_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Pick the title bar for the active view. The API workbench gets the full
+    /// workspace/project/environment toolbar; the SSH manager gets a tailored
+    /// bar (its hosts are global, so the workspace/project/env switchers don't
+    /// apply). Both variants keep the same height and the same leading rail
+    /// toggle, so the window chrome never shifts when the activity rail
+    /// switches views.
+    fn render_title_bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match self.active_view {
+            SideView::Ssh => self.render_ssh_title_bar(cx).into_any_element(),
+            _ => self.render_api_title_bar(cx).into_any_element(),
+        }
+    }
+
+    fn render_api_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let st = self.state.read(cx);
         let project_name = st
@@ -2146,26 +2159,7 @@ impl VerveApp {
             .border_color(theme.border)
             .bg(theme.muted)
             // Far-left activity rail collapse/expand toggle.
-            .child(
-                Button::new("rail-toggle")
-                    .ghost()
-                    .small()
-                    .icon(if self.rail_collapsed {
-                        IconName::PanelLeftOpen
-                    } else {
-                        IconName::PanelLeftClose
-                    })
-                    .selected(!self.rail_collapsed)
-                    .tooltip(if self.rail_collapsed {
-                        "展开左侧导航栏"
-                    } else {
-                        "收起左侧导航栏"
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.rail_collapsed = !this.rail_collapsed;
-                        cx.notify();
-                    })),
-            )
+            .child(self.render_rail_toggle(cx))
             // Sidebar (tree) collapse/expand toggle.
             .child(
                 Button::new("sidebar-toggle")
@@ -2685,119 +2679,221 @@ impl VerveApp {
             )
             // Update check button: shows a spinner while checking, a download
             // icon when an update is available, or a refresh icon otherwise.
-            .child({
-                let checking = self.update_checking;
-                let has_update = self.update_info.is_some();
-                let update_info = self.update_info.clone();
-                let icon = if checking {
-                    IconName::LoaderCircle
-                } else if has_update {
-                    IconName::ExternalLink
+            .child(self.render_update_button(cx))
+            // Language switcher (top-right).
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// The far-left activity rail collapse/expand toggle — shared by every
+    /// title-bar variant so the control sits at exactly the same position in
+    /// all views.
+    fn render_rail_toggle(&self, cx: &Context<Self>) -> impl IntoElement {
+        Button::new("rail-toggle")
+            .ghost()
+            .small()
+            .icon(if self.rail_collapsed {
+                IconName::PanelLeftOpen
+            } else {
+                IconName::PanelLeftClose
+            })
+            .selected(!self.rail_collapsed)
+            .tooltip(if self.rail_collapsed {
+                "展开左侧导航栏"
+            } else {
+                "收起左侧导航栏"
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.rail_collapsed = !this.rail_collapsed;
+                cx.notify();
+            }))
+    }
+
+    /// Update check button — shared by every title-bar variant. Shows a
+    /// spinner while checking, a download icon when an update is available,
+    /// or a refresh icon otherwise.
+    fn render_update_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        let checking = self.update_checking;
+        let has_update = self.update_info.is_some();
+        let update_info = self.update_info.clone();
+        let icon = if checking {
+            IconName::LoaderCircle
+        } else if has_update {
+            IconName::ExternalLink
+        } else {
+            IconName::Redo
+        };
+        let tooltip = if checking {
+            "正在检查更新…".to_string()
+        } else if let Some(info) = &update_info {
+            format!("发现新版本 v{}，点击前往下载", info.version)
+        } else {
+            "检查更新".to_string()
+        };
+        Button::new("update-check")
+            .ghost()
+            .small()
+            .icon(icon)
+            .tooltip(tooltip)
+            .when(checking, |b| b.disabled(true))
+            .on_click(cx.listener(move |this, _ev, window, cx| {
+                if this.update_info.is_some() {
+                    this.open_update_download(window, cx);
                 } else {
-                    IconName::Redo
-                };
-                let tooltip = if checking {
-                    "正在检查更新…".to_string()
-                } else if let Some(info) = &update_info {
-                    format!("发现新版本 v{}，点击前往下载", info.version)
-                } else {
-                    "检查更新".to_string()
-                };
-                Button::new("update-check")
+                    this.check_updates_manual(window, cx);
+                }
+            }))
+    }
+
+    /// Language switcher — shared by every title-bar variant.
+    fn render_lang_picker(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let open = self.lang_popover_open;
+        let cur = rust_i18n::locale().to_string();
+        let lang_label = if cur.starts_with("en") { "EN" } else { "中" };
+        Popover::new("lang-picker")
+            .anchor(gpui::Anchor::BottomRight)
+            .open(open)
+            .on_open_change(cx.listener(|this, open, _, cx| {
+                this.lang_popover_open = *open;
+                cx.notify();
+            }))
+            .trigger(
+                Button::new("rail-lang")
                     .ghost()
                     .small()
-                    .icon(icon)
-                    .tooltip(tooltip)
-                    .when(checking, |b| b.disabled(true))
-                    .on_click(cx.listener(move |this, _ev, window, cx| {
-                        if this.update_info.is_some() {
-                            this.open_update_download(window, cx);
-                        } else {
-                            this.check_updates_manual(window, cx);
-                        }
-                    }))
-            })
-            // Language switcher (top-right).
-            .child({
-                let open = self.lang_popover_open;
-                let cur = rust_i18n::locale().to_string();
-                let lang_label = if cur.starts_with("en") { "EN" } else { "中" };
-                Popover::new("lang-picker")
-                    .anchor(gpui::Anchor::BottomRight)
-                    .open(open)
-                    .on_open_change(cx.listener(|this, open, _, cx| {
-                        this.lang_popover_open = *open;
-                        cx.notify();
-                    }))
-                    .trigger(
-                        Button::new("rail-lang")
-                            .ghost()
-                            .small()
-                            .label(lang_label)
-                            .icon(IconName::Globe)
-                            .tooltip("语言 / Language"),
-                    )
-                    .p(px(4.))
+                    .label(lang_label)
+                    .icon(IconName::Globe)
+                    .tooltip("语言 / Language"),
+            )
+            .p(px(4.))
+            .child(
+                v_flex()
+                    .w(px(140.))
+                    .gap(px(2.))
                     .child(
-                        v_flex()
-                            .w(px(140.))
-                            .gap(px(2.))
+                        div()
+                            .id("lang-opt-zh")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.muted))
+                            .when(cur.starts_with("zh") || cur == "zh-CN", |d| {
+                                d.bg(theme.accent.opacity(0.5))
+                            })
                             .child(
                                 div()
-                                    .id("lang-opt-zh")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted))
-                                    .when(cur.starts_with("zh") || cur == "zh-CN", |d| {
-                                        d.bg(theme.accent.opacity(0.5))
-                                    })
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child("简体中文"),
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        rust_i18n::set_locale("zh-CN");
-                                        let mut l = crate::state::persistence::load_layout().unwrap_or_default();
-                                        l.locale = Some("zh-CN".into());
-                                        let _ = crate::state::persistence::save_layout(&l);
-                                        this.lang_popover_open = false;
-                                        window.refresh();
-                                        cx.notify();
-                                    })),
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child("简体中文"),
                             )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                rust_i18n::set_locale("zh-CN");
+                                let mut l = crate::state::persistence::load_layout().unwrap_or_default();
+                                l.locale = Some("zh-CN".into());
+                                let _ = crate::state::persistence::save_layout(&l);
+                                this.lang_popover_open = false;
+                                window.refresh();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("lang-opt-en")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.muted))
+                            .when(cur == "en" || cur.starts_with("en"), |d| {
+                                d.bg(theme.accent.opacity(0.5))
+                            })
                             .child(
                                 div()
-                                    .id("lang-opt-en")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme.muted))
-                                    .when(cur == "en" || cur.starts_with("en"), |d| {
-                                        d.bg(theme.accent.opacity(0.5))
-                                    })
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child("English"),
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        rust_i18n::set_locale("en");
-                                        let mut l = crate::state::persistence::load_layout().unwrap_or_default();
-                                        l.locale = Some("en".into());
-                                        let _ = crate::state::persistence::save_layout(&l);
-                                        this.lang_popover_open = false;
-                                        window.refresh();
-                                        cx.notify();
-                                    })),
-                            ),
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child("English"),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                rust_i18n::set_locale("en");
+                                let mut l = crate::state::persistence::load_layout().unwrap_or_default();
+                                l.locale = Some("en".into());
+                                let _ = crate::state::persistence::save_layout(&l);
+                                this.lang_popover_open = false;
+                                window.refresh();
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
+
+    /// The title bar shown while the SSH manager is active. SSH hosts live in
+    /// a global store (`~/.verve/ssh_hosts.json`), not in any workspace, so
+    /// the API bar's workspace/project/environment controls don't apply here.
+    /// This bar carries the SSH context instead — title, saved-host count,
+    /// and the primary "new host" action — plus the app-level update/language
+    /// controls. Height, padding, and the leading rail toggle match
+    /// `render_api_title_bar` exactly, so nothing shifts on view switch.
+    fn render_ssh_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let host_count = self.ssh.read(cx).host_count();
+        let ssh = self.ssh.clone();
+
+        h_flex()
+            .h(px(40.))
+            // On macOS the (transparent) titlebar hosts the traffic-light
+            // buttons on the left; pad the content past them.
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // SSH context: terminal icon + title + saved-host count badge.
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(IconName::SquareTerminal),
                     )
-            })
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("SSH 管理"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.foreground)
+                            .child(format!("{host_count} 台主机")),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("ssh-title-new-host")
+                    .primary()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("新建主机")
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = ssh.update(cx, |panel, cx| {
+                            panel.open_new_host(window, cx);
+                        });
+                    })),
+            )
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
     }
 }
 

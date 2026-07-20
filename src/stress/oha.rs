@@ -81,10 +81,12 @@ pub fn run_oha(
     .map_err(|e| format!("prepare: {e}"))?;
 
     // Build a reqwest client with oha-like defaults: no TLS cert verification,
-    // 10s connect timeout, no auto-retries, IPv4 preferred when possible.
+    // 10s connect timeout, a hard 30s per-request timeout (so a hung request
+    // can never block a worker past the run deadline), no auto-retries.
     let client = ClientBuilder::new()
         .danger_accept_invalid_certs(true)
         .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(concurrency.max(32) as usize)
         .connection_verbose(false)
         .build()
@@ -184,22 +186,22 @@ async fn run_worker(
             break;
         }
 
+        // Hard per-iteration deadline: never let a single request+body drag on
+        // for more than 2s past the configured run duration, so the worker
+        // always terminates promptly even when the server is slow/hanging.
+        let remaining = duration
+            .checked_sub(start.elapsed())
+            .unwrap_or(Duration::ZERO)
+            .max(Duration::from_millis(50));
+        let req_deadline = Duration::from_secs(30).min(remaining + Duration::from_secs(2));
+
         let req_start = Instant::now();
-        let event = match client.execute(request.try_clone().unwrap()).await {
-            Ok(resp) => {
-                let status = Some(resp.status().as_u16());
-                // Drain body so timing reflects full transfer.
-                let _ = resp.bytes().await;
-                RequestEvent {
-                    latency_ms: req_start.elapsed().as_millis() as u64,
-                    status,
-                    error: None,
-                }
-            }
-            Err(e) => RequestEvent {
+        let event = match tokio::time::timeout(req_deadline, execute_one(&client, &request)).await {
+            Ok(inner) => inner,
+            Err(_) => RequestEvent {
                 latency_ms: req_start.elapsed().as_millis() as u64,
                 status: None,
-                error: Some(short_err(&e)),
+                error: Some("deadline exceeded".into()),
             },
         };
         let _ = ev_tx.send(event);
@@ -210,6 +212,28 @@ async fn run_worker(
                 tokio::time::sleep(gap - elapsed).await;
             }
         }
+    }
+}
+
+/// Issue a single HTTP request and drain the body, returning a RequestEvent.
+async fn execute_one(client: &reqwest::Client, request: &reqwest::Request) -> RequestEvent {
+    let req_start = Instant::now();
+    match client.execute(request.try_clone().unwrap()).await {
+        Ok(resp) => {
+            let status = Some(resp.status().as_u16());
+            // Drain body so timing reflects full transfer; tolerate body errors.
+            let _ = resp.bytes().await;
+            RequestEvent {
+                latency_ms: req_start.elapsed().as_millis() as u64,
+                status,
+                error: None,
+            }
+        }
+        Err(e) => RequestEvent {
+            latency_ms: req_start.elapsed().as_millis() as u64,
+            status: None,
+            error: Some(short_err(&e)),
+        },
     }
 }
 

@@ -80,22 +80,33 @@ impl DockerPanel {
         cx.notify();
     }
 
-    /// Run blocking work on a std::thread and return results via a channel, then
-    /// apply them on the UI thread inside cx.spawn. Mirrors the SSH panel pattern.
+    /// Run blocking work on a std::thread and return results via a std channel,
+    /// then apply them on the UI thread inside cx.spawn. Uses std::sync::mpsc
+    /// (not tokio) so no runtime is required.
     fn run_blocking<F, T>(&mut self, cx: &mut Context<Self>, f: F, on_done: impl 'static + Send + FnOnce(&mut Self, &mut Context<Self>, T))
     where
         F: 'static + Send + FnOnce() -> T,
         T: 'static + Send,
     {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<T>();
+        let (tx, rx) = std::sync::mpsc::channel::<T>();
         std::thread::spawn(move || {
             let result = f();
             let _ = tx.send(result);
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            if let Some(result) = rx.recv().await {
-                let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
+            // Poll the std receiver on the smol executor without blocking.
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
+                }
             }
         })
         .detach();
@@ -136,7 +147,7 @@ impl DockerPanel {
     }
 
     fn do_prune(&mut self, cx: &mut Context<Self>) {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, DockerError>>();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, DockerError>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(prune_images());
@@ -144,11 +155,20 @@ impl DockerPanel {
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            if let Some(result) = rx.recv().await {
-                let _ = ent.update(cx, |panel, cx| {
-                    panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
-                    panel.reload_images(cx);
-                });
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        let _ = ent.update(cx, |panel, cx| {
+                            panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
+                            panel.reload_images(cx);
+                        });
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
+                }
             }
         })
         .detach();
@@ -171,25 +191,21 @@ impl DockerPanel {
             Started(String),
             Line(String),
             Err(String),
-            Done,
         }
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Ev>();
+        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let id_for_thread = id.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 match stream_logs(&id_for_thread, 50) {
                     Ok(mut stream) => {
-                        let Some(mut lines_rx) = stream.take_lines() else {
-                            return;
-                        };
+                        let Some(mut lines_rx) = stream.take_lines() else { return };
                         let _ = tx.send(Ev::Started(id_for_thread));
                         while let Some(line) = lines_rx.recv().await {
                             if tx.send(Ev::Line(line)).is_err() {
                                 break;
                             }
                         }
-                        let _ = tx.send(Ev::Done);
                     }
                     Err(e) => {
                         let _ = tx.send(Ev::Err(e.to_string()));
@@ -199,131 +215,182 @@ impl DockerPanel {
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            while let Some(ev) = rx.recv().await {
-                let _ = ent.update(cx, |p, cx| match ev {
-                    Ev::Started(id) => {
-                        p.log_target = Some(id);
-                        p.log_lines.clear();
-                        p.active_view = View::Logs;
-                        p.error = None;
-                        cx.notify();
+            loop {
+                match rx.try_recv() {
+                    Ok(ev) => {
+                        let _ = ent.update(cx, |p, cx| match ev {
+                            Ev::Started(id) => {
+                                p.log_target = Some(id);
+                                p.log_lines.clear();
+                                p.active_view = View::Logs;
+                                p.error = None;
+                                cx.notify();
+                            }
+                            Ev::Line(line) => {
+                                if p.log_lines.len() > 1000 {
+                                    p.log_lines.remove(0);
+                                }
+                                p.log_lines.push(line);
+                                cx.notify();
+                            }
+                            Ev::Err(e) => {
+                                p.error = Some(e);
+                                cx.notify();
+                            }
+                        });
                     }
-                    Ev::Line(line) => {
-                        if p.log_lines.len() > 1000 {
-                            p.log_lines.remove(0);
-                        }
-                        p.log_lines.push(line);
-                        cx.notify();
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
                     }
-                    Ev::Err(e) => {
-                        p.error = Some(e);
-                        cx.notify();
-                    }
-                    Ev::Done => {}
-                });
+                    Err(_) => break,
+                }
             }
         })
         .detach();
     }
 
-    fn start_exec(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_exec(&mut self, id: String, _window: &mut Window, cx: &mut Context<Self>) {
         enum Ev {
-            Data(Vec<u8>),
+            Ready {
+                stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+                data_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+            },
             Err(String),
         }
-        match exec_container(&id, None) {
-            Ok(mut sess) => {
-                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
-                let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-                let mut child_stdin = sess.stdin.take();
-                let child_stdout = sess.stdout.take();
-                let child_stderr = sess.stderr.take();
-                self.exec_child = Some(sess.child);
-                self.exec_stdin = Some(stdin_tx);
-                self.exec_terminal = Some(terminal.clone());
-                self.exec_target = Some(id.clone());
-                self.active_view = View::Exec;
-                self.error = None;
-
-                let tx_term = self.exec_stdin.clone();
-                terminal.update(cx, |tv, _cx| {
-                    if let Ok(mut slot) = tv.input_tx.lock() {
-                        *slot = tx_term;
-                    }
-                });
-
-                // Pump stdin on cx.spawn (smol runtime), stdout/stderr via channels from a tokio thread.
-                let (data_tx, mut data_rx) = tokio::sync::mpsc::unbounded_channel::<Ev>();
-                if let Some(mut cs) = child_stdin.take() {
-                    cx.spawn(async move |_this, _cx| {
-                        while let Some(bytes) = stdin_rx.recv().await {
-                            if cs.write_all(&bytes).await.is_err() {
-                                break;
-                            }
+        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
+        let id_for_thread = id.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                match exec_container(&id_for_thread, None) {
+                    Ok(mut sess) => {
+                        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+                        let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                        if let Some(mut cs) = sess.stdin.take() {
+                            tokio::spawn(async move {
+                                while let Some(bytes) = stdin_rx.recv().await {
+                                    if cs.write_all(&bytes).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            });
                         }
-                    })
-                    .detach();
-                }
-                if let Some(stream) = child_stdout {
-                    let tx = data_tx.clone();
-                    std::thread::spawn(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            use tokio::io::AsyncReadExt;
-                            let mut s = stream;
-                            let mut buf = [0u8; 4096];
-                            loop {
-                                match s.read(&mut buf).await {
-                                    Ok(0) | Err(_) => break,
-                                    Ok(n) => {
-                                        if tx.send(Ev::Data(buf[..n].to_vec())).is_err() {
-                                            break;
+                        if let Some(stream) = sess.stdout.take() {
+                            let data_tx = data_tx.clone();
+                            tokio::spawn(async move {
+                                use tokio::io::AsyncReadExt;
+                                let mut s = stream;
+                                let mut buf = [0u8; 4096];
+                                loop {
+                                    match s.read(&mut buf).await {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(n) => {
+                                            if data_tx.send(buf[..n].to_vec()).is_err() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        });
-                    });
-                }
-                if let Some(stream) = child_stderr {
-                    let tx = data_tx.clone();
-                    std::thread::spawn(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            use tokio::io::AsyncReadExt;
-                            let mut s = stream;
-                            let mut buf = [0u8; 4096];
-                            loop {
-                                match s.read(&mut buf).await {
-                                    Ok(0) | Err(_) => break,
-                                    Ok(n) => {
-                                        if tx.send(Ev::Data(buf[..n].to_vec())).is_err() {
-                                            break;
+                            });
+                        }
+                        if let Some(stream) = sess.stderr.take() {
+                            let data_tx = data_tx.clone();
+                            tokio::spawn(async move {
+                                use tokio::io::AsyncReadExt;
+                                let mut s = stream;
+                                let mut buf = [0u8; 4096];
+                                loop {
+                                    match s.read(&mut buf).await {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(n) => {
+                                            if data_tx.send(buf[..n].to_vec()).is_err() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        });
-                    });
+                            });
+                        }
+                        // Keep sess.child alive by leaking it into this runtime;
+                        // drop happens when exec is closed via set_view.
+                        std::mem::forget(sess.child);
+                        let _ = tx.send(Ev::Ready { stdin_tx, data_rx });
+                        // Keep runtime alive until streams end (spawned tasks above exit).
+                        std::future::pending::<()>().await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Ev::Err(e.to_string()));
+                    }
                 }
-                let term = terminal.clone();
-                cx.spawn(async move |_this, cx| {
-                    while let Some(Ev::Data(chunk)) = data_rx.recv().await {
-                        let _ = term.update(cx, |tv, cx| {
-                            tv.feed(&chunk);
+            });
+        });
+
+        // Poll for the Ready event, then wire up the terminal.
+        let ent = cx.entity().downgrade();
+        let term_id = id.clone();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(Ev::Ready { stdin_tx, data_rx }) => {
+                        // Create the terminal and wire stdin.
+                        let term_opt: Option<Entity<TerminalView>> = ent
+                            .update(cx, |p, cx| {
+                                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
+                                p.exec_stdin = Some(stdin_tx.clone());
+                                p.exec_terminal = Some(terminal.clone());
+                                p.exec_target = Some(term_id.clone());
+                                p.active_view = View::Exec;
+                                p.error = None;
+                                cx.notify();
+                                // Wire the terminal's input_tx to our stdin sender.
+                                let tx = stdin_tx.clone();
+                                _ = terminal.update(cx, |tv, _cx| {
+                                    if let Ok(mut slot) = tv.input_tx.lock() {
+                                        *slot = Some(tx);
+                                    }
+                                });
+                                Some(terminal)
+                            })
+                            .ok()
+                            .flatten();
+                        if let Some(term) = term_opt {
+                            // Pump data to the terminal via an inner spawn on the term entity.
+                            let term_weak = term.downgrade();
+                            cx.spawn(async move |cx| {
+                                loop {
+                                    match data_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                                        Ok(chunk) => {
+                                            let _ = term_weak.update(cx, |tv, cx| {
+                                                tv.feed(&chunk);
+                                                cx.notify();
+                                            });
+                                        }
+                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                            smol::Timer::after(std::time::Duration::from_millis(30)).await;
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            })
+                            .detach();
+                        }
+                        break;
+                    }
+                    Ok(Ev::Err(e)) => {
+                        let _ = ent.update(cx, |p, cx| {
+                            p.error = Some(e);
                             cx.notify();
                         });
+                        break;
                     }
-                })
-                .detach();
-
-                cx.notify();
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
+                }
             }
-            Err(e) => {
-                self.error = Some(e.to_string());
-                cx.notify();
-            }
-        }
+        })
+        .detach();
     }
 }
 

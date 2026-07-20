@@ -10317,6 +10317,7 @@ dependencies = [
  "log",
  "qrcode",
  "regex",
+ "reqwest",
  "reqwest_client",
  "rfd",
  "russh",

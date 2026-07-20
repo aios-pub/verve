@@ -12,6 +12,7 @@ pub mod git;
 pub mod http;
 pub mod import;
 pub mod mock;
+pub mod proxy;
 pub mod scripting;
 pub mod share;
 pub mod ssh;

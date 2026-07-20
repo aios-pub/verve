@@ -89,6 +89,7 @@ env_logger = "0.11"
 # QR code generation for the document-sharing "二维码" share method (pure Rust).
 qrcode = "0.14"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smol = "2"

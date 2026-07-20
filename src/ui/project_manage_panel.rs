@@ -1246,6 +1246,7 @@ impl ProjectManagePanel {
         let ent_md = cx.entity();
         let ent_json = cx.entity();
         let ent_postman = cx.entity();
+        let ent_openapi = cx.entity();
         v_flex()
             .size_full()
             .id("io-scroll")
@@ -1265,7 +1266,7 @@ impl ProjectManagePanel {
                         div()
                             .text_size(px(12.))
                             .text_color(theme.muted_foreground)
-                            .child("导入 Postman v2.1 / OpenAPI 3 集合，或将当前工作空间导出为 Markdown / JSON。"),
+                            .child("导入 Postman v2.1 / OpenAPI 3 集合，或将当前工作空间导出为 Markdown / JSON / postman / OpenAPI 3。"),
                     )
                     .child(
                         Button::new("io-import")
@@ -1314,6 +1315,18 @@ impl ProjectManagePanel {
                                     .on_click(move |_, _w, cx: &mut App| {
                                         let _ = ent_postman.update(cx, |_, cx| {
                                             cx.emit(ManageEvent::Export(crate::export::Format::postman))
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("io-export-openapi")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::File)
+                                    .label("导出 OpenAPI 3")
+                                    .on_click(move |_, _w, cx: &mut App| {
+                                        let _ = ent_openapi.update(cx, |_, cx| {
+                                            cx.emit(ManageEvent::Export(crate::export::Format::OpenApi3))
                                         });
                                     }),
                             ),

@@ -12,13 +12,15 @@ pub enum Format {
     Json,
     /// postman 7+ export JSON (round-trip compatible with `import::postman`).
     postman,
+    /// OpenAPI 3.0 JSON.
+    OpenApi3,
 }
 
 impl Format {
     pub fn extension(&self) -> &'static str {
         match self {
             Format::Markdown => "md",
-            Format::Json | Format::postman => "json",
+            Format::Json | Format::postman | Format::OpenApi3 => "json",
         }
     }
 
@@ -27,6 +29,7 @@ impl Format {
             Format::Markdown => "Markdown",
             Format::Json => "JSON",
             Format::postman => "postman",
+            Format::OpenApi3 => "OpenAPI 3",
         }
     }
 }
@@ -444,6 +447,367 @@ fn empty_postman_auth() -> serde_json::Value {
     })
 }
 
+// ===========================================================================
+// OpenAPI 3.0 export
+// ===========================================================================
+
+/// Render a project as an OpenAPI 3.0.3 JSON document.
+///
+/// Output is intentionally best-effort: paths/methods/parameters/request body/
+/// auth are mapped; response schemas are not inferred beyond a generic 200
+/// example, because Verve stores last_response per-request but not multiple
+/// named examples. Import via the existing `import::openapi_v3` round-trips.
+pub fn project_to_openapi(project: &Project) -> serde_json::Result<String> {
+    let doc = build_openapi_doc(project);
+    serde_json::to_string_pretty(&doc)
+}
+
+fn build_openapi_doc(project: &Project) -> serde_json::Value {
+    use serde_json::{Map, Value};
+
+    // -- servers from first environment's baseUrl-ish variable --
+    let mut servers = Vec::new();
+    if let Some(env) = project
+        .active_environment
+        .as_ref()
+        .and_then(|id| project.environments.iter().find(|e| &e.id == id))
+    {
+        for v in &env.variables {
+            if v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url") {
+                if !v.value.trim().is_empty() {
+                    servers.push(json!({ "url": v.value, "description": env.name }));
+                }
+            }
+        }
+    }
+    if servers.is_empty() {
+        // Fallback: scan any env for a baseUrl variable.
+        for env in &project.environments {
+            for v in &env.variables {
+                if (v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url"))
+                    && !v.value.trim().is_empty()
+                {
+                    servers.push(json!({ "url": v.value, "description": env.name }));
+                }
+            }
+        }
+    }
+
+    // -- paths --
+    let mut paths: Map<String, Value> = Map::new();
+    let mut has_bearer = false;
+    let mut has_basic = false;
+    let mut has_apikey_header = false;
+    let mut has_apikey_query = false;
+
+    // Collect a flat list of all requests with folder path prefix so we can
+    // build OpenAPI tags for top-level folders.
+    let mut all_requests: Vec<&ApiRequest> = Vec::new();
+    for r in &project.requests {
+        all_requests.push(r);
+    }
+    for f in &project.folders {
+        collect_folder_requests(f, &mut all_requests);
+    }
+
+    for req in &all_requests {
+        let entry = openapi_for_request(
+            req,
+            &mut has_bearer,
+            &mut has_basic,
+            &mut has_apikey_header,
+            &mut has_apikey_query,
+        );
+        let (path_str, method, op) = match entry {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Split {baseUrl}/foo → /foo (strip scheme+host+vars at start).
+        let clean = openapi_path_from_url(&path_str);
+        let path_item = paths.entry(clean).or_insert_with(|| json!({}));
+        if let Some(obj) = path_item.as_object_mut() {
+            obj.insert(method.to_lowercase(), op);
+        }
+    }
+
+    // -- components.securitySchemes --
+    let mut sec_schemes: Map<String, Value> = Map::new();
+    if has_bearer {
+        sec_schemes.insert(
+            "bearerAuth".into(),
+            json!({ "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }),
+        );
+    }
+    if has_basic {
+        sec_schemes.insert(
+            "basicAuth".into(),
+            json!({ "type": "http", "scheme": "basic" }),
+        );
+    }
+    if has_apikey_header {
+        sec_schemes.insert(
+            "apiKeyHeader".into(),
+            json!({ "type": "apiKey", "in": "header", "name": "X-API-Key" }),
+        );
+    }
+    if has_apikey_query {
+        sec_schemes.insert(
+            "apiKeyQuery".into(),
+            json!({ "type": "apiKey", "in": "query", "name": "api_key" }),
+        );
+    }
+
+    let components = if sec_schemes.is_empty() {
+        Value::Null
+    } else {
+        json!({ "securitySchemes": Value::Object(sec_schemes) })
+    };
+
+    json!({
+        "openapi": "3.0.3",
+        "info": {
+            "title": project.name,
+            "version": "1.0.0",
+            "description": project.description,
+        },
+        "servers": servers,
+        "paths": Value::Object(paths),
+        "components": components,
+    })
+}
+
+fn collect_folder_requests<'a>(folder: &'a Folder, out: &mut Vec<&'a ApiRequest>) {
+    for r in &folder.requests {
+        out.push(r);
+    }
+    for sub in &folder.folders {
+        collect_folder_requests(sub, out);
+    }
+}
+
+/// Convert a Verve URL like "{{baseUrl}}/users/{id}" to an OpenAPI path "/users/{id}".
+fn openapi_path_from_url(url: &str) -> String {
+    let s = url.trim();
+    // Strip scheme://host if present (best effort).
+    let after_host = if let Some(idx) = s.find("://") {
+        let rest = &s[idx + 3..];
+        match rest.find('/') {
+            Some(slash) => &rest[slash..],
+            None => "/",
+        }
+    } else {
+        s
+    };
+    // Strip leading {{...}}/ prefix if any (variable like {{baseUrl}}).
+    let mut path = after_host.to_string();
+    while let Some(rest) = path.strip_prefix("{{") {
+        if let Some(end) = rest.find("}}") {
+            let after = &rest[end + 2..];
+            let trimmed = after.trim_start_matches('/');
+            path = format!("/{}", trimmed);
+        } else {
+            break;
+        }
+    }
+    if !path.starts_with('/') {
+        path.insert(0, '/');
+    }
+    // Collapse duplicate slashes.
+    while path.contains("//") {
+        path = path.replace("//", "/");
+    }
+    path
+}
+
+/// Returns (path_string, method_lowercase, operation_object) or None for
+/// non-HTTP protocols we can't represent as OpenAPI.
+fn openapi_for_request(
+    req: &ApiRequest,
+    has_bearer: &mut bool,
+    has_basic: &mut bool,
+    has_apikey_header: &mut bool,
+    has_apikey_query: &mut bool,
+) -> Option<(String, String, serde_json::Value)> {
+    use crate::state::models::Protocol;
+    // Only emit HTTP-family; gRPC/SSE/WS/TCP don't fit OpenAPI.
+    match req.protocol {
+        Protocol::Http | Protocol::Graphql => {}
+        _ => return None,
+    }
+
+    let mut parameters: Vec<serde_json::Value> = Vec::new();
+
+    // Query params.
+    for kv in req.params.iter().filter(|kv| kv.enabled) {
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "query",
+            "required": kv.required,
+            "description": kv.description,
+            "schema": { "type": openapi_field_type(kv.field_type), "example": kv.value },
+        }));
+    }
+    // Headers (skip host/content-type which are handled elsewhere).
+    for kv in req.headers.iter().filter(|kv| kv.enabled) {
+        if kv.key.eq_ignore_ascii_case("content-type")
+            || kv.key.eq_ignore_ascii_case("host")
+            || kv.key.is_empty()
+        {
+            continue;
+        }
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "header",
+            "required": kv.required,
+            "description": kv.description,
+            "schema": { "type": openapi_field_type(kv.field_type), "example": kv.value },
+        }));
+    }
+    // Path variables — OpenAPI uses {name}; our path-var KeyValue list informs
+    // required/description but the URL already contains {name}.
+    for kv in req.path.iter().filter(|kv| kv.enabled) {
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "path",
+            "required": true,
+            "description": kv.description,
+            "schema": { "type": openapi_field_type(kv.field_type), "example": kv.value },
+        }));
+    }
+
+    // Request body.
+    let request_body = openapi_request_body(req);
+
+    // Auth → security.
+    let mut security: Vec<serde_json::Value> = Vec::new();
+    match req.auth.auth_type {
+        AuthType::Bearer => {
+            *has_bearer = true;
+            security.push(json!({ "bearerAuth": [] }));
+        }
+        AuthType::Basic => {
+            *has_basic = true;
+            security.push(json!({ "basicAuth": [] }));
+        }
+        AuthType::ApiKey => {
+            if req.auth.add_to == crate::state::models::AuthTarget::Query {
+                *has_apikey_query = true;
+                security.push(json!({ "apiKeyQuery": [] }));
+            } else {
+                *has_apikey_header = true;
+                security.push(json!({ "apiKeyHeader": [] }));
+            }
+        }
+        AuthType::None => {}
+    }
+
+    // Tags: use request.tags (fallback empty).
+    let tags: Vec<serde_json::Value> = req.tags.iter().map(|t| json!(t)).collect();
+
+    let mut op = json!({
+        "summary": req.name,
+        "description": req.description,
+        "tags": tags,
+        "responses": {
+            "200": {
+                "description": "Successful response",
+            }
+        },
+    });
+    let obj = op.as_object_mut().unwrap();
+    if !parameters.is_empty() {
+        obj.insert("parameters".into(), json!(parameters));
+    }
+    if let Some(rb) = request_body {
+        obj.insert("requestBody".into(), rb);
+    }
+    if !security.is_empty() {
+        obj.insert("security".into(), json!(security));
+    }
+
+    Some((req.url.clone(), method_label(req.method).to_string(), op))
+}
+
+fn openapi_field_type(ft: crate::state::models::FieldType) -> &'static str {
+    use crate::state::models::FieldType;
+    match ft {
+        FieldType::Text => "string",
+        FieldType::Number => "number",
+        FieldType::Decimal => "number",
+        FieldType::Bool => "boolean",
+        FieldType::Array => "array",
+        FieldType::Object => "object",
+        FieldType::File => "string",
+    }
+}
+
+fn openapi_request_body(req: &ApiRequest) -> Option<serde_json::Value> {
+    match req.body.body_type {
+        BodyType::None => None,
+        BodyType::Raw => {
+            let ct = match req.body.raw_language {
+                crate::state::models::RawLanguage::Json => "application/json",
+                crate::state::models::RawLanguage::Xml => "application/xml",
+                crate::state::models::RawLanguage::Html => "text/html",
+                crate::state::models::RawLanguage::Javascript => "application/javascript",
+                crate::state::models::RawLanguage::Text => "text/plain",
+            };
+            Some(json!({
+                "required": true,
+                "content": {
+                    ct: {
+                        "schema": { "type": "string", "example": req.body.raw }
+                    }
+                }
+            }))
+        }
+        BodyType::Urlencoded => {
+            let mut props = serde_json::Map::new();
+            for kv in req.body.urlencoded.iter().filter(|kv| kv.enabled) {
+                props.insert(
+                    kv.key.clone(),
+                    json!({ "type": openapi_field_type(kv.field_type), "description": kv.description, "example": kv.value }),
+                );
+            }
+            Some(json!({
+                "required": true,
+                "content": {
+                    "application/x-www-form-urlencoded": {
+                        "schema": { "type": "object", "properties": props }
+                    }
+                }
+            }))
+        }
+        BodyType::FormData => {
+            let mut props = serde_json::Map::new();
+            for kv in req.body.form_data.iter().filter(|kv| kv.enabled) {
+                if kv.field_type == crate::state::models::FieldType::File
+                    || kv.file_path.as_deref().map_or(false, |s| !s.is_empty())
+                {
+                    props.insert(
+                        kv.key.clone(),
+                        json!({ "type": "string", "format": "binary", "description": kv.description }),
+                    );
+                } else {
+                    props.insert(
+                        kv.key.clone(),
+                        json!({ "type": openapi_field_type(kv.field_type), "description": kv.description, "example": kv.value }),
+                    );
+                }
+            }
+            Some(json!({
+                "required": true,
+                "content": {
+                    "multipart/form-data": {
+                        "schema": { "type": "object", "properties": props }
+                    }
+                }
+            }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,5 +951,64 @@ mod tests {
         assert_eq!(r3.auth.auth_type, AuthType::Basic);
         assert_eq!(r3.auth.username, "u");
         assert_eq!(r3.auth.password, "p");
+    }
+
+    #[test]
+    fn openapi_export_basic() {
+        let mut project = Project::new("Demo API");
+        project.description = "demo".into();
+        let mut env = crate::state::models::Environment::new("dev");
+        env.variables.push(KeyValue::new("baseUrl", "https://api.example.com"));
+        project.environments.push(env);
+
+        let mut req = ApiRequest::new("ListUsers", RequestMethod::Get, "{{baseUrl}}/users");
+        req.params.push(KeyValue::new("page", "1"));
+        req.params.push(KeyValue::new("size", "20"));
+        req.headers
+            .push(KeyValue::new("X-Trace", "t"));
+        project.requests.push(req);
+
+        let mut req2 = ApiRequest::new("CreateUser", RequestMethod::Post, "{{baseUrl}}/users");
+        req2.auth = AuthConfig {
+            auth_type: AuthType::Bearer,
+            token: "abc".into(),
+            ..Default::default()
+        };
+        req2.body = RequestBody {
+            body_type: BodyType::Raw,
+            raw_language: crate::state::models::RawLanguage::Json,
+            raw: r#"{"name":"x"}"#.into(),
+            ..Default::default()
+        };
+        project.requests.push(req2);
+
+        let s = project_to_openapi(&project).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+
+        assert_eq!(v["openapi"], "3.0.3");
+        assert_eq!(v["info"]["title"], "Demo API");
+        assert_eq!(v["servers"][0]["url"], "https://api.example.com");
+        // paths: /users exists with get + post.
+        assert!(v["paths"]["/users"]["get"].is_object());
+        assert!(v["paths"]["/users"]["post"].is_object());
+        // query params present.
+        let params = v["paths"]["/users"]["get"]["parameters"].as_array().unwrap();
+        assert_eq!(params.len(), 3); // page, size, X-Trace header
+        // bearer auth scheme present.
+        assert!(v["components"]["securitySchemes"]["bearerAuth"].is_object());
+        // post has security referencing bearerAuth.
+        let sec = v["paths"]["/users"]["post"]["security"].as_array().unwrap();
+        assert!(sec[0].get("bearerAuth").is_some());
+    }
+
+    #[test]
+    fn openapi_path_cleaning() {
+        assert_eq!(openapi_path_from_url("{{baseUrl}}/users/{id}"), "/users/{id}");
+        assert_eq!(
+            openapi_path_from_url("https://example.com/foo/bar"),
+            "/foo/bar"
+        );
+        assert_eq!(openapi_path_from_url("users/1"), "/users/1");
+        assert_eq!(openapi_path_from_url("{{host}}/a//b"), "/a/b");
     }
 }

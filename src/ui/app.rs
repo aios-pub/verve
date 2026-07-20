@@ -1191,6 +1191,10 @@ impl VerveApp {
                 Ok(s) => s,
                 Err(_) => return,
             },
+            crate::export::Format::OpenApi3 => match crate::export::project_to_openapi(&project) {
+                Ok(s) => s,
+                Err(_) => return,
+            },
         };
         // Write into the user data dir so the export is always reachable.
         let dir = match crate::state::persistence::data_dir() {

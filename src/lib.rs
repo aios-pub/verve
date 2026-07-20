@@ -13,6 +13,7 @@ pub mod git;
 pub mod hosts;
 pub mod http;
 pub mod import;
+pub mod k8s;
 pub mod mock;
 pub mod proxy;
 pub mod scripting;

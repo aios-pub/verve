@@ -6,6 +6,7 @@ pub mod console_panel;
 pub mod env_panel;
 pub mod environments_view;
 pub mod kv_manager_view;
+pub mod k8s_panel;
 pub mod kv_table;
 pub mod method_colors;
 pub mod project_manage_panel;

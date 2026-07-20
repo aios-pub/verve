@@ -3,12 +3,64 @@
 //! Mirrors `crate::k8s::kubectl`: parse JSON from `--format '{{json .}}'`, stream
 //! logs via a spawned child, and spawn an interactive exec session.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+
+/// Resolve the docker CLI absolute path, falling back to PATH lookup. On macOS
+/// Docker Desktop installs docker to a handful of well-known locations that
+/// aren't always in the PATH when Verve is launched from Finder / Dock.
+fn docker_binary() -> PathBuf {
+    let mut candidates = vec![
+        // Apple Silicon Homebrew
+        PathBuf::from("/opt/homebrew/bin/docker"),
+        // Intel Homebrew
+        PathBuf::from("/usr/local/bin/docker"),
+        // Docker Desktop bundled CLI
+        PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"),
+        // Rancher Desktop
+        PathBuf::from("/opt/homebrew/bin/nerdctl"),
+        PathBuf::from("/usr/local/bin/nerdctl"),
+    ];
+    // ~/.docker/bin (user-installed, rare)
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".docker/bin/docker"));
+    }
+    for p in &candidates {
+        if p.exists() {
+            return p.clone();
+        }
+    }
+    // Fall back to PATH resolution (returns "docker" if not found — let the
+    // OS surface the "not found" error when spawn runs).
+    PathBuf::from("docker")
+}
+
+/// Build a Command targeting the docker binary, extending PATH with common
+/// macOS locations so subcommands can find sibling helpers like `docker-credential-osxkeychain`.
+fn docker_command() -> Command {
+    let bin = docker_binary();
+    let mut cmd = Command::new(&bin);
+    // Ensure Docker Desktop's bin dir and Homebrew are on PATH even when launched
+    // from a GUI context without a shell profile.
+    cmd.env(
+        "PATH",
+        [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/Applications/Docker.app/Contents/Resources/bin",
+            "/usr/bin",
+            "/bin",
+            std::env::var("PATH").unwrap_or_default().as_str(),
+        ]
+        .join(":"),
+    );
+    cmd
+}
 
 #[derive(Debug, Clone)]
 pub struct DockerError(pub String);
@@ -76,19 +128,43 @@ pub struct ExecSession {
     pub stderr: Option<tokio::process::ChildStderr>,
 }
 
+/// Build a std::process::Command for blocking docker calls with extended PATH.
+fn docker_command_sync() -> std::process::Command {
+    let bin = docker_binary();
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.env("PATH", extended_path());
+    cmd
+}
+
 fn run_docker(args: &[&str]) -> Result<std::process::Output, DockerError> {
-    std::process::Command::new("docker")
+    docker_command_sync()
         .args(args)
         .output()
-        .map_err(|e| DockerError(format!("docker 执行失败: {e}")))
+        .map_err(|e| {
+            DockerError(format!(
+                "docker 执行失败: {e}; 请确认 Docker Desktop 正在运行且 docker CLI 已安装 (尝试: /opt/homebrew/bin/docker 或 /usr/local/bin/docker)"
+            ))
+        })
 }
 
 pub async fn run_docker_async(args: &[&str]) -> Result<std::process::Output, DockerError> {
-    Command::new("docker")
+    docker_command()
         .args(args)
         .output()
         .await
         .map_err(|e| DockerError(format!("docker 执行失败: {e}")))
+}
+
+fn extended_path() -> String {
+    [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/Applications/Docker.app/Contents/Resources/bin",
+        "/usr/bin",
+        "/bin",
+        std::env::var("PATH").unwrap_or_default().as_str(),
+    ]
+    .join(":")
 }
 
 fn check_ok(out: std::process::Output) -> Result<(), DockerError> {
@@ -160,7 +236,7 @@ pub async fn prune_images() -> Result<String, DockerError> {
 
 /// Spawn `docker logs -f --tail=N <id>` and stream lines back to a channel.
 pub fn stream_logs(id: &str, tail: u32) -> Result<LogStream, DockerError> {
-    let mut cmd = Command::new("docker");
+    let mut cmd = docker_command();
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
@@ -195,7 +271,7 @@ pub fn stream_logs(id: &str, tail: u32) -> Result<LogStream, DockerError> {
 /// Spawn `docker exec -it <id> sh` for an interactive session.
 pub fn exec_container(id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
     let shell = shell.unwrap_or("sh");
-    let mut cmd = Command::new("docker");
+    let mut cmd = docker_command();
     cmd.arg("exec")
         .arg("-i")
         .arg("-t")

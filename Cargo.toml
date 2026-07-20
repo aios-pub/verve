@@ -100,7 +100,7 @@ rust-i18n-support = "=4.0.0"
 
 # WebSocket (real) + a dedicated tokio runtime for it.
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "sync", "macros", "process"] }
 futures-util = "0.3"
 
 # Pure-Rust git (gitoxide). Local ops + blocking network client (HTTPS via

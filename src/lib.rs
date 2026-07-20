@@ -16,5 +16,6 @@ pub mod scripting;
 pub mod share;
 pub mod ssh;
 pub mod state;
+pub mod stress;
 pub mod ui;
 pub mod updater;

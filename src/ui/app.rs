@@ -69,6 +69,8 @@ pub struct VerveApp {
     pub sidebar_collapsed: bool,
     /// Whether the far-left activity rail is collapsed.
     pub rail_collapsed: bool,
+    /// Which activity-rail items are currently hidden (SideView names).
+    pub hidden_rails: std::collections::HashSet<String>,
     /// Whether the theme picker popover is open.
     pub theme_popover_open: bool,
     /// Whether the language switcher popover is open.
@@ -353,6 +355,7 @@ impl VerveApp {
             pending_switcher_refresh: false,
             sidebar_collapsed: false,
             rail_collapsed: false,
+            hidden_rails: crate::state::persistence::load_hidden_rails(),
             theme_popover_open: false,
             lang_popover_open: false,
             project_popover_open: false,
@@ -1454,6 +1457,15 @@ impl Render for VerveApp {
                     self.home_view = parsed;
                 }
             }
+            // Also pick up hidden-rail changes from settings.
+            let new_hidden = crate::state::persistence::load_hidden_rails();
+            if new_hidden != self.hidden_rails {
+                self.hidden_rails = new_hidden;
+            }
+        }
+        // Safety: if the active view was just hidden, fall back to home.
+        if self.active_view != self.home_view && self.hidden_rails.contains(self.active_view.name()) {
+            self.active_view = self.home_view;
         }
         // Lazily start the share server when the first share config appears
         // (created via the share dialog). The configs store is shared mutably,
@@ -1871,6 +1883,10 @@ impl VerveApp {
     fn render_activity_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let active = self.active_view;
+        let hidden = &self.hidden_rails;
+
+        // Helper: is a given SideView visible (not the home view, not hidden)?
+        let is_visible = |v: SideView| v != self.home_view && !hidden.contains(v.name());
 
         // A rail button: icon that highlights when its view is active.
         // The tooltip is derived from the view's i18n label.
@@ -1932,7 +1948,7 @@ impl VerveApp {
                         cx.notify();
                     }))
             })
-            .when(SideView::Api != self.home_view, |rail| {
+            .when(is_visible(SideView::Api), |rail| {
                 rail.child(rail_btn(
                     "rail-api",
                     IconName::Network.into(),
@@ -1942,7 +1958,7 @@ impl VerveApp {
                     cx,
                 ))
             })
-            .when(SideView::AutoTest != self.home_view, |rail| {
+            .when(is_visible(SideView::AutoTest), |rail| {
                 rail.child(rail_btn(
                     "rail-test",
                     IconName::Play.into(),
@@ -1952,7 +1968,7 @@ impl VerveApp {
                     cx,
                 ))
             })
-            .when(SideView::Share != self.home_view, |rail| {
+            .when(is_visible(SideView::Share), |rail| {
                 rail.child(rail_btn(
                     "rail-share",
                     vicon(SHARE),
@@ -1962,7 +1978,7 @@ impl VerveApp {
                     cx,
                 ))
             })
-            .when(SideView::ProjectManage != self.home_view, |rail| {
+            .when(is_visible(SideView::ProjectManage), |rail| {
                 rail.child(rail_btn(
                     "rail-project",
                     vicon(KANBAN),
@@ -1974,19 +1990,21 @@ impl VerveApp {
             })
             // Environment variables button → opens the Settings window directly
             // (no dedicated sidebar panel; managed via the environments dialog).
-            .child({
-                Button::new("rail-env")
-                    .ghost()
-                    .small()
-                    .icon(vicon(BRACES))
-                    .selected(false)
-                    .tooltip(rust_i18n::t!("view.environments").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pending_dialog = Some(PendingDialog::Environments);
-                        cx.notify();
-                    }))
+            .when(!hidden.contains(SideView::Environments.name()), |rail| {
+                rail.child(
+                    Button::new("rail-env")
+                        .ghost()
+                        .small()
+                        .icon(vicon(BRACES))
+                        .selected(false)
+                        .tooltip(rust_i18n::t!("view.environments").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pending_dialog = Some(PendingDialog::Environments);
+                            cx.notify();
+                        }))
+                )
             })
-            .when(SideView::Mock != self.home_view, |rail| {
+            .when(is_visible(SideView::Mock), |rail| {
                 rail.child(rail_btn(
                     "rail-mock",
                     IconName::Cpu.into(),
@@ -1996,7 +2014,7 @@ impl VerveApp {
                     cx,
                 ))
             })
-            .when(SideView::History != self.home_view, |rail| {
+            .when(is_visible(SideView::History), |rail| {
                 rail.child(rail_btn(
                     "rail-history",
                     vicon(HISTORY),
@@ -2006,7 +2024,7 @@ impl VerveApp {
                     cx,
                 ))
             })
-            .when(SideView::Ssh != self.home_view, |rail| {
+            .when(is_visible(SideView::Ssh), |rail| {
                 rail.child(rail_btn(
                     "rail-ssh",
                     IconName::SquareTerminal.into(),

@@ -27,6 +27,10 @@ settings:
   current: 当前
   language: 界面语言
   language_desc: 切换应用界面语言。
+  activity_bar: 活动栏显示
+  activity_bar_desc: 选择要在左侧活动栏显示的模块。被隐藏的模块仍可通过首页按钮访问。
+  show: 显示
+  hide: 隐藏
 
 update:
   title: 检查更新

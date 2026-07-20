@@ -199,6 +199,10 @@ pub struct PanelLayout {
     /// `rust_i18n::set_locale` at startup. Defaults to "zh-CN".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    /// Which activity-rail items are hidden. Each entry is a SideView name
+    /// (e.g. "History", "Ssh"). Absent/empty means all items are shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_rails: Option<Vec<String>>,
 }
 
 /// Persisted Git integration settings.
@@ -286,5 +290,26 @@ pub fn load_git_config() -> GitConfig {
 pub fn save_git_config(cfg: &GitConfig) {
     let mut layout = load_layout().unwrap_or_default();
     layout.git = Some(cfg.clone());
+    let _ = save_layout(&layout);
+}
+
+/// Load the set of hidden activity-rail views (by SideView name).
+/// Returns an empty set when nothing is configured (all items visible).
+pub fn load_hidden_rails() -> std::collections::HashSet<String> {
+    load_layout()
+        .and_then(|l| l.hidden_rails)
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+/// Persist the set of hidden activity-rail views.
+pub fn save_hidden_rails(hidden: &std::collections::HashSet<String>) {
+    let mut layout = load_layout().unwrap_or_default();
+    if hidden.is_empty() {
+        layout.hidden_rails = None;
+    } else {
+        layout.hidden_rails = Some(hidden.iter().cloned().collect());
+    }
     let _ = save_layout(&layout);
 }

@@ -62,6 +62,8 @@ pub struct SettingsWindow {
     /// The current home-view setting (首页指向), read from layout on each
     /// render so external changes are picked up.
     pub home_view: SideView,
+    /// Which activity-rail items are currently hidden.
+    pub hidden_rails: std::collections::HashSet<String>,
     /// Whether an update check is in progress (drives the settings-page spinner).
     pub update_checking: bool,
     /// The result of the last update check (shown in the settings page).
@@ -83,12 +85,14 @@ impl SettingsWindow {
         let home_view = persistence::load_layout()
             .and_then(|l| l.home_view.as_deref().map(SideView::parse))
             .unwrap_or(SideView::Api);
+        let hidden_rails = persistence::load_hidden_rails();
         Self {
             state,
             kind,
             envs_view,
             active_section,
             home_view,
+            hidden_rails,
             update_checking: false,
             update_check_result: None,
         }
@@ -99,6 +103,17 @@ impl SettingsWindow {
         let mut layout = persistence::load_layout().unwrap_or_default();
         layout.home_view = Some(view.name().to_string());
         let _ = persistence::save_layout(&layout);
+    }
+
+    /// Toggle visibility of a single rail item.
+    fn toggle_rail(&mut self, view: SideView) {
+        let name = view.name();
+        if self.hidden_rails.contains(name) {
+            self.hidden_rails.remove(name);
+        } else {
+            self.hidden_rails.insert(name.to_string());
+        }
+        persistence::save_hidden_rails(&self.hidden_rails);
     }
 
     /// Persist the UI locale to `layout.json`.
@@ -480,6 +495,81 @@ impl Render for SettingsWindow {
                                                                 }))
                                                         }),
                                                 ),
+                                        )
+                                        // Section: 活动栏显示 / Activity Bar Items
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_base()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(rust_i18n::t!("settings.activity_bar").to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(muted)
+                                                        .child(rust_i18n::t!("settings.activity_bar_desc").to_string()),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .mt_2()
+                                                        .gap(px(4.))
+                                                        .w(px(340.))
+                                                        .children({
+                                                            // Snapshot hidden set for use in click handlers.
+                                                            let hidden_set: std::collections::HashSet<String> = self.hidden_rails.clone();
+                                                            SideView::ALL.iter().map(move |&view| {
+                                                                let name = view.name().to_string();
+                                                                let is_hidden = hidden_set.contains(&name);
+                                                                let tc = theme.clone();
+                                                                div()
+                                                                    .id(format!("rail-toggle-{}", view.name()))
+                                                                    .px_3()
+                                                                    .py_2()
+                                                                    .rounded_md()
+                                                                    .border_1()
+                                                                    .cursor_pointer()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap_2()
+                                                                    .border_color(tc.border)
+                                                                    .hover(|s| s.bg(tc.muted))
+                                                                    .child(
+                                                                        div()
+                                                                            .text_sm()
+                                                                            .text_color(tc.foreground)
+                                                                            .child(view.label().to_string()),
+                                                                    )
+                                                                    .child(div().flex_1())
+                                                                    .child(
+                                                                        div()
+                                                                            .px_2()
+                                                                            .py(px(1.))
+                                                                            .rounded(px(3.))
+                                                                            .text_xs()
+                                                                            .when(!is_hidden, |d| {
+                                                                                d.bg(tc.accent.opacity(0.2))
+                                                                                    .text_color(tc.accent)
+                                                                            })
+                                                                            .when(is_hidden, |d| {
+                                                                                d.bg(tc.muted)
+                                                                                    .text_color(tc.muted_foreground)
+                                                                            })
+                                                                            .child(if is_hidden {
+                                                                                rust_i18n::t!("settings.hide").to_string()
+                                                                            } else {
+                                                                                rust_i18n::t!("settings.show").to_string()
+                                                                            }),
+                                                                    )
+                                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                                        this.toggle_rail(view);
+                                                                        cx.notify();
+                                                                    }))
+                                                            })
+                                                        }),
+                                                )
                                         )
                                         .into_any_element()
                                 }

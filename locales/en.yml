@@ -27,6 +27,10 @@ settings:
   current: Current
   language: Interface Language
   language_desc: Switch the application interface language.
+  activity_bar: Activity Bar Items
+  activity_bar_desc: Choose which modules appear in the left activity rail. Hidden modules are still accessible via the home button.
+  show: Show
+  hide: Hide
 
 update:
   title: Check for Updates

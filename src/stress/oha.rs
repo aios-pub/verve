@@ -57,38 +57,30 @@ pub async fn run_oha(
     let mut args = vec![
         "oha".to_string(),
         "--no-tui".to_string(),
-        "--output-format".to_string(),
-        "json".to_string(),
-        "--output".to_string(),
-        temp_path.clone(),
-        "-c".to_string(),
-        concurrency.to_string(),
-        "-z".to_string(),
-        format!("{duration_secs}s"),
-        "-m".to_string(),
-        method_str(prepared.method).to_string(),
+        "--output-format=json".to_string(),
+        format!("--output={temp_path}"),
+        format!("-c={concurrency}"),
+        format!("-z={duration_secs}s"),
+        format!("-m={}", method_str(prepared.method)),
     ];
 
     if let Some(q) = qps {
-        args.push("-q".to_string());
-        args.push(q.to_string());
+        args.push(format!("-q={q}"));
     }
 
-    // Add headers
+    // Add headers (use -H=k:v form to avoid ambiguity if value starts with '-')
     for (k, v) in &prepared.headers {
         if k.eq_ignore_ascii_case("content-length") {
             // oha computes Content-Length itself
             continue;
         }
-        args.push("-H".to_string());
-        args.push(format!("{k}: {v}"));
+        args.push(format!("-H={k}: {v}"));
     }
 
-    // Add body if present
+    // Add body if present (use -d=<body> form to avoid ambiguity if body starts with '-')
     if !prepared.body.is_empty() {
         let body_str = String::from_utf8_lossy(&prepared.body).to_string();
-        args.push("-d".to_string());
-        args.push(body_str);
+        args.push(format!("-d={body_str}"));
     }
 
     // Add URL as the final positional argument

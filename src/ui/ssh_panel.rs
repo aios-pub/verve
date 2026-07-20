@@ -13,6 +13,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
 };
+use gpui_component::input::{Input, InputState};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::ssh::client::SshConnection;
 use crate::ssh::host_store;
 use crate::ssh::models::SshHost;
+use crate::ssh::port_forward::LocalForward;
 use crate::ssh::terminal::TerminalView;
 use crate::ui::sftp_browser::SftpBrowser;
 
@@ -79,6 +81,7 @@ enum PumpMsg {
 pub enum SessionView {
     Terminal,
     Sftp,
+    Forwards,
 }
 
 /// One active terminal session.
@@ -104,6 +107,9 @@ pub struct TerminalSession {
     pub status: SessionStatus,
     /// Active ZMODEM transfer state (if any).
     pub zm_state: ZmUiState,
+    /// Currently-active local port forwards. Dropping this vec (or the session)
+    /// stops the forwards via LocalForward::stop's Drop impl on abort.
+    pub active_forwards: Vec<LocalForward>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,8 +165,22 @@ pub struct SshPanel {
     /// When true, show the host picker overlay (for starting new connections
     /// without closing existing sessions).
     pub show_host_picker: bool,
+    /// When Some(message), show a small status toast in the Forwards view
+    /// (e.g. "已启动: 127.0.0.1:8080 → ..."). Cleared after a few seconds by
+    /// the render loop when stale.
+    pub fwd_status: Option<(std::time::Instant, String)>,
+    /// Cached InputState entities for the "add forward" form. Created lazily
+    /// on first render (they require a `&Window`).
+    pub fwd_inputs: Option<FwdInputs>,
     focus_handle: FocusHandle,
     _subs: Vec<gpui::Subscription>,
+}
+
+/// Cached InputState entities for the add-forward form.
+pub struct FwdInputs {
+    pub local_port: Entity<InputState>,
+    pub remote_host: Entity<InputState>,
+    pub remote_port: Entity<InputState>,
 }
 
 impl EventEmitter<SshEvent> for SshPanel {}
@@ -177,9 +197,26 @@ impl SshPanel {
             active_tab: 0,
             pending_connect: None,
             show_host_picker: false,
+            fwd_status: None,
+            fwd_inputs: None,
             focus_handle,
             _subs: Vec::new(),
         }
+    }
+
+    /// Lazily build the add-forward InputState entities on first render.
+    fn ensure_fwd_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fwd_inputs.is_some() {
+            return;
+        }
+        let local_port = cx.new(|cx| InputState::new(window, cx).placeholder("本地端口 8080"));
+        let remote_host = cx.new(|cx| InputState::new(window, cx).placeholder("远端 host 127.0.0.1"));
+        let remote_port = cx.new(|cx| InputState::new(window, cx).placeholder("远端端口 80"));
+        self.fwd_inputs = Some(FwdInputs {
+            local_port,
+            remote_host,
+            remote_port,
+        });
     }
 
     /// Reload the cached hosts from disk.
@@ -215,7 +252,7 @@ impl Render for SshPanel {
         let show_picker = self.show_host_picker;
 
         if has_sessions {
-            let terminal_view = self.render_terminal_view(cx, theme.clone());
+            let terminal_view = self.render_terminal_view(_window, cx, theme.clone());
 
             if show_picker {
                 // Overlay: dimmed background + host card grid on top.
@@ -976,6 +1013,7 @@ impl SshPanel {
             resize_tx: None,
             status: SessionStatus::Connecting,
             zm_state: ZmUiState::default(),
+            active_forwards: Vec::new(),
         });
         self.active_tab = self.sessions.len() - 1;
         cx.notify();
@@ -984,6 +1022,7 @@ impl SshPanel {
     /// Render the multi-tab terminal/SFTP view.
     fn render_terminal_view(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
         theme: gpui_component::Theme,
     ) -> impl IntoElement {
@@ -1020,6 +1059,8 @@ impl SshPanel {
                         .child("正在打开 SFTP…")
                         .into_any_element()
                 })
+        } else if active_view == SessionView::Forwards {
+            self.render_forwards_view(window, &theme, active, cx).into_any_element()
         } else {
             self.sessions
                 .get(active)
@@ -1152,6 +1193,38 @@ impl SshPanel {
                                         }
                                         cx.notify();
                                     }))
+                            })
+                            .child({
+                                let can_open = active_has_conn;
+                                let active_count = self
+                                    .sessions
+                                    .get(active)
+                                    .map(|s| s.active_forwards.len())
+                                    .unwrap_or(0);
+                                let label = if active_count > 0 {
+                                    format!("转发 ({active_count})")
+                                } else {
+                                    "端口转发".into()
+                                };
+                                Button::new("ssh-view-forwards")
+                                    .ghost()
+                                    .xsmall()
+                                    .label(label)
+                                    .when(active_view == SessionView::Forwards, |b| b.primary())
+                                    .tooltip(if can_open {
+                                        "本地端口转发：将远端服务映射到本地端口"
+                                    } else {
+                                        "等待连接建立…"
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !can_open {
+                                            return;
+                                        }
+                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
+                                            s.view = SessionView::Forwards;
+                                        }
+                                        cx.notify();
+                                    }))
                             }),
                     ),
             )
@@ -1279,6 +1352,267 @@ impl SshPanel {
         session.sftp_browser = Some(browser);
 
         cx.notify();
+    }
+
+    /// Render the Port Forwards view for the active session: list of configured
+    /// forwards on the host with start/stop toggles, plus an inline "add" form.
+    /// Active forwards show their bound URL for copy into the API tester.
+    fn render_forwards_view(
+        &mut self,
+        window: &mut Window,
+        theme: &gpui_component::Theme,
+        active: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use gpui_component::button::ButtonVariants as _;
+
+        self.ensure_fwd_inputs(window, cx);
+
+        // Expire the status toast after 4s.
+        if let Some((t, _)) = self.fwd_status {
+            if t.elapsed().as_secs() >= 4 {
+                self.fwd_status = None;
+            }
+        }
+        let status_text = self
+            .fwd_status
+            .as_ref()
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default();
+
+        let host_id = self
+            .sessions
+            .get(active)
+            .map(|s| s.host_id.clone())
+            .unwrap_or_default();
+        // Configured forwards from the stored host record.
+        let forwards: Vec<crate::ssh::models::PortForward> = self
+            .hosts
+            .iter()
+            .find(|h| h.id == host_id)
+            .map(|h| h.port_forwards.clone())
+            .unwrap_or_default();
+
+        // Clone input entities for the add form (so closures can move them).
+        let (lp_ent, rh_ent, rp_ent) = match &self.fwd_inputs {
+            Some(f) => (f.local_port.clone(), f.remote_host.clone(), f.remote_port.clone()),
+            None => return div().into_any_element(),
+        };
+
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+
+        v_flex()
+            .size_full()
+            .id("ssh-forwards-scroll")
+            .p_4()
+            .gap_3()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("本地端口转发"),
+            )
+            .child(
+                div().text_size(px(12.)).text_color(muted).child(
+                    "把远端服务映射到本地端口，转发后可在内置 API 测试中直接访问 http://127.0.0.1:端口",
+                ),
+            )
+            // Add-new form
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div().w(px(110.)).child(Input::new(&lp_ent).small().appearance(false)),
+                    )
+                    .child(div().text_color(muted).child("→"))
+                    .child(
+                        div().flex_1().child(Input::new(&rh_ent).small().appearance(false)),
+                    )
+                    .child(
+                        div().w(px(110.)).child(Input::new(&rp_ent).small().appearance(false)),
+                    )
+                    .child(
+                        Button::new("fwd-add")
+                            .small()
+                            .primary()
+                            .label("添加")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let lp_raw = lp_ent.read(cx).value().to_string();
+                                let rh = rh_ent.read(cx).value().trim().to_string();
+                                let rp_raw = rp_ent.read(cx).value().to_string();
+                                let Ok(lp) = lp_raw.trim().parse::<u16>() else {
+                                    this.fwd_status = Some((std::time::Instant::now(), "本地端口无效".into()));
+                                    cx.notify();
+                                    return;
+                                };
+                                let Ok(rp) = rp_raw.trim().parse::<u16>() else {
+                                    this.fwd_status = Some((std::time::Instant::now(), "远端端口无效".into()));
+                                    cx.notify();
+                                    return;
+                                };
+                                if rh.is_empty() {
+                                    this.fwd_status = Some((std::time::Instant::now(), "远端 host 不能为空".into()));
+                                    cx.notify();
+                                    return;
+                                }
+                                let host_id = this.sessions.get(active).map(|s| s.host_id.clone()).unwrap_or_default();
+                                if let Some(h) = this.hosts.iter_mut().find(|h| h.id == host_id) {
+                                    let mut f = crate::ssh::models::PortForward::new();
+                                    f.local_port = lp;
+                                    f.remote_host = rh;
+                                    f.remote_port = rp;
+                                    h.port_forwards.push(f);
+                                    crate::ssh::host_store::save_hosts(&this.hosts);
+                                    // Reset form fields.
+                                    lp_ent.update(cx, |s, cx| s.set_value("", window, cx));
+                                    rh_ent.update(cx, |s, cx| s.set_value("", window, cx));
+                                    rp_ent.update(cx, |s, cx| s.set_value("", window, cx));
+                                    this.fwd_status = Some((std::time::Instant::now(), "已添加，点 ▶ 启动".into()));
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when(!status_text.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.primary)
+                        .child(status_text.clone()),
+                )
+            })
+            .child(div().h(px(1.)).w_full().bg(border))
+            .child(if forwards.is_empty() {
+                div().text_size(px(13.)).text_color(muted).child("暂无转发规则").into_any_element()
+            } else {
+                // Build an owned vec of (index, forward, bound_addr) so the map closure
+                // doesn't borrow `forwards` across the `.children()` iterator.
+                let rows: Vec<(usize, crate::ssh::models::PortForward, String)> =
+                    forwards.iter().enumerate().map(|(i, f)| {
+                        let bound_addr = self.sessions.get(active).and_then(|s| {
+                            s.active_forwards.iter().find_map(|lf| {
+                                if lf.bound_addr.ends_with(&format!(":{}", f.local_port)) {
+                                    Some(lf.bound_addr.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                        }).unwrap_or_default();
+                        (i, f.clone(), bound_addr)
+                    }).collect();
+
+                v_flex().gap_2().children(rows.into_iter().map(|(i, f, bound_addr)| {
+                    let spec = format!("127.0.0.1:{} → {}:{}", f.local_port, f.remote_host, f.remote_port);
+                    let is_running = !bound_addr.is_empty();
+                    let bound_addr_c = bound_addr.clone();
+
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .p_2()
+                        .border_1()
+                        .border_color(border)
+                        .rounded_md()
+                        .child(
+                            Button::new(("fwd-toggle", i))
+                                .xsmall()
+                                .icon(if is_running { IconName::Pause } else { IconName::Play })
+                                .when(is_running, |b| b.primary())
+                                .tooltip(if is_running { "停止转发" } else { "启动转发" })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let Some(session) = this.sessions.get_mut(active) else { return };
+                                    if is_running {
+                                        if let Some(pos) = session.active_forwards.iter().position(|lf| lf.bound_addr == bound_addr) {
+                                            let lf = session.active_forwards.remove(pos);
+                                            lf.stop();
+                                            this.fwd_status = Some((std::time::Instant::now(), "已停止转发".into()));
+                                        }
+                                    } else {
+                                        let Some(conn) = session.connection.clone() else {
+                                            this.fwd_status = Some((std::time::Instant::now(), "未连接".into()));
+                                            cx.notify();
+                                            return;
+                                        };
+                                        let local_host = "127.0.0.1".to_string();
+                                        let lp = f.local_port;
+                                        let rh = f.remote_host.clone();
+                                        let rp = f.remote_port;
+                                        let panel = cx.entity().downgrade();
+                                        cx.spawn(async move |_this, cx| {
+                                            let res = conn
+                                                .start_local_forward(&local_host, lp, &rh, rp)
+                                                .await;
+                                            let _ = panel.update(cx, move |this, cx| {
+                                                match res {
+                                                    Ok(lf) => {
+                                                        let bound = lf.bound_addr.clone();
+                                                        if let Some(s) = this.sessions.get_mut(active) {
+                                                            s.active_forwards.push(lf);
+                                                        }
+                                                        this.fwd_status = Some((
+                                                            std::time::Instant::now(),
+                                                            format!("已启动: http://{bound}"),
+                                                        ));
+                                                    }
+                                                    Err(e) => {
+                                                        this.fwd_status = Some((
+                                                            std::time::Instant::now(),
+                                                            format!("启动失败: {e}"),
+                                                        ));
+                                                    }
+                                                }
+                                                cx.notify();
+                                            });
+                                        })
+                                        .detach();
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(div().flex_1().text_size(px(13.)).child(spec))
+                        .when(is_running, |d| {
+                            let copy_addr = bound_addr_c.clone();
+                            d.child(
+                                Button::new(("fwd-copy", i))
+                                    .ghost()
+                                    .xsmall()
+                                    .label("复制 URL")
+                                    .tooltip(format!("http://{copy_addr}"))
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(format!("http://{copy_addr}")));
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new(("fwd-del", i))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Delete)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let host_id = this.sessions.get(active).map(|s| s.host_id.clone()).unwrap_or_default();
+                                    // Stop if running.
+                                    if let Some(session) = this.sessions.get_mut(active) {
+                                        if let Some(pos) = session.active_forwards.iter().position(|lf| lf.bound_addr == bound_addr_c) {
+                                            let lf = session.active_forwards.remove(pos);
+                                            lf.stop();
+                                        }
+                                    }
+                                    if let Some(h) = this.hosts.iter_mut().find(|h| h.id == host_id) {
+                                        if i < h.port_forwards.len() {
+                                            h.port_forwards.remove(i);
+                                            crate::ssh::host_store::save_hosts(&this.hosts);
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                })).into_any_element()
+            })
+            .into_any_element()
     }
 
     /// Close a terminal session by tab index.

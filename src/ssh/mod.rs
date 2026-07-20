@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod host_store;
 pub mod known_hosts;
 pub mod models;
+pub mod port_forward;
 pub mod sftp;
 pub mod terminal;
 pub mod vault;

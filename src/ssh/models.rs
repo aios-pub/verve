@@ -119,8 +119,74 @@ pub struct SshHost {
     /// Color tag for visual grouping (hex or theme key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Configured port forwards (local and remote). Active runtime state is
+    /// NOT persisted here — this is just the configuration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_forwards: Vec<PortForward>,
     /// Creation timestamp (Unix seconds).
     pub created_at: i64,
+}
+
+/// Direction of an SSH port forward.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardDirection {
+    /// Local forward: listen on `local_host:local_port`, forward connections
+    /// over SSH to `remote_host:remote_port` (e.g. access a remote DB locally).
+    Local,
+    /// Remote forward: listen on the *server* at `remote_host:remote_port`,
+    /// forward back over SSH to `local_host:local_port` (expose a local
+    /// service to the SSH server's network).
+    Remote,
+}
+
+impl ForwardDirection {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ForwardDirection::Local => "本地转发 (Local)",
+            ForwardDirection::Remote => "远程转发 (Remote)",
+        }
+    }
+}
+
+/// A configured port forward rule (persisted on the host record).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortForward {
+    /// Unique id (UUID v4 simple).
+    pub id: String,
+    /// Local vs Remote direction.
+    pub direction: ForwardDirection,
+    /// Local bind address (usually "127.0.0.1").
+    pub local_host: String,
+    /// Local port.
+    pub local_port: u16,
+    /// Remote/target host (reachable from the SSH server).
+    pub remote_host: String,
+    /// Remote/target port.
+    pub remote_port: u16,
+    /// Auto-start the forward when the SSH connection opens.
+    #[serde(default)]
+    pub auto_start: bool,
+}
+
+impl PortForward {
+    pub fn new() -> Self {
+        Self {
+            id: new_id(),
+            direction: ForwardDirection::Local,
+            local_host: "127.0.0.1".into(),
+            local_port: 8080,
+            remote_host: "127.0.0.1".into(),
+            remote_port: 80,
+            auto_start: false,
+        }
+    }
+}
+
+impl Default for PortForward {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn default_port() -> u16 {
@@ -148,6 +214,7 @@ impl SshHost {
             bastion_id: None,
             bastion_target_override: None,
             color: None,
+            port_forwards: Vec::new(),
             created_at: now,
         }
     }

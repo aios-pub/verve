@@ -24,6 +24,7 @@ use super::credentials;
 use super::host_store;
 use super::known_hosts;
 use super::models::{SshAuthType, SshHost};
+use super::port_forward::LocalForward;
 use super::sftp::SftpSessionWrapper;
 
 /// Messages from the SSH session to the terminal/UI.
@@ -46,7 +47,7 @@ pub struct ResizeCmd {
 
 /// russh client handler with Trust-On-First-Use known_hosts verification.
 #[derive(Clone)]
-struct SshHandler {
+pub(crate) struct SshHandler {
     /// The target host (the inner-most host, after bastion hops). The host
     /// key is stored under `host:port` in the known_hosts file.
     host: String,
@@ -266,6 +267,33 @@ impl SshConnection {
     pub async fn open_sftp(&self) -> Result<SftpSessionWrapper, String> {
         let mut handle = self.handle.lock().await;
         SftpSessionWrapper::open(&mut *handle).await
+    }
+
+    /// Start a local port forward: bind `local_host:local_port`, bridge each
+    /// connection over SSH to `remote_host:remote_port`. The returned handle
+    /// owns the listener task; drop it or call [`LocalForward::stop`] to tear
+    /// the forward down.
+    pub async fn start_local_forward(
+        &self,
+        local_host: &str,
+        local_port: u16,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Result<LocalForward, String> {
+        super::port_forward::start_local(
+            self.handle.clone(),
+            local_host,
+            local_port,
+            remote_host,
+            remote_port,
+        )
+        .await
+    }
+
+    /// Expose the underlying handle for advanced use (callers must not
+    /// disconnect while other channels are active).
+    pub fn handle(&self) -> Arc<Mutex<Handle<SshHandler>>> {
+        self.handle.clone()
     }
 }
 

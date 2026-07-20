@@ -10,6 +10,7 @@ pub mod kv_table;
 pub mod method_colors;
 pub mod project_manage_panel;
 pub mod project_tree_panel;
+pub mod proxy_panel;
 pub mod request_panel;
 pub mod response_panel;
 pub mod settings_window;

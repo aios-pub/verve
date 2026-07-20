@@ -34,6 +34,7 @@ use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::autotest_panel::AutoTestPanel;
+use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
 
@@ -55,6 +56,8 @@ pub struct VerveApp {
     pub autotest: Entity<AutoTestPanel>,
     /// Stress testing panel (oha/runner + live results).
     pub stress: Entity<StressPanel>,
+    /// HTTP proxy / traffic capture panel.
+    pub proxy: Entity<ProxyPanel>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -155,6 +158,8 @@ pub enum SideView {
     AutoTest,
     /// Stress testing (压测).
     Stress,
+    /// HTTP proxy / traffic capture.
+    Proxy,
     /// SSH connection management (SSH 管理).
     Ssh,
 }
@@ -165,6 +170,7 @@ impl SideView {
         SideView::Api,
         SideView::AutoTest,
         SideView::Stress,
+        SideView::Proxy,
         SideView::Share,
         SideView::ProjectManage,
         SideView::Environments,
@@ -184,6 +190,7 @@ impl SideView {
             SideView::Share => "Share",
             SideView::AutoTest => "AutoTest",
             SideView::Stress => "Stress",
+            SideView::Proxy => "Proxy",
             SideView::Ssh => "Ssh",
         }
     }
@@ -198,6 +205,7 @@ impl SideView {
             "Share" => SideView::Share,
             "AutoTest" => SideView::AutoTest,
             "Stress" => SideView::Stress,
+            "Proxy" => SideView::Proxy,
             "Ssh" => SideView::Ssh,
             _ => SideView::Api,
         }
@@ -214,6 +222,7 @@ impl SideView {
             SideView::Share => rust_i18n::t!("view.share").to_string(),
             SideView::AutoTest => rust_i18n::t!("view.autotest").to_string(),
             SideView::Stress => "压测".to_string(),
+            SideView::Proxy => "抓包".to_string(),
             SideView::Ssh => rust_i18n::t!("view.ssh").to_string(),
         }
     }
@@ -327,6 +336,7 @@ impl VerveApp {
         let ssh = cx.new(|cx| SshPanel::new(window, cx));
         let autotest = cx.new(|cx| AutoTestPanel::new(state.clone(), window, cx));
         let stress = cx.new(|cx| StressPanel::new(state.clone(), window, cx));
+        let proxy = cx.new(|cx| ProxyPanel::new(window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -359,6 +369,7 @@ impl VerveApp {
             ssh,
             autotest,
             stress,
+            proxy,
             share_server,
             share_configs,
             env_select,
@@ -1723,7 +1734,7 @@ impl Render for VerveApp {
         let side_left: gpui::AnyElement = match self.active_view {
             SideView::Api | SideView::Environments | SideView::Mock => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh => {
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::Ssh => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -1789,13 +1800,13 @@ impl Render for VerveApp {
         // replace the entire workbench (rail + tree + request/response).
         let _exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::Ssh
         );
 
         // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::Ssh
         );
 
         v_flex()
@@ -1822,6 +1833,7 @@ impl Render for VerveApp {
                             SideView::Ssh => ssh.clone().into_any_element(),
                             SideView::AutoTest => self.autotest.clone().into_any_element(),
                             SideView::Stress => self.stress.clone().into_any_element(),
+                            SideView::Proxy => self.proxy.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(
@@ -2013,6 +2025,16 @@ impl VerveApp {
                     "rail-stress",
                     IconName::ChartPie.into(),
                     SideView::Stress,
+                    active,
+                    &theme,
+                    cx,
+                ))
+            })
+            .when(is_visible(SideView::Proxy), |rail| {
+                rail.child(rail_btn(
+                    "rail-proxy",
+                    IconName::Globe.into(),
+                    SideView::Proxy,
                     active,
                     &theme,
                     cx,

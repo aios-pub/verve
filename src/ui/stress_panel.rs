@@ -146,9 +146,7 @@ impl StressPanel {
         self.snapshot = None;
 
         let Some((cfg, _target_name)) = self.build_config(cx) else {
-            self.error = Some(
-                "请先在下方接口树中选中一个请求，并填写并发数/持续秒数（正整数）".into(),
-            );
+            self.error = Some(t("请先在下方接口树中选中一个请求，并填写并发数/持续秒数（正整数）"));
             cx.notify();
             return;
         };
@@ -162,7 +160,7 @@ impl StressPanel {
         let project = match self.state.read(cx).active_project().cloned() {
             Some(p) => p,
             None => {
-                self.error = Some("未选中项目".into());
+                self.error = Some(t("未选中项目"));
                 cx.notify();
                 return;
             }
@@ -174,14 +172,14 @@ impl StressPanel {
         let req_id = match &cfg.target {
             StressTarget::Request(id) => id.clone(),
             StressTarget::TestCase(_) => {
-                self.error = Some("多步骤场景压测请直接在自动化测试面板运行".into());
+                self.error = Some(t("多步骤场景压测请直接在自动化测试面板运行"));
                 self.running = false;
                 cx.notify();
                 return;
             }
         };
         let Some((_, req)) = project.find_request(&req_id) else {
-            self.error = Some("请求不存在".into());
+            self.error = Some(t("请求不存在"));
             self.running = false;
             cx.notify();
             return;
@@ -236,7 +234,7 @@ impl StressPanel {
                         let _ = entity.update(cx, |panel, cx| {
                             panel.running = false;
                             panel.handle = None;
-                            panel.error = Some("压测任务异常退出".into());
+                            panel.error = Some(t("压测任务异常退出"));
                             cx.notify();
                         });
                         break;
@@ -306,7 +304,7 @@ impl Render for StressPanel {
             .active_project()
             .and_then(|p| selected_id.as_deref().and_then(|id| p.find_request(id)))
             .map(|(_, r)| (r.name.clone(), Some(r.method)))
-            .unwrap_or_else(|| ("(未选中请求)".into(), None));
+            .unwrap_or_else(|| (t("(未选中请求)"), None));
 
         v_flex()
             .size_full()
@@ -320,14 +318,14 @@ impl Render for StressPanel {
                     .gap_2()
                     .border_b_1()
                     .border_color(border)
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("压测"))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t("压测")))
                     .child(div().flex_1())
                     .child(if running {
                         Button::new("stress-stop")
                             .small()
                             .danger()
                             .icon(IconName::Close)
-                            .label("停止")
+                            .label(t("停止"))
                             .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                             .into_any_element()
                     } else {
@@ -335,7 +333,7 @@ impl Render for StressPanel {
                             .small()
                             .primary()
                             .icon(IconName::Play)
-                            .label("开始压测")
+                            .label(t("开始压测"))
                             .disabled(!has_project || running)
                             .on_click(cx.listener(|this, _, _, cx| this.start(cx)))
                             .into_any_element()
@@ -357,14 +355,14 @@ impl Render for StressPanel {
                                 h_flex()
                                     .gap_2()
                                     .items_center()
-                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("目标请求"))
+                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t("目标请求")))
                                     .child(div().flex_1())
                                     .child(
                                         Button::new("stress-tree-toggle")
                                             .ghost()
                                             .xsmall()
                                             .icon(if self.tree_visible { IconName::ChevronDown } else { IconName::ChevronRight })
-                                            .label(if self.tree_visible { "收起树" } else { "展开树" })
+                                            .label(if self.tree_visible { t("收起树") } else { t("展开树") })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.tree_visible = !this.tree_visible;
                                                 cx.notify();
@@ -411,7 +409,7 @@ impl Render for StressPanel {
                                                         .text_size(px(12.))
                                                         .text_color(muted)
                                                         .p_2()
-                                                        .child("请先打开或创建一个项目")
+                                                        .child(t("请先打开或创建一个项目"))
                                                         .into_any_element()]
                                                 }),
                                         ),
@@ -426,36 +424,36 @@ impl Render for StressPanel {
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .child(div().text_xs().text_color(muted).child("并发数"))
+                                    .child(div().text_xs().text_color(muted).child(t("并发数")))
                                     .child(Input::new(&concurrency).small().w(px(110.))),
                             )
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .child(div().text_xs().text_color(muted).child("持续 (秒)"))
+                                    .child(div().text_xs().text_color(muted).child(t("持续 (秒)")))
                                     .child(Input::new(&duration_secs).small().w(px(110.))),
                             )
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .child(div().text_xs().text_color(muted).child("QPS 上限 (可选)"))
+                                    .child(div().text_xs().text_color(muted).child(t("QPS 上限 (可选)")))
                                     .child(Input::new(&qps).small().w(px(130.))),
                             ),
                     )
                     // Snapshot / result.
                     .child(div().h(px(1.)).w_full().bg(border))
                     .when(self.running, |c| {
-                        c.child(div().text_sm().child("压测进行中…"))
+                        c.child(div().text_sm().child(t("压测进行中…")))
                             .when_some(self.snapshot.as_ref(), |c, snap| {
-                                c.child(render_live_stats(snap))
+                                c.child(render_live_stats(snap, muted))
                                     .child(render_latency_chart(
                                         &snap.latency_bins,
-                                        "响应时间分布（实时）",
+                                        &t("响应时间分布（实时）"),
                                         &theme,
                                     ))
                             })
                             .when(self.snapshot.is_none(), |c| {
-                                c.child(div().text_xs().text_color(muted).child("正在启动压测…"))
+                                c.child(div().text_xs().text_color(muted).child(t("正在启动压测…")))
                             })
                     })
                     .when(!self.running, |c| {
@@ -464,12 +462,12 @@ impl Render for StressPanel {
                                 div()
                                     .text_xs()
                                     .text_color(muted)
-                                    .child("配置参数后点“开始压测”。结果显示于此。"),
+                                    .child(t("配置参数后点“开始压测”。结果显示于此。")),
                             )
                         })
                     })
                     .children(self.error.as_ref().map(|e| {
-                        div().text_size(px(12.)).text_color(theme.danger).child(format!("错误：{e}"))
+                        div().text_size(px(12.)).text_color(theme.danger).child(format!("{}：{}", t("错误"), e))
                     }))
                     .children(self.result.as_ref().map(|r| render_result(r, &theme))),
             )
@@ -524,7 +522,7 @@ fn render_request_tree(
                 .text_size(px(12.))
                 .text_color(cx.theme().muted_foreground)
                 .p_2()
-                .child("当前项目暂无请求")
+                .child(t("当前项目暂无请求"))
                 .into_any_element(),
         );
     }
@@ -602,29 +600,31 @@ fn render_folder_tree(
 
 fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement {
     let lat = &r.latency_ms;
+    let muted = theme.muted_foreground;
     v_flex()
         .gap_2()
-        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("结果"))
+        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(t("结果")))
         .child(
             h_flex()
                 .gap_4()
-                .child(stat("总请求".into(), format!("{}", r.total)))
-                .child(stat("成功".into(), format!("{}", r.success)))
-                .child(stat("失败".into(), format!("{}", r.failed)))
-                .child(stat("QPS".into(), format!("{:.1}", r.rps))),
+                .child(stat(t("总请求数"), format!("{}", r.total), muted))
+                .child(stat(t("成功"), format!("{}", r.success), muted))
+                .child(stat(t("失败"), format!("{}", r.failed), muted))
+                .child(stat(t("QPS（每秒请求）"), format!("{:.1}", r.rps), muted)),
         )
         .child(
             h_flex()
                 .gap_4()
-                .child(stat("p50 (ms)".into(), format!("{:.0}", lat.p50)))
-                .child(stat("p95 (ms)".into(), format!("{:.0}", lat.p95)))
-                .child(stat("p99 (ms)".into(), format!("{:.0}", lat.p99)))
-                .child(stat("max (ms)".into(), format!("{:.0}", lat.max))),
+                .child(stat(t("平均 (ms)"), format!("{:.0}", lat.mean), muted))
+                .child(stat(t("p50 (ms)"), format!("{:.0}", lat.p50), muted))
+                .child(stat(t("p95 (ms)"), format!("{:.0}", lat.p95), muted))
+                .child(stat(t("p99 (ms)"), format!("{:.0}", lat.p99), muted))
+                .child(stat(t("最大 (ms)"), format!("{:.0}", lat.max), muted)),
         )
         .when(!r.response_time_histogram.is_empty(), |c| {
             c.child(render_latency_chart(
                 &r.response_time_histogram,
-                "响应时间分布",
+                &t("响应时间分布"),
                 theme,
             ))
         })
@@ -635,7 +635,7 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
             c.child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_xs().text_color(theme.muted_foreground).child("状态码分布"))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(t("状态码分布")))
                     .children(r.status_distribution.iter().map(|(code, n)| {
                         div().text_size(px(12.)).child(format!("{code}: {n}"))
                     })),
@@ -645,7 +645,7 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
             c.child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_xs().text_color(theme.muted_foreground).child("错误分布"))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(t("错误分布")))
                     .children(r.errors.iter().map(|(msg, n)| {
                         div().text_size(px(12.)).child(format!("{msg}: {n}"))
                     })),
@@ -654,18 +654,25 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
         .into_any_element()
 }
 
-fn render_live_stats(snap: &StressSnapshot) -> AnyElement {
+fn render_live_stats(snap: &StressSnapshot, muted: Hsla) -> AnyElement {
     h_flex()
         .gap_4()
-        .child(stat("已完成".into(), format!("{}", snap.completed)))
-        .child(stat("成功".into(), format!("{}", snap.success)))
-        .child(stat("失败".into(), format!("{}", snap.failed)))
-        .child(stat("QPS".into(), format!("{:.0}", snap.rps)))
-        .child(stat("p50".into(), format!("{:.0}ms", snap.p50_ms)))
-        .child(stat("p95".into(), format!("{:.0}ms", snap.p95_ms)))
-        .child(stat("p99".into(), format!("{:.0}ms", snap.p99_ms)))
-        .child(stat("耗时".into(), format!("{:.1}s", snap.elapsed_secs)))
+        .child(stat(t("已完成"), format!("{}", snap.completed), muted))
+        .child(stat(t("成功"), format!("{}", snap.success), muted))
+        .child(stat(t("失败"), format!("{}", snap.failed), muted))
+        .child(stat(t("QPS"), format!("{:.0}", snap.rps), muted))
+        .child(stat(t("p50 (ms)"), format!("{:.0}", snap.p50_ms), muted))
+        .child(stat(t("p95 (ms)"), format!("{:.0}", snap.p95_ms), muted))
+        .child(stat(t("p99 (ms)"), format!("{:.0}", snap.p99_ms), muted))
+        .child(stat(t("耗时 (s)"), format!("{:.1}", snap.elapsed_secs), muted))
         .into_any_element()
+}
+
+/// Lightweight i18n helper: identity pass-through for now. If a translation
+/// layer is added later, this is the single place to wire it up.
+#[inline]
+fn t(s: &str) -> String {
+    s.to_string()
 }
 
 /// A single (bucket_ms, count) datum for the bar chart.
@@ -736,7 +743,7 @@ fn render_latency_chart(
 
 fn format_bucket_label(upper_ms: f64) -> String {
     if upper_ms > 60_000.0 {
-        ">60s".to_string()
+        t(">60s")
     } else if upper_ms >= 1000.0 {
         format!("{:.0}s", upper_ms / 1000.0)
     } else {
@@ -765,11 +772,10 @@ fn render_rps_chart(timeline: &[(f64, f64)], theme: &gpui_component::Theme) -> A
         })
         .collect();
 
-    let color = theme.primary;
     v_flex()
         .w_full()
         .gap_1()
-        .child(div().text_xs().text_color(theme.muted_foreground).child("QPS 随时间变化"))
+        .child(div().text_xs().text_color(theme.muted_foreground).child(t("QPS 随时间变化")))
         .child(
             div()
                 .w_full()
@@ -779,17 +785,17 @@ fn render_rps_chart(timeline: &[(f64, f64)], theme: &gpui_component::Theme) -> A
                         .id("rps-timeline")
                         .x(|d| d.t_sec.clone())
                         .y(|d| d.rps)
-                        .name("QPS")
+                        .name(t("QPS"))
                         .linear(),
                 ),
         )
         .into_any_element()
 }
 
-fn stat(label: String, value: String) -> AnyElement {
+fn stat(label: String, value: String, muted: Hsla) -> AnyElement {
     v_flex()
         .gap_0()
-        .child(div().text_xs().text_color(gpui::Hsla::default()).child(label))
+        .child(div().text_xs().text_color(muted).child(label))
         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(value))
         .into_any_element()
 }

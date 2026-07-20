@@ -1,60 +1,33 @@
 //! Driver for the [`oha`](https://github.com/hatoo/oha) HTTP load generator.
 //!
-//! oha is invoked as a child process with flags derived from a
-//! [`crate::stress::StressConfig`] + [`crate::state::models::ApiRequest`].
-//! We capture stdout (JSON via `--no-tui --output-format json`) and parse it
-//! into an [`OhaJsonReport`].
-//!
-//! The oha binary is resolved by [`find_or_download`].
+//! oha is integrated directly as a library, so no external binary is required.
+//! We configure oha from a [`crate::stress::StressConfig`] + [`crate::state::models::ApiRequest`],
+//! run it in-process, and parse the JSON output into an [`OhaJsonReport`].
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::fs;
 use std::time::Duration;
 
-use tokio::process::Command;
+use clap::Parser as _;
 
 use crate::http;
 use crate::state::models::ApiRequest;
 use crate::state::models::Project;
-use crate::state::persistence::data_dir;
 
 use super::models::OhaJsonReport;
 
-/// The oha release version we target (documented for users installing manually).
-pub const OHA_VERSION: &str = "1.4.5";
+/// The oha version we're integrated with (documented for reference).
+pub const OHA_VERSION: &str = "1.15.0";
 
-/// Locate the oha binary. Returns the path if it exists, otherwise an Err with
-/// the expected install path. Auto-download is deferred (requires network).
-pub fn find_or_download() -> Result<PathBuf, String> {
-    if let Ok(dir) = data_dir() {
-        let candidate = dir.join("bin").join(oha_exe_name());
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-    if let Some(p) = which_in_path(&oha_exe_name()) {
-        return Ok(p);
-    }
-    let dir = data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    Err(format!(
-        "oha 未找到。请安装 v{OHA_VERSION} (cargo install oha) 并放到 {:?}",
-        dir.join("bin")
-    ))
-}
-
-fn oha_exe_name() -> String {
-    if cfg!(target_os = "windows") {
-        "oha.exe".into()
-    } else {
-        "oha".into()
-    }
+/// Oha is integrated as a library, so this is a no-op kept for API compatibility.
+pub fn find_or_download() -> Result<(), String> {
+    Ok(())
 }
 
 /// Run oha against a single resolved request (variable-substituted via
 /// `http::prepare`), returning the parsed JSON report.
 pub async fn run_oha(
-    oha_path: &Path,
+    _oha_path: &(),
     req: &ApiRequest,
     vars: &BTreeMap<String, String>,
     concurrency: u32,
@@ -75,53 +48,71 @@ pub async fn run_oha(
     )
     .map_err(|e| format!("prepare: {e}"))?;
 
-    let mut cmd = Command::new(oha_path);
-    cmd.arg("--no-tui")
-        .arg("--output-format")
-        .arg("json")
-        .arg("-c")
-        .arg(concurrency.to_string())
-        .arg("-z")
-        .arg(format!("{duration_secs}s"))
-        .arg("-m")
-        .arg(method_str(prepared.method));
+    // Create a temporary file for oha to write JSON output to
+    let mut temp_file = std::env::temp_dir();
+    temp_file.push(format!("verve-oha-{}.json", uuid::Uuid::new_v4()));
+    let temp_path = temp_file.to_string_lossy().to_string();
+
+    // Build oha CLI arguments programmatically
+    let mut args = vec![
+        "oha".to_string(),
+        "--no-tui".to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+        "--output".to_string(),
+        temp_path.clone(),
+        "-c".to_string(),
+        concurrency.to_string(),
+        "-z".to_string(),
+        format!("{duration_secs}s"),
+        "-m".to_string(),
+        method_str(prepared.method).to_string(),
+    ];
 
     if let Some(q) = qps {
-        cmd.arg("-q").arg(q.to_string());
+        args.push("-q".to_string());
+        args.push(q.to_string());
     }
 
+    // Add headers
     for (k, v) in &prepared.headers {
         if k.eq_ignore_ascii_case("content-length") {
-            // oha computes Content-Length itself; passing our pre-substituted
-            // value can cause 400s if the raw body has {{...}} placeholders.
+            // oha computes Content-Length itself
             continue;
         }
-        cmd.arg("-H").arg(format!("{k}: {v}"));
+        args.push("-H".to_string());
+        args.push(format!("{k}: {v}"));
     }
+
+    // Add body if present
     if !prepared.body.is_empty() {
-        cmd.arg("-d")
-            .arg(String::from_utf8_lossy(&prepared.body).to_string());
-    }
-    cmd.arg(&prepared.url);
-
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-
-    let total_timeout = Duration::from_secs((duration_secs as u64).saturating_add(30));
-    let child = cmd.spawn().map_err(|e| format!("spawn oha: {e}"))?;
-    let output = tokio::time::timeout(total_timeout, child.wait_with_output())
-        .await
-        .map_err(|_| "oha timed out".to_string())?
-        .map_err(|e| format!("oha wait: {e}"))?;
-
-    if !output.status.success() {
-        let code = output.status.code().unwrap_or(-1);
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("oha exited {code}: {stderr}"));
+        let body_str = String::from_utf8_lossy(&prepared.body).to_string();
+        args.push("-d".to_string());
+        args.push(body_str);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    serde_json::from_str::<OhaJsonReport>(&stdout).map_err(|e| format!("parse oha JSON: {e}"))
+    // Add URL as the final positional argument
+    args.push("--".to_string());
+    args.push(prepared.url.clone());
+
+    // Parse arguments into oha Opts
+    let opts = oha::Opts::try_parse_from(args).map_err(|e| format!("parse oha opts: {e}"))?;
+
+    // Run oha
+    let result = oha::run(opts).await;
+
+    // Read output file regardless of result (in case of partial failure)
+    let json_output = fs::read_to_string(&temp_file).unwrap_or_default();
+
+    // Clean up temp file
+    let _ = fs::remove_file(&temp_file);
+
+    // Check for oha runtime error
+    result.map_err(|e| format!("oha run: {e}"))?;
+
+    // Parse JSON output
+    serde_json::from_str::<OhaJsonReport>(&json_output)
+        .map_err(|e| format!("parse oha JSON: {e}\nstdout: {}", &json_output[..json_output.len().min(500)]))
 }
 
 /// Convenience: resolve the effective variable map for a request in the project
@@ -134,18 +125,6 @@ pub fn effective_vars(project: &Project) -> BTreeMap<String, String> {
         &[],
         &[],
     )
-}
-
-/// Minimal PATH search (no extra crate dependency).
-fn which_in_path(name: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn method_str(m: crate::state::models::RequestMethod) -> &'static str {

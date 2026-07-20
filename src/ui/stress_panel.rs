@@ -152,14 +152,11 @@ impl StressPanel {
             return;
         };
 
-        let oha_path = match find_or_download() {
-            Ok(p) => p,
-            Err(e) => {
-                self.error = Some(e);
-                cx.notify();
-                return;
-            }
-        };
+        if let Err(e) = find_or_download() {
+            self.error = Some(e);
+            cx.notify();
+            return;
+        }
 
         let http_client = cx.http_client();
 
@@ -199,7 +196,7 @@ impl StressPanel {
         let (tx, rx) = std::sync::mpsc::channel::<Result<crate::stress::OhaJsonReport, String>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(run_oha(&oha_path, &req, &vars, c, d, q));
+            let result = rt.block_on(run_oha(&(), &req, &vars, c, d, q));
             let _ = tx.send(result);
         });
         let entity = cx.entity().downgrade();

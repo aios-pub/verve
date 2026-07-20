@@ -133,6 +133,9 @@ rfd = "0.15"
 semver = "1"
 # Embed Verve-specific Lucide SVG icons at compile time (composite AssetSource).
 rust-embed = "8.7"
+# oha load testing library (integrated directly, no external binary needed)
+oha = { version = "1.15.0", default-features = false, features = ["rustls"] }
+clap = { version = "4", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

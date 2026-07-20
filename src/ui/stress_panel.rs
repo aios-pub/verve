@@ -10,9 +10,12 @@ use std::collections::BTreeSet;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
+use gpui_component::progress::Progress;
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _};
 use gpui_component::chart::{BarChart, LineChart};
+use gpui_component::scroll::ScrollableElement as _;
 
 use crate::state::models::{Folder, Project};
 use crate::state::{AppEvent, AppState};
@@ -27,6 +30,11 @@ pub struct StressPanel {
     concurrency: Option<Entity<InputState>>,
     duration_secs: Option<Entity<InputState>>,
     qps: Option<Entity<InputState>>,
+    timeout_secs: Option<Entity<InputState>>,
+    // --- option toggles ---
+    disable_keepalive: bool,
+    follow_redirects: bool,
+    http2: bool,
     // --- target selection tree state ---
     /// Selected target request id (used when StressTarget::Request).
     selected_target: Option<String>,
@@ -60,6 +68,11 @@ impl StressPanel {
             s
         });
         let qps = cx.new(|cx| InputState::new(window, cx).placeholder("不限制"));
+        let timeout_secs = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder("30");
+            s.set_value("30", window, cx);
+            s
+        });
 
         // Select currently selected request from the main workbench by default
         let selected_target = state.read(cx).selected_request.clone();
@@ -69,6 +82,10 @@ impl StressPanel {
             concurrency: Some(concurrency),
             duration_secs: Some(duration_secs),
             qps: Some(qps),
+            timeout_secs: Some(timeout_secs),
+            disable_keepalive: false,
+            follow_redirects: false,
+            http2: false,
             selected_target,
             expanded_folders: BTreeSet::new(),
             tree_visible: true,
@@ -119,6 +136,8 @@ impl StressPanel {
         } else {
             Some(qps_str.trim().parse::<u32>().ok()?)
         };
+        let timeout_str = self.timeout_secs.as_ref()?.read(cx).value();
+        let timeout_secs: u32 = timeout_str.trim().parse().unwrap_or(30).max(1);
         if concurrency == 0 || duration_secs == 0 {
             return None;
         }
@@ -130,11 +149,28 @@ impl StressPanel {
                 duration_secs,
                 qps,
                 think_ms: 0,
+                timeout_secs,
+                disable_keepalive: self.disable_keepalive,
+                follow_redirects: self.follow_redirects,
+                http2: self.http2,
             },
             project
                 .find_request(&target_id)
                 .map(|(_, r)| r.name.clone())?,
         ))
+    }
+
+    fn toggle_disable_keepalive(&mut self, val: bool, cx: &mut Context<Self>) {
+        self.disable_keepalive = val;
+        cx.notify();
+    }
+    fn toggle_follow_redirects(&mut self, val: bool, cx: &mut Context<Self>) {
+        self.follow_redirects = val;
+        cx.notify();
+    }
+    fn toggle_http2(&mut self, val: bool, cx: &mut Context<Self>) {
+        self.http2 = val;
+        cx.notify();
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
@@ -186,12 +222,18 @@ impl StressPanel {
         };
         let req = req.clone();
         let vars = crate::stress::oha::effective_vars(&project);
-        let c = cfg.concurrency;
-        let d = cfg.duration_secs;
-        let q = cfg.qps;
+        let opts = crate::stress::oha::OhaOptions {
+            concurrency: cfg.concurrency,
+            duration_secs: cfg.duration_secs,
+            qps: cfg.qps,
+            timeout_secs: cfg.timeout_secs,
+            disable_keepalive: cfg.disable_keepalive,
+            follow_redirects: cfg.follow_redirects,
+            http2: cfg.http2,
+        };
 
         // Kick off the streaming runner (returns a handle with snapshot + result channels).
-        let mut handle = match run_oha(&(), &req, &vars, c, d, q) {
+        let mut handle = match run_oha(&(), &req, &vars, opts) {
             Ok(h) => h,
             Err(e) => {
                 self.error = Some(e);
@@ -284,6 +326,14 @@ impl Render for StressPanel {
         if self.qps.is_none() {
             self.qps = Some(cx.new(|cx| InputState::new(window, cx).placeholder("不限制")));
         }
+        if self.timeout_secs.is_none() {
+            let t = cx.new(|cx| {
+                let mut s = InputState::new(window, cx).placeholder("30");
+                s.set_value("30", window, cx);
+                s
+            });
+            self.timeout_secs = Some(t);
+        }
 
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
@@ -292,6 +342,10 @@ impl Render for StressPanel {
         let concurrency = self.concurrency.as_ref().unwrap().clone();
         let duration_secs = self.duration_secs.as_ref().unwrap().clone();
         let qps = self.qps.as_ref().unwrap().clone();
+        let timeout_secs = self.timeout_secs.as_ref().unwrap().clone();
+        let disable_keepalive = self.disable_keepalive;
+        let follow_redirects = self.follow_redirects;
+        let http2 = self.http2;
 
         let running = self.running;
         let has_project = self.state.read(cx).active_project().is_some();
@@ -438,6 +492,56 @@ impl Render for StressPanel {
                                     .gap_1()
                                     .child(div().text_xs().text_color(muted).child(t("QPS 上限 (可选)")))
                                     .child(Input::new(&qps).small().w(px(130.))),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(muted).child(t("超时 (秒)")))
+                                    .child(Input::new(&timeout_secs).small().w(px(110.))),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .items_center()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Checkbox::new("stress-opt-keepalive")
+                                            .checked(disable_keepalive)
+                                            .on_click(cx.listener(|this, val: &bool, _, cx| {
+                                                this.toggle_disable_keepalive(*val, cx)
+                                            })),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child(t("禁用 Keep-Alive"))),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Checkbox::new("stress-opt-redirect")
+                                            .checked(follow_redirects)
+                                            .on_click(cx.listener(|this, val: &bool, _, cx| {
+                                                this.toggle_follow_redirects(*val, cx)
+                                            })),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child(t("跟随重定向"))),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Checkbox::new("stress-opt-http2")
+                                            .checked(http2)
+                                            .on_click(cx.listener(|this, val: &bool, _, cx| {
+                                                this.toggle_http2(*val, cx)
+                                            })),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child(t("强制 HTTP/2"))),
                             ),
                     )
                     // Snapshot / result.
@@ -445,10 +549,21 @@ impl Render for StressPanel {
                     .when(self.running, |c| {
                         c.child(div().text_sm().child(t("压测进行中…")))
                             .when_some(self.snapshot.as_ref(), |c, snap| {
-                                c.child(render_live_stats(snap, muted))
+                                let ratio = if snap.duration_secs > 0.0 {
+                                    (snap.elapsed_secs / snap.duration_secs).clamp(0.0, 1.0) as f32
+                                } else {
+                                    0.0
+                                };
+                                c.child(Progress::new("stress-progress").value(ratio))
+                                    .child(render_live_stats(snap, muted))
                                     .child(render_latency_chart(
                                         &snap.latency_bins,
                                         &t("响应时间分布（实时）"),
+                                        &theme,
+                                    ))
+                                    .child(render_rps_bins_chart(
+                                        &snap.rps_bins,
+                                        snap.timescale_secs,
                                         &theme,
                                     ))
                             })
@@ -607,19 +722,23 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
         .child(
             h_flex()
                 .gap_4()
+                .flex_wrap()
                 .child(stat(t("总请求数"), format!("{}", r.total), muted))
                 .child(stat(t("成功"), format!("{}", r.success), muted))
                 .child(stat(t("失败"), format!("{}", r.failed), muted))
-                .child(stat(t("QPS（每秒请求）"), format!("{:.1}", r.rps), muted)),
+                .child(stat(t("QPS（每秒请求）"), format!("{:.2}", r.rps), muted))
+                .child(stat(t("数据量"), format_bytes(r.total_bytes), muted)),
         )
         .child(
             h_flex()
                 .gap_4()
+                .flex_wrap()
+                .child(stat(t("最快 (ms)"), format!("{:.0}", lat.min), muted))
                 .child(stat(t("平均 (ms)"), format!("{:.0}", lat.mean), muted))
+                .child(stat(t("最慢 (ms)"), format!("{:.0}", lat.max), muted))
                 .child(stat(t("p50 (ms)"), format!("{:.0}", lat.p50), muted))
                 .child(stat(t("p95 (ms)"), format!("{:.0}", lat.p95), muted))
-                .child(stat(t("p99 (ms)"), format!("{:.0}", lat.p99), muted))
-                .child(stat(t("最大 (ms)"), format!("{:.0}", lat.max), muted)),
+                .child(stat(t("p99 (ms)"), format!("{:.0}", lat.p99), muted)),
         )
         .when(!r.response_time_histogram.is_empty(), |c| {
             c.child(render_latency_chart(
@@ -628,14 +747,18 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
                 theme,
             ))
         })
+        .when(!r.rps_bins.is_empty(), |c| {
+            c.child(render_rps_bins_chart(&r.rps_bins, r.rps_bins_timescale, theme))
+        })
         .when(!r.rps_timeline.is_empty(), |c| {
             c.child(render_rps_chart(&r.rps_timeline, theme))
         })
+        .child(render_status_chart(r, theme))
         .when(!r.status_distribution.is_empty(), |c| {
             c.child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(t("状态码分布")))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(t("状态码分布（明细）")))
                     .children(r.status_distribution.iter().map(|(code, n)| {
                         div().text_size(px(12.)).child(format!("{code}: {n}"))
                     })),
@@ -655,17 +778,46 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
 }
 
 fn render_live_stats(snap: &StressSnapshot, muted: Hsla) -> AnyElement {
-    h_flex()
-        .gap_4()
-        .child(stat(t("已完成"), format!("{}", snap.completed), muted))
-        .child(stat(t("成功"), format!("{}", snap.success), muted))
-        .child(stat(t("失败"), format!("{}", snap.failed), muted))
-        .child(stat(t("QPS"), format!("{:.0}", snap.rps), muted))
-        .child(stat(t("p50 (ms)"), format!("{:.0}", snap.p50_ms), muted))
-        .child(stat(t("p95 (ms)"), format!("{:.0}", snap.p95_ms), muted))
-        .child(stat(t("p99 (ms)"), format!("{:.0}", snap.p99_ms), muted))
-        .child(stat(t("耗时 (s)"), format!("{:.1}", snap.elapsed_secs), muted))
+    v_flex()
+        .gap_2()
+        .child(
+            h_flex()
+                .gap_4()
+                .child(stat(t("已完成"), format!("{}", snap.completed), muted))
+                .child(stat(t("成功"), format!("{}", snap.success), muted))
+                .child(stat(t("失败"), format!("{}", snap.failed), muted))
+                .child(stat(t("平均 QPS"), format!("{:.2}", snap.rps), muted))
+                .child(stat(t("实时 QPS"), format!("{:.2}", snap.window_rps), muted))
+                .child(stat(t("耗时 (s)"), format!("{:.1}", snap.elapsed_secs), muted))
+                .child(stat(t("数据量"), format_bytes(snap.total_bytes), muted)),
+        )
+        .child(
+            h_flex()
+                .gap_4()
+                .child(stat(t("最快 (ms)"), format!("{:.0}", snap.window_min_ms), muted))
+                .child(stat(t("平均 (ms)"), format!("{:.0}", snap.window_mean_ms), muted))
+                .child(stat(t("最慢 (ms)"), format!("{:.0}", snap.window_max_ms), muted))
+                .child(stat(t("p50 (ms)"), format!("{:.0}", snap.p50_ms), muted))
+                .child(stat(t("p95 (ms)"), format!("{:.0}", snap.p95_ms), muted))
+                .child(stat(t("p99 (ms)"), format!("{:.0}", snap.p99_ms), muted)),
+        )
         .into_any_element()
+}
+
+fn format_bytes(b: u64) -> String {
+    const KI: f64 = 1024.0;
+    const MI: f64 = KI * 1024.0;
+    const GI: f64 = MI * 1024.0;
+    let b = b as f64;
+    if b >= GI {
+        format!("{:.2} GiB", b / GI)
+    } else if b >= MI {
+        format!("{:.2} MiB", b / MI)
+    } else if b >= KI {
+        format!("{:.1} KiB", b / KI)
+    } else {
+        format!("{} B", b as u64)
+    }
 }
 
 /// Lightweight i18n helper: identity pass-through for now. If a translation
@@ -761,14 +913,17 @@ fn render_rps_chart(timeline: &[(f64, f64)], theme: &gpui_component::Theme) -> A
     if timeline.len() < 2 {
         return div().into_any_element();
     }
-    // Downsample to at most 60 points so the line chart stays readable.
-    let step = (timeline.len() / 60).max(1);
+    // Timeline is already sampled at ~1s intervals by the aggregator (oha-style
+    // sampling), so each point represents one second of the run. Show integer
+    // second labels and keep width modest (60px per second, min 100% width).
+    let point_count = timeline.len();
+    let chart_width_px = (point_count as f32 * 60.0).max(600.0);
     let data: Vec<RpsPoint> = timeline
         .iter()
-        .step_by(step)
         .map(|(t, rps)| RpsPoint {
-            t_sec: format!("{:.1}s", t).into(),
-            rps: *rps,
+            t_sec: format!("{}s", t.round() as u64).into(),
+            // round to 2 decimals so tooltip doesn't show raw float noise
+            rps: (*rps * 100.0).round() / 100.0,
         })
         .collect();
 
@@ -779,14 +934,147 @@ fn render_rps_chart(timeline: &[(f64, f64)], theme: &gpui_component::Theme) -> A
         .child(
             div()
                 .w_full()
+                .h(px(180.))
+                .overflow_x_scrollbar()
+                .child(
+                    div()
+                        .w(px(chart_width_px))
+                        .h(px(160.))
+                        .child(
+                            LineChart::new(data)
+                                .id("rps-timeline")
+                                .x(|d| d.t_sec.clone())
+                                .y(|d| d.rps)
+                                .name(t("QPS"))
+                                .linear(),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+/// One bin of the oha-style rolling "Requests / past Xs" bar chart.
+#[derive(Clone)]
+struct RpsBin {
+    /// X-axis label: seconds-ago offset (rounded).
+    label: gpui::SharedString,
+    /// Number of requests in this bin.
+    count: u64,
+}
+
+/// Render a 32-bin rolling bar chart matching oha's "Requests / past X" view.
+/// `bins` comes from the aggregator in chronological order (oldest → newest).
+/// Labels are shown sparsely (every ~8th bin) to avoid crowding.
+fn render_rps_bins_chart(
+    bins: &[(f64, u64)],
+    timescale_secs: f64,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    if bins.is_empty() {
+        return div().into_any_element();
+    }
+    let n = bins.len();
+    let step = (n / 8).max(1);
+    let color = theme.primary;
+    let data: Vec<RpsBin> = bins
+        .iter()
+        .enumerate()
+        .map(|(i, (secs_ago, count))| {
+            // The aggregator stores bin_center in seconds from "now" going backward.
+            // Oldest bin was N ticks ago, newest was ~0 ticks ago. Label by "Xs ago".
+            let label = if i % step == 0 || i == n - 1 {
+                format!("{:.1}s", secs_ago)
+            } else {
+                String::new()
+            };
+            RpsBin {
+                label: label.into(),
+                count: *count,
+            }
+        })
+        .collect();
+
+    let title: gpui::SharedString = format!("{}（近 {}s）", t("请求量 / 时间窗口"), format_ts(timescale_secs)).into();
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(div().text_xs().text_color(theme.muted_foreground).child(title))
+        .child(
+            div()
+                .w_full()
                 .h(px(160.))
                 .child(
-                    LineChart::new(data)
-                        .id("rps-timeline")
-                        .x(|d| d.t_sec.clone())
-                        .y(|d| d.rps)
-                        .name(t("QPS"))
-                        .linear(),
+                    BarChart::new(data)
+                        .id("rps-bins")
+                        .band(|d| d.label.clone())
+                        .value(|d| d.count as f64)
+                        .fill(move |_, _, _, _| color),
+                ),
+        )
+        .into_any_element()
+}
+
+fn format_ts(s: f64) -> String {
+    if s >= 60.0 {
+        format!("{:.0}", s)
+    } else if s >= 1.0 {
+        format!("{:.1}", s)
+    } else {
+        format!("{}ms", (s * 1000.0) as u64)
+    }
+}
+
+#[derive(Clone)]
+struct StatusBar {
+    code: gpui::SharedString,
+    count: u64,
+    is_success: bool,
+}
+
+/// Render the status code distribution as a small bar chart.
+fn render_status_chart(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement {
+    if r.status_distribution.is_empty() {
+        return div().into_any_element();
+    }
+    let green = theme.success;
+    let yellow = theme.warning;
+    let red = theme.danger;
+    // Top 8 status codes by count to keep it readable.
+    let mut pairs: Vec<(u16, u64)> = r.status_distribution.iter().map(|(k, v)| (*k, *v)).collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    pairs.truncate(8);
+    let data: Vec<StatusBar> = pairs
+        .into_iter()
+        .map(|(code, count)| StatusBar {
+            code: code.to_string().into(),
+            count,
+            is_success: (200..400).contains(&code),
+        })
+        .collect();
+
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(div().text_xs().text_color(theme.muted_foreground).child(t("状态码分布")))
+        .child(
+            div()
+                .w_full()
+                .h(px(140.))
+                .child(
+                    BarChart::new(data)
+                        .id("status-dist-chart")
+                        .band(|d| d.code.clone())
+                        .value(|d| d.count as f64)
+                        .fill(move |d, _, _, _| {
+                            let code: u16 = d.code.to_string().parse().unwrap_or(0);
+                            if (200..300).contains(&code) {
+                                green
+                            } else if (300..400).contains(&code) || (400..500).contains(&code) {
+                                yellow
+                            } else {
+                                red
+                            }
+                        }),
                 ),
         )
         .into_any_element()

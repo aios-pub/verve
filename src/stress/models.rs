@@ -25,6 +25,22 @@ pub struct StressConfig {
     /// Optional think time in ms between scenario iterations (scenario runner only).
     #[serde(default)]
     pub think_ms: u64,
+    /// Per-request timeout in seconds (oha `-t`). 0 = use default 30.
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u32,
+    /// Disable HTTP keep-alive; open a fresh connection per request (oha `--disable-keepalive`).
+    #[serde(default)]
+    pub disable_keepalive: bool,
+    /// Follow HTTP redirects (up to 10 hops); off by default so 3xx counts as-is (oha `-r`).
+    #[serde(default)]
+    pub follow_redirects: bool,
+    /// Force HTTP/2 via prior knowledge (oha `--http2`).
+    #[serde(default)]
+    pub http2: bool,
+}
+
+fn default_timeout_secs() -> u32 {
+    30
 }
 
 impl Default for StressConfig {
@@ -35,6 +51,10 @@ impl Default for StressConfig {
             duration_secs: 10,
             qps: None,
             think_ms: 0,
+            timeout_secs: default_timeout_secs(),
+            disable_keepalive: false,
+            follow_redirects: false,
+            http2: false,
         }
     }
 }
@@ -44,19 +64,35 @@ impl Default for StressConfig {
 pub struct StressSnapshot {
     /// Elapsed time in seconds since start.
     pub elapsed_secs: f64,
-    /// Approximate completed iterations (requests / scenario loops).
+    /// The user-configured total duration (seconds); used by the UI to render
+    /// a progress bar.
+    pub duration_secs: f64,
+    /// Total completed iterations so far (cumulative).
     pub completed: u64,
-    /// Successful requests so far.
+    /// Successful requests so far (cumulative).
     pub success: u64,
-    /// Failed requests so far.
+    /// Failed requests so far (cumulative).
     pub failed: u64,
-    /// Recent requests-per-second over a short window.
+    /// Cumulative QPS (requests in window / configured duration).
     pub rps: f64,
-    /// Latency histogram bins: (bucket upper bound in ms, count).
+    /// Requests-per-second over the recent sliding window.
+    pub window_rps: f64,
+    /// Active sliding window length (seconds); used in chart title.
+    pub timescale_secs: f64,
+    /// Latency histogram bins for the recent window: (bucket upper ms, count).
     pub latency_bins: Vec<(f64, u64)>,
     pub p50_ms: f64,
     pub p95_ms: f64,
     pub p99_ms: f64,
+    /// Per-window slowest / fastest / average latency (ms).
+    pub window_min_ms: f64,
+    pub window_max_ms: f64,
+    pub window_mean_ms: f64,
+    /// Rolling RPS bar-chart bins: (relative offset in window seconds, count).
+    /// 32 bins matching oha's "Requests / past X" bar chart.
+    pub rps_bins: Vec<(f64, u64)>,
+    /// Total bytes received so far (cumulative).
+    pub total_bytes: u64,
     /// A human-readable status line.
     pub status: String,
 }
@@ -87,6 +123,15 @@ pub struct StressResult {
     /// RPS over time: (elapsed sec, rps) sampled during the run.
     #[serde(default, skip)]
     pub rps_timeline: Vec<(f64, f64)>,
+    /// Final-frame rolling RPS bar chart bins (matches oha's "Requests / past X").
+    #[serde(default, skip)]
+    pub rps_bins: Vec<(f64, u64)>,
+    /// Timescale (seconds) used for the final rps_bins window.
+    #[serde(default, skip)]
+    pub rps_bins_timescale: f64,
+    /// Total bytes received across all responses.
+    #[serde(default, skip)]
+    pub total_bytes: u64,
 }
 
 /// Latency percentile breakdown; each value is in milliseconds.
@@ -225,6 +270,9 @@ impl From<OhaJsonReport> for StressResult {
                 .collect(),
             response_time_histogram: Vec::new(),
             rps_timeline: Vec::new(),
+            rps_bins: Vec::new(),
+            rps_bins_timescale: 1.0,
+            total_bytes: 0,
         }
     }
 }

@@ -113,14 +113,22 @@ pub fn run_scenario(
             let done = completed_snap.load(Ordering::SeqCst);
             let _ = snap_tx.send(StressSnapshot {
                 elapsed_secs: start.elapsed().as_secs_f64(),
+                duration_secs: duration_secs as f64,
                 completed: done,
                 success: done,
                 failed: failed_snap.load(Ordering::SeqCst),
                 rps: 0.0,
+                window_rps: 0.0,
+                timescale_secs: 1.0,
                 latency_bins: Vec::new(),
                 p50_ms: 0.0,
                 p95_ms: 0.0,
                 p99_ms: 0.0,
+                window_min_ms: 0.0,
+                window_max_ms: 0.0,
+                window_mean_ms: 0.0,
+                rps_bins: Vec::new(),
+                total_bytes: 0,
                 status: format!("完成 {} 次", done),
             });
             if start.elapsed().as_secs() >= duration_secs as u64 {
@@ -150,6 +158,9 @@ pub fn run_scenario(
             errors: BTreeMap::new(),
             response_time_histogram: Vec::new(),
             rps_timeline: Vec::new(),
+            rps_bins: Vec::new(),
+            rps_bins_timescale: 1.0,
+            total_bytes: 0,
         };
         let _ = result_tx.send(result);
     });

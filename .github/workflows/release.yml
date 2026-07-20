@@ -55,8 +55,8 @@ jobs:
           else
             V="${GITHUB_REF#refs/tags/v}"
           fi
-          echo "version=$V" >> $GITHUB_OUTPUT
-          echo "tag=v$V" >> $GITHUB_OUTPUT
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
           echo "Release version: $V"
 
   # ─── Clippy (gate: no warnings before release) ─────────────────────────────
@@ -142,6 +142,22 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Sync version in Cargo.toml to release tag
+        # cargo-bundle / cargo-deb / cargo-wix all read the version from
+        # Cargo.toml's [package].version. The release version comes from the
+        # git tag (or workflow_dispatch input), so patch Cargo.toml before any
+        # build/bundle step so the artifact filenames, the embedded version
+        # (Info.plist CFBundleVersion, deb Version, MSI ProductVersion), and
+        # the tag all agree. Uses `shell: bash` so the same sed command works
+        # on all three platforms (windows-latest ships Git Bash with GNU sed).
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          grep '^version = ' Cargo.toml
+
       - name: Add cross-compile targets
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
@@ -169,6 +185,13 @@ jobs:
       - name: Build verve-server
         run: cargo build --release --bin verve-server
 
+      - name: Stage verve-server (platform-suffixed)
+        # The macOS verve-server is uploaded alongside the release as a
+        # standalone binary for headless/cloud deployment. Rename it with a
+        # platform suffix so users can tell which OS it runs on (the Linux
+        # and Windows builds bundle verve-server inside their tarball/zip).
+        run: cp target/release/verve-server target/verve-server-macos
+
       - name: Create .app bundle
         run: |
           # Place the universal binary where cargo-bundle expects it.
@@ -195,7 +218,7 @@ jobs:
           path: |
             target/Verve-${{ needs.meta.outputs.version }}-macos.dmg
             target/Verve-${{ needs.meta.outputs.version }}-macos.dmg.sha256
-            target/release/verve-server
+            target/verve-server-macos
 
   # ─── Linux x86_64 ──────────────────────────────────────────────────────────
   build-linux-x86_64:
@@ -207,6 +230,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync version in Cargo.toml to release tag
+        # See build-macos for rationale. cargo-deb reads the version from
+        # Cargo.toml to populate the deb package's Version field.
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          grep '^version = ' Cargo.toml
 
       - name: Install system dependencies
         run: |
@@ -288,6 +322,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Sync version in Cargo.toml to release tag
+        # See build-macos for rationale.
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          grep '^version = ' Cargo.toml
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -350,6 +394,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync version in Cargo.toml to release tag
+        # cargo-wix reads the version from Cargo.toml to populate the MSI's
+        # ProductVersion. Patch it so the installer version matches the tag.
+        # `shell: bash` → Git Bash on windows-latest (ships GNU sed).
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          grep '^version = ' Cargo.toml
 
       - name: Install cargo-wix
         run: cargo install cargo-wix
@@ -423,6 +479,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Sync version in Cargo.toml to release tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          sed -i.bak -E 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          grep '^version = ' Cargo.toml
+
       - name: Add cross-compile target
         run: rustup target add aarch64-pc-windows-msvc
 
@@ -491,6 +556,8 @@ jobs:
           fi
 
           # Generate a changelog from commit messages (max 50 entries).
+          # shellcheck disable=SC2086 # RANGE is intentionally unquoted so an
+          # empty value (no previous tag) expands to nothing.
           CHANGELOG=$(git log ${RANGE} --pretty=format:"- %s" --no-merges 2>/dev/null | head -50)
           if [ -z "$CHANGELOG" ]; then
             CHANGELOG="- Initial release"
@@ -499,33 +566,38 @@ jobs:
           V="${{ needs.meta.outputs.version }}"
 
           # Build the full release notes.
-          cat > /tmp/release-notes.md << NOTESEOF
-          ## Verve ${V}
-
-          ### Downloads
-
-          | Platform | File |
-          |----------|------|
-          | macOS (Universal) | \`Verve-${V}-macos.dmg\` |
-          | Linux x86_64 (deb) | \`verve-${V}-amd64.deb\` |
-          | Linux x86_64 (tarball) | \`verve-${V}-linux-x86_64.tar.gz\` |
-          | Linux aarch64 (tarball) | \`verve-${V}-linux-aarch64.tar.gz\` |
-          | Windows x86_64 (msi) | \`Verve-${V}-windows-x86_64.msi\` |
-          | Windows x86_64 (zip) | \`Verve-${V}-windows-x86_64.zip\` |
-          | Windows aarch64 (zip) | \`Verve-${V}-windows-aarch64.zip\` |
-
-          SHA256 checksums are provided as \`.sha256\` files alongside each asset.
-          The \`latest.json\` file is the auto-update manifest used by the in-app updater.
-
-          ### Changes
-
-          ${CHANGELOG}
-          NOTESEOF
+          # NOTE: avoid a flush-left heredoc — markdown table rows start with
+          # `|` at column 0, which breaks the YAML block scalar under `run: |`.
+          # Use printf instead so the body indentation can match the YAML block
+          # without conflicting with heredoc terminators. BT is a literal
+          # backtick, kept out of the printf format strings to keep shellcheck
+          # happy (SC2016 fires on backticks inside single quotes).
+          BT='`'
+          NOTES_FILE=/tmp/release-notes.md
+          {
+            printf '## Verve %s\n\n' "$V"
+            printf '### Downloads\n\n'
+            printf '| Platform | File |\n'
+            printf '|----------|------|\n'
+            printf '| macOS (Universal) | %sVerve-%s-macos.dmg%s |\n' "$BT" "$V" "$BT"
+            printf '| Linux x86_64 (deb) | %sverve-%s-amd64.deb%s |\n' "$BT" "$V" "$BT"
+            printf '| Linux x86_64 (tarball) | %sverve-%s-linux-x86_64.tar.gz%s |\n' "$BT" "$V" "$BT"
+            printf '| Linux aarch64 (tarball) | %sverve-%s-linux-aarch64.tar.gz%s |\n' "$BT" "$V" "$BT"
+            printf '| Windows x86_64 (msi) | %sVerve-%s-windows-x86_64.msi%s |\n' "$BT" "$V" "$BT"
+            printf '| Windows x86_64 (zip) | %sVerve-%s-windows-x86_64.zip%s |\n' "$BT" "$V" "$BT"
+            printf '| Windows aarch64 (zip) | %sVerve-%s-windows-aarch64.zip%s |\n\n' "$BT" "$V" "$BT"
+            printf 'SHA256 checksums are provided as %s.sha256%s files alongside each asset.\n' "$BT" "$BT"
+            printf 'The %slatest.json%s file is the auto-update manifest used by the in-app updater.\n\n' "$BT" "$BT"
+            printf '### Changes\n\n'
+            printf '%s\n' "$CHANGELOG"
+          } > "$NOTES_FILE"
 
           # Store in output using a heredoc delimiter for multi-line strings.
-          echo "body<<DELIMITER" >> $GITHUB_OUTPUT
-          cat /tmp/release-notes.md >> $GITHUB_OUTPUT
-          echo "DELIMITER" >> $GITHUB_OUTPUT
+          {
+            echo "body<<DELIMITER"
+            cat "$NOTES_FILE"
+            echo "DELIMITER"
+          } >> "$GITHUB_OUTPUT"
 
   # ─── Create GitHub Release + latest.json manifest ──────────────────────────
   # Runs after ALL build jobs (using if: always()). Build jobs use
@@ -569,7 +641,7 @@ jobs:
           find artifacts -type f \
             \( -name "*.dmg" -o -name "*.deb" -o -name "*.tar.gz" \
                -o -name "*.msi" -o -name "*.zip" -o -name "*.sha256" \
-               -o -name "verve-server" -o -name "verve-server.exe" \) \
+               -o -name "verve-server-macos" -o -name "verve-server-windows.exe" \) \
             -exec cp {} release/ \;
           echo "=== Available release artifacts ==="
           ls -la release/ || echo "WARNING: No artifacts found!"
@@ -580,24 +652,24 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           REPO_URL="https://github.com/${{ github.repository }}"
-          cat > release/latest.json << EOF
+          # Build JSON with printf. A flush-left heredoc would collide with
+          # the YAML block scalar (the leading `{` is a YAML flow-mapping
+          # start), so printf is safer here.
+          MAC_URL="${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-macos.dmg"
+          LINUX_URL="${REPO_URL}/releases/download/${TAG}/verve-${VERSION}-amd64.deb"
+          WIN_URL="${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-windows-x86_64.msi"
           {
-            "version": "${VERSION}",
-            "url": "${REPO_URL}/releases/tag/${TAG}",
-            "notes": "Verve ${VERSION}",
-            "platforms": {
-              "macos": {
-                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-macos.dmg"
-              },
-              "linux": {
-                "url": "${REPO_URL}/releases/download/${TAG}/verve-${VERSION}-amd64.deb"
-              },
-              "windows": {
-                "url": "${REPO_URL}/releases/download/${TAG}/Verve-${VERSION}-windows-x86_64.msi"
-              }
-            }
-          }
-          EOF
+            printf '{\n'
+            printf '  "version": "%s",\n' "$VERSION"
+            printf '  "url": "%s/releases/tag/%s",\n' "$REPO_URL" "$TAG"
+            printf '  "notes": "Verve %s",\n' "$VERSION"
+            printf '  "platforms": {\n'
+            printf '    "macos":   { "url": "%s" },\n' "$MAC_URL"
+            printf '    "linux":   { "url": "%s" },\n' "$LINUX_URL"
+            printf '    "windows": { "url": "%s" }\n' "$WIN_URL"
+            printf '  }\n'
+            printf '}\n'
+          } > release/latest.json
           cat release/latest.json
 
       - name: Delete existing release (if re-publishing same tag)
@@ -622,8 +694,7 @@ jobs:
             release/*.zip
             release/*.sha256
             release/latest.json
-            release/verve-server
-            release/verve-server.exe
+            release/verve-server-macos
           draft: false
           prerelease: false
 

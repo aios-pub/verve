@@ -165,20 +165,18 @@ async fn handle_conn(
         Err(e) => {
             let msg = format!("upstream error: {e}");
             let _ = write_response(&mut stream, 502, msg.as_bytes()).await;
-            let _ = store
-                .push(CaptureEntry {
-                    id: 0,
-                    ts_ms: 0,
-                    method,
-                    url: target,
-                    status: 502,
-                    duration_ms: started.elapsed().as_millis() as u64,
-                    req_headers: headers,
-                    req_body,
-                    resp_headers: Vec::new(),
-                    resp_body: msg.into_bytes(),
-                })
-                .await;
+            store.push(CaptureEntry {
+                id: 0,
+                ts_ms: 0,
+                method,
+                url: target,
+                status: 502,
+                duration_ms: started.elapsed().as_millis() as u64,
+                req_headers: headers,
+                req_body,
+                resp_headers: Vec::new(),
+                resp_body: msg.into_bytes(),
+            });
             return Ok(());
         }
     };
@@ -187,20 +185,18 @@ async fn handle_conn(
     // Write back.
     let _ = write_response(&mut stream, status, &resp_body).await;
 
-    let _ = store
-        .push(CaptureEntry {
-            id: 0,
-            ts_ms: 0,
-            method,
-            url: target,
-            status,
-            duration_ms,
-            req_headers: headers,
-            req_body,
-            resp_headers,
-            resp_body,
-        })
-        .await;
+    store.push(CaptureEntry {
+        id: 0,
+        ts_ms: 0,
+        method,
+        url: target,
+        status,
+        duration_ms,
+        req_headers: headers,
+        req_body,
+        resp_headers,
+        resp_body,
+    });
     Ok(())
 }
 

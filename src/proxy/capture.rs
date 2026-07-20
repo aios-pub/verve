@@ -1,9 +1,7 @@
 //! In-memory traffic capture store (ring buffer).
 
 use std::collections::VecDeque;
-use std::sync::Arc;
-
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// One captured HTTP transaction.
 #[derive(Debug, Clone)]
@@ -23,7 +21,8 @@ pub struct CaptureEntry {
     pub resp_body: Vec<u8>,
 }
 
-/// Thread-safe ring buffer of captured entries.
+/// Thread-safe ring buffer of captured entries. Uses a std::sync::RwLock so
+/// it's safe to access from either smol or tokio contexts.
 #[derive(Clone)]
 pub struct CaptureStore {
     inner: Arc<RwLock<CaptureInner>>,
@@ -52,30 +51,35 @@ impl CaptureStore {
         }
     }
 
-    pub async fn push(&self, mut e: CaptureEntry) {
-        let mut g = self.inner.write().await;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        e.id = g.next_id;
-        g.next_id += 1;
-        e.ts_ms = now_ms.saturating_sub(g.start_ms);
-        g.entries.push_back(e);
-        while g.entries.len() > g.cap {
-            g.entries.pop_front();
+    pub fn push(&self, mut e: CaptureEntry) {
+        if let Ok(mut g) = self.inner.write() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            e.id = g.next_id;
+            g.next_id += 1;
+            e.ts_ms = now_ms.saturating_sub(g.start_ms);
+            g.entries.push_back(e);
+            while g.entries.len() > g.cap {
+                g.entries.pop_front();
+            }
         }
     }
 
     /// Snapshot all entries (ordered oldest → newest).
-    pub async fn snapshot(&self) -> Vec<CaptureEntry> {
-        self.inner.read().await.entries.iter().cloned().collect()
+    pub fn snapshot(&self) -> Vec<CaptureEntry> {
+        self.inner
+            .read()
+            .map(|g| g.entries.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
-    pub async fn clear(&self) {
-        let mut g = self.inner.write().await;
-        g.entries.clear();
-        g.next_id = 0;
+    pub fn clear(&self) {
+        if let Ok(mut g) = self.inner.write() {
+            g.entries.clear();
+            g.next_id = 0;
+        }
     }
 }
 
@@ -99,10 +103,9 @@ mod tests {
                     req_body: Vec::new(),
                     resp_headers: Vec::new(),
                     resp_body: Vec::new(),
-                })
-                .await;
+                });
         }
-        let snap = store.snapshot().await;
+        let snap = store.snapshot();
         assert_eq!(snap.len(), 2);
         assert_eq!(snap[0].url, "/3");
         assert_eq!(snap[1].url, "/4");

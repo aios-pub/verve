@@ -42,26 +42,51 @@ impl ProxyPanel {
         }
         let store = self.store.clone();
         let port = self.port;
-        cx.spawn(async move |this, cx| {
-            let res = server::serve(store, port).await;
-            match res {
-                Ok(h) => {
-                    let port = h.bound_port;
-                    let _ = this.update(cx, move |panel, cx| {
+        // ProxyHandle is not Send across threads safely, so we spawn the server on
+        // a dedicated tokio runtime thread and send back just the bound port. The
+        // server runs until the process exits (acceptable for a dev tool).
+        enum Ev {
+            Ok(u16),
+            Err(String),
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Ev>();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                match server::serve(store, port).await {
+                    Ok(h) => {
+                        let port = h.bound_port;
+                        // The handle is kept alive by this thread; it's killed when
+                        // the process exits or when the user restarts.
+                        std::mem::forget(h);
+                        let _ = tx.send(Ev::Ok(port));
+                        // Keep thread alive forever so listener stays up.
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(u64::MAX)).await;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Ev::Err(format!("启动失败: {e}")));
+                    }
+                }
+            });
+        });
+        let ent = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            if let Some(ev) = rx.recv().await {
+                let _ = ent.update(cx, |panel, cx| match ev {
+                    Ev::Ok(port) => {
                         panel.port = port;
-                        panel.handle = Some(h);
                         panel.running = true;
                         panel.error = None;
                         panel.start_tick(cx);
                         cx.notify();
-                    });
-                }
-                Err(e) => {
-                    let _ = this.update(cx, |panel, cx| {
-                        panel.error = Some(format!("启动失败: {e}"));
+                    }
+                    Ev::Err(e) => {
+                        panel.error = Some(e);
                         cx.notify();
-                    });
-                }
+                    }
+                });
             }
         })
         .detach();
@@ -83,7 +108,7 @@ impl ProxyPanel {
         self._tick = Some(cx.spawn(async move |_this, cx| {
             loop {
                 smol::Timer::after(std::time::Duration::from_millis(700)).await;
-                let snap = store.snapshot().await;
+                let snap = store.snapshot();
                 let _ = entity.update(cx, |panel, cx| {
                     panel.entries = snap;
                     cx.notify();
@@ -93,11 +118,7 @@ impl ProxyPanel {
     }
 
     fn clear(&mut self, cx: &mut Context<Self>) {
-        let store = self.store.clone();
-        cx.spawn(async move |_this, cx| {
-            store.clear().await;
-        })
-        .detach();
+        self.store.clear();
         self.entries.clear();
         self.selected = None;
         cx.notify();

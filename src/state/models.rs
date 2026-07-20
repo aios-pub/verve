@@ -899,6 +899,9 @@ pub struct Project {
     /// OpenAPI access tokens (对外能力).
     #[serde(default)]
     pub api_tokens: Vec<ApiToken>,
+    /// Automated test suites (collection-runner style test cases + steps).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_suites: Vec<crate::autotest::TestSuite>,
     /// Soft-deleted/archived flag.
     #[serde(default)]
     pub archived: bool,
@@ -1036,6 +1039,7 @@ impl Project {
             merge_requests: Vec::new(),
             status_codes: StatusCodeEntry::defaults(),
             api_tokens: Vec::new(),
+            test_suites: Vec::new(),
             archived: false,
         }
     }

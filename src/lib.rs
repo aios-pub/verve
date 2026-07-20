@@ -6,6 +6,7 @@
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 pub mod assets;
+pub mod autotest;
 pub mod export;
 pub mod git;
 pub mod http;

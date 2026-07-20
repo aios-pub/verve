@@ -11,8 +11,16 @@ use gpui_component::{
     h_flex,
     popover::Popover,
     resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
-    v_flex, ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, WindowExt as _,
+    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    WindowExt as _,
 };
+
+use crate::assets::{BRACES, HISTORY, KANBAN, REFRESH_CW, SHARE};
+
+/// Build an icon from a Verve-custom Lucide SVG path.
+fn vicon(path: &'static str) -> Icon {
+    Icon::from(IconName::Redo).path(path)
+}
 
 use crate::git::GitState;
 use crate::share::models::{ShareConfig, ShareScope};
@@ -1867,7 +1875,7 @@ impl VerveApp {
         // A rail button: icon that highlights when its view is active.
         // The tooltip is derived from the view's i18n label.
         let rail_btn = |id: &'static str,
-                        icon: IconName,
+                        icon: Icon,
                         view: SideView,
                         active_view: SideView,
                         theme: &gpui_component::Theme,
@@ -1927,7 +1935,7 @@ impl VerveApp {
             .when(SideView::Api != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-api",
-                    IconName::Network,
+                    IconName::Network.into(),
                     SideView::Api,
                     active,
                     &theme,
@@ -1937,7 +1945,7 @@ impl VerveApp {
             .when(SideView::AutoTest != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-test",
-                    IconName::Play,
+                    IconName::Play.into(),
                     SideView::AutoTest,
                     active,
                     &theme,
@@ -1947,7 +1955,7 @@ impl VerveApp {
             .when(SideView::Share != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-share",
-                    IconName::BookOpen,
+                    vicon(SHARE),
                     SideView::Share,
                     active,
                     &theme,
@@ -1957,7 +1965,7 @@ impl VerveApp {
             .when(SideView::ProjectManage != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-project",
-                    IconName::LayoutDashboard,
+                    vicon(KANBAN),
                     SideView::ProjectManage,
                     active,
                     &theme,
@@ -1970,7 +1978,7 @@ impl VerveApp {
                 Button::new("rail-env")
                     .ghost()
                     .small()
-                    .icon(IconName::Globe)
+                    .icon(vicon(BRACES))
                     .selected(false)
                     .tooltip(rust_i18n::t!("view.environments").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1981,7 +1989,7 @@ impl VerveApp {
             .when(SideView::Mock != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-mock",
-                    IconName::Cpu,
+                    IconName::Cpu.into(),
                     SideView::Mock,
                     active,
                     &theme,
@@ -1991,7 +1999,7 @@ impl VerveApp {
             .when(SideView::History != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-history",
-                    IconName::Inbox,
+                    vicon(HISTORY),
                     SideView::History,
                     active,
                     &theme,
@@ -2001,7 +2009,7 @@ impl VerveApp {
             .when(SideView::Ssh != self.home_view, |rail| {
                 rail.child(rail_btn(
                     "rail-ssh",
-                    IconName::SquareTerminal,
+                    IconName::SquareTerminal.into(),
                     SideView::Ssh,
                     active,
                     &theme,
@@ -2409,7 +2417,7 @@ impl VerveApp {
                 Button::new("share-project")
                     .ghost()
                     .small()
-                    .icon(IconName::BookOpen)
+                    .icon(vicon(SHARE))
                     .tooltip("分享当前项目文档")
                     .on_click(cx.listener(
                         |this, _ev, window, cx| {
@@ -2715,12 +2723,12 @@ impl VerveApp {
         let checking = self.update_checking;
         let has_update = self.update_info.is_some();
         let update_info = self.update_info.clone();
-        let icon = if checking {
-            IconName::LoaderCircle
+        let icon: Icon = if checking {
+            IconName::LoaderCircle.into()
         } else if has_update {
-            IconName::ExternalLink
+            IconName::ExternalLink.into()
         } else {
-            IconName::Redo
+            vicon(REFRESH_CW)
         };
         let tooltip = if checking {
             "正在检查更新…".to_string()

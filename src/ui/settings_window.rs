@@ -14,9 +14,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _,
+    h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
 
+use crate::assets::REFRESH_CW;
 use crate::state::persistence;
 use crate::state::AppState;
 use crate::ui::app::SideView;
@@ -559,7 +560,7 @@ impl Render for SettingsWindow {
                                                                 } else {
                                                                     rust_i18n::t!("update.check_now").to_string()
                                                                 })
-                                                                .icon(IconName::Redo)
+                                                                .icon(Icon::from(IconName::Redo).path(REFRESH_CW))
                                                                 .disabled(checking)
                                                                 .on_click(cx.listener(|this, _ev, window, cx| {
                                                                     this.check_updates(window, cx);

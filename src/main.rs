@@ -14,8 +14,8 @@
 
 use gpui::*;
 use gpui_component::{button::*, *};
-use gpui_component_assets::Assets;
 
+use verve::assets::VerveAssets;
 use verve::ui::VerveApp;
 use verve::{mock, state, ui};
 
@@ -37,7 +37,7 @@ fn main() {
         rust_i18n::set_locale("zh-CN");
     }
 
-    let app = gpui_platform::application().with_assets(Assets);
+    let app = gpui_platform::application().with_assets(VerveAssets::new());
 
     app.run(move |cx| {
         // This must be called before using any GPUI Component features.

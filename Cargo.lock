@@ -10319,6 +10319,7 @@ dependencies = [
  "rfd",
  "russh",
  "russh-sftp",
+ "rust-embed",
  "rust-i18n",
  "rust-i18n-support",
  "secrecy",

@@ -84,6 +84,106 @@ pub fn run_post_request(
     run(script, vars, Some(response))
 }
 
+/// Run a standalone script (no `response` global). Used for Script steps.
+pub fn run_standalone_script(script: &str, vars: &BTreeMap<String, String>) -> ScriptResult {
+    run(script, vars, None)
+}
+
+/// Evaluate a JS expression in a variable scope and return whether it's truthy.
+/// Used by If/While conditions. Returns `(truthy, error_message)`.
+pub fn eval_condition(expr: &str, vars: &BTreeMap<String, String>) -> (bool, Option<String>) {
+    match eval_expression_value(expr, vars) {
+        Ok(val) => (js_value_truthy(&val), None),
+        Err(e) => (false, Some(e)),
+    }
+}
+
+/// Evaluate a JS expression and return its value as a serde_json::Value.
+/// Primarily used for for-each loop source expressions.
+pub fn eval_expression(expr: &str, vars: &BTreeMap<String, String>) -> Result<serde_json::Value, String> {
+    eval_expression_value(expr, vars)
+}
+
+/// Shared evaluator: builds a boa context, installs `apt` + variables, evaluates,
+/// and converts the result back to JSON.
+///
+/// Variables are injected as direct bindings so conditions can write
+/// `token && token.length > 0` rather than `apt.variables.get('token')`.
+fn eval_expression_value(expr: &str, vars: &BTreeMap<String, String>) -> Result<serde_json::Value, String> {
+    use boa_engine::{property::Attribute, Context, Source, js_string, JsValue};
+    let mut ctx = Context::default();
+    let vars_json = serde_json::to_string(vars).unwrap_or_else(|_| "{}".into());
+    let _ = ctx.register_global_property(
+        js_string!("__verve_vars__"),
+        JsValue::from(js_string!(vars_json.as_str())),
+        Attribute::all(),
+    );
+    let _ = ctx.register_global_property(
+        js_string!("__verve_effects__"),
+        JsValue::from(js_string!("")),
+        Attribute::all(),
+    );
+    install_apt(&mut ctx).map_err(|e| e.to_string())?;
+
+    // Build a vars object and wrap the expression in `with (vars) { return (expr); }`
+    // so that `token` resolves as a property lookup.
+    let mut bindings = String::from("(function() { var __v = JSON.parse(__verve_vars__); with (__v) { return (");
+    bindings.push_str(expr);
+    bindings.push_str("); } })()");
+
+    let value = ctx.eval(Source::from_bytes(&bindings)).map_err(|e| e.to_string())?;
+    js_to_json(&value, &mut ctx)
+}
+
+/// Convert a boa JsValue to a serde_json::Value.
+fn js_to_json(val: &JsValue, ctx: &mut Context) -> Result<serde_json::Value, String> {
+    use boa_engine::JsValue as V;
+    if val.is_undefined() || val.is_null() {
+        Ok(serde_json::Value::Null)
+    } else if val.is_boolean() {
+        Ok(serde_json::Value::Bool(val.to_boolean()))
+    } else if val.is_number() {
+        if let Some(n) = val.to_number(ctx).ok() {
+            Ok(serde_json::json!(n))
+        } else {
+            Ok(serde_json::Value::Null)
+        }
+    } else if val.is_string() {
+        let s = val.to_string(ctx).map(|j| j.to_std_string().unwrap_or_default()).unwrap_or_default();
+        Ok(serde_json::Value::String(s))
+    } else if val.is_object() {
+        // Try to JSON.stringify the object.
+        let json_str = ctx
+            .global_object()
+            .get(js_string!("JSON"), ctx)
+            .map_err(|e| e.to_string())?
+            .as_object()
+            .ok_or("JSON not found")?
+            .get(js_string!("stringify"), ctx)
+            .map_err(|e| e.to_string())?
+            .as_callable()
+            .ok_or("JSON.stringify not callable")?
+            .call(&JsValue::undefined(), &[val.clone()], ctx)
+            .map_err(|e| e.to_string())?;
+        let s = json_str.to_string(ctx).map(|j| j.to_std_string().unwrap_or_default()).unwrap_or_default();
+        serde_json::from_str(&s).map_err(|e| e.to_string())
+    } else {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// JS truthiness rules.
+fn js_value_truthy(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false),
+        serde_json::Value::String(s) => !s.is_empty(),
+        serde_json::Value::Array(a) => !a.is_empty(),
+        serde_json::Value::Object(_) => true,
+    }
+}
+
 fn run(script: &str, vars: &BTreeMap<String, String>, response: Option<&Response>) -> ScriptResult {
     if script.trim().is_empty() {
         return ScriptResult::default();

@@ -1,21 +1,19 @@
 //! Stress testing panel — the full-bleed "压测" exclusive view.
 //!
-//! Lets the user pick a target request from the active project, configure
+//! Lets the user pick a target request from a built-in tree selector, configure
 //! concurrency/duration/QPS, and run a load test. Single-URL targets use oha;
 //! multi-step scenarios use the built-in scenario runner. Results and a live
 //! snapshot (completed count, elapsed, RPS) are displayed once the run ends.
-//!
-//! This iteration keeps the UI minimal: a form with numeric inputs, a start/stop
-//! button, and a result summary card.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _};
 
+use crate::state::models::{Folder, Project};
 use crate::state::{AppEvent, AppState};
 use crate::stress::{
     find_or_download, run_oha, run_scenario, StressConfig, StressResult, StressSnapshot,
@@ -28,6 +26,13 @@ pub struct StressPanel {
     concurrency: Option<Entity<InputState>>,
     duration_secs: Option<Entity<InputState>>,
     qps: Option<Entity<InputState>>,
+    // --- target selection tree state ---
+    /// Selected target request id (used when StressTarget::Request).
+    selected_target: Option<String>,
+    /// Expanded folder ids in the tree.
+    expanded_folders: BTreeSet<String>,
+    /// Whether the request tree is shown.
+    tree_visible: bool,
     // --- runtime state ---
     running: bool,
     snapshot: Option<StressSnapshot>,
@@ -55,11 +60,17 @@ impl StressPanel {
         });
         let qps = cx.new(|cx| InputState::new(window, cx).placeholder("不限制"));
 
+        // Select currently selected request from the main workbench by default
+        let selected_target = state.read(cx).selected_request.clone();
+
         Self {
             state,
             concurrency: Some(concurrency),
             duration_secs: Some(duration_secs),
             qps: Some(qps),
+            selected_target,
+            expanded_folders: BTreeSet::new(),
+            tree_visible: true,
             running: false,
             snapshot: None,
             result: None,
@@ -67,6 +78,20 @@ impl StressPanel {
             handle: None,
             _subs: vec![sub],
         }
+    }
+
+    fn toggle_folder(&mut self, folder_id: &str, cx: &mut Context<Self>) {
+        if self.expanded_folders.contains(folder_id) {
+            self.expanded_folders.remove(folder_id);
+        } else {
+            self.expanded_folders.insert(folder_id.to_string());
+        }
+        cx.notify();
+    }
+
+    fn select_target(&mut self, req_id: &str, cx: &mut Context<Self>) {
+        self.selected_target = Some(req_id.to_string());
+        cx.notify();
     }
 
     fn build_config(&self, cx: &App) -> Option<(StressConfig, String)> {
@@ -96,18 +121,17 @@ impl StressPanel {
         if concurrency == 0 || duration_secs == 0 {
             return None;
         }
-        // For v0.3 we only target the currently-selected request in the main workbench.
-        let selected = self.state.read(cx).selected_request.clone()?;
+        let target_id = self.selected_target.clone()?;
         Some((
             StressConfig {
-                target: StressTarget::Request(selected),
+                target: StressTarget::Request(target_id.clone()),
                 concurrency,
                 duration_secs,
                 qps,
                 think_ms: 0,
             },
             project
-                .find_request(&self.state.read(cx).selected_request.clone()?)
+                .find_request(&target_id)
                 .map(|(_, r)| r.name.clone())?,
         ))
     }
@@ -122,7 +146,7 @@ impl StressPanel {
 
         let Some((cfg, _target_name)) = self.build_config(cx) else {
             self.error = Some(
-                "请先在左侧选中一个请求，并填写并发数/持续秒数（正整数）".into(),
+                "请先在下方接口树中选中一个请求，并填写并发数/持续秒数（正整数）".into(),
             );
             cx.notify();
             return;
@@ -238,19 +262,16 @@ impl Render for StressPanel {
 
         let running = self.running;
         let has_project = self.state.read(cx).active_project().is_some();
-        let selected_name = self
+
+        // Resolve selected target name
+        let selected_id = self.selected_target.clone();
+        let (selected_name, selected_method) = self
             .state
             .read(cx)
-            .selected_request
-            .as_ref()
-            .and_then(|id| {
-                self.state
-                    .read(cx)
-                    .active_project()
-                    .and_then(|p| p.find_request(id))
-                    .map(|(_, r)| r.name.clone())
-            })
-            .unwrap_or_else(|| "(未选中请求)".into());
+            .active_project()
+            .and_then(|p| selected_id.as_deref().and_then(|id| p.find_request(id)))
+            .map(|(_, r)| (r.name.clone(), Some(r.method)))
+            .unwrap_or_else(|| ("(未选中请求)".into(), None));
 
         v_flex()
             .size_full()
@@ -293,17 +314,74 @@ impl Render for StressPanel {
                     .p_4()
                     .gap_3()
                     .overflow_y_scroll()
+                    // Target selection
                     .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(muted)
-                            .child("目标请求：在左侧接口树中选中一个接口后再点开始。当前选中："),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(selected_name),
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("目标请求"))
+                                    .child(div().flex_1())
+                                    .child(
+                                        Button::new("stress-tree-toggle")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(if self.tree_visible { IconName::ChevronDown } else { IconName::ChevronRight })
+                                            .label(if self.tree_visible { "收起树" } else { "展开树" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.tree_visible = !this.tree_visible;
+                                                cx.notify();
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(selected_name),
+                                    )
+                                    .when_some(selected_method, |this, method| {
+                                        this.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(crate::ui::method_colors::badge_color(method, cx))
+                                                .child(method.badge_label()),
+                                        )
+                                    }),
+                            )
+                            .when(self.tree_visible, |c| {
+                                c.child(
+                                    div()
+                                        .id("stress-request-tree")
+                                        .w_full()
+                                        .max_h(px(280.))
+                                        .border_1()
+                                        .border_color(border)
+                                        .rounded_md()
+                                        .overflow_y_scroll()
+                                        .p_1()
+                                        .children(
+                                            self.state
+                                                .read(cx)
+                                                .active_project()
+                                                .map(|p| render_request_tree(p, &self.expanded_folders, selected_id.as_deref(), cx))
+                                                .unwrap_or_else(|| {
+                                                    vec![div()
+                                                        .text_size(px(12.))
+                                                        .text_color(muted)
+                                                        .p_2()
+                                                        .child("请先打开或创建一个项目")
+                                                        .into_any_element()]
+                                                }),
+                                        ),
+                                )
+                            }),
                     )
                     .child(div().h(px(1.)).w_full().bg(border))
                     .child(
@@ -361,6 +439,130 @@ impl Render for StressPanel {
                     }))
                     .children(self.result.as_ref().map(|r| render_result(r, &theme))),
             )
+    }
+}
+
+/// Render the request tree (folders + top-level requests).
+fn render_request_tree(
+    project: &Project,
+    expanded: &BTreeSet<String>,
+    selected_id: Option<&str>,
+    cx: &Context<StressPanel>,
+) -> Vec<AnyElement> {
+    let mut items = Vec::new();
+
+    // Render folders (recursively)
+    for folder in &project.folders {
+        render_folder_tree(folder, 0, expanded, selected_id, cx, &mut items);
+    }
+
+    // Render top-level requests
+    for req in &project.requests {
+        let is_selected = selected_id == Some(&req.id);
+        let method = req.method;
+        let method_color = crate::ui::method_colors::badge_color(method, cx);
+        let rid = req.id.clone();
+        items.push(
+            h_flex()
+                .id(format!("stress-top-req-{}", req.id.clone()))
+                .gap_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(if is_selected { cx.theme().accent } else { Hsla::transparent_black() })
+                .child(div().w(px(16.))) // spacer for alignment with folder chevron
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(method_color)
+                        .w(px(40.))
+                        .child(method.badge_label()),
+                )
+                .child(div().text_size(px(12.)).flex_1().child(req.name.clone()))
+                .on_click(cx.listener(move |this, _, _, cx| this.select_target(&rid, cx)))
+                .into_any_element(),
+        );
+    }
+
+    if items.is_empty() {
+        items.push(
+            div()
+                .text_size(px(12.))
+                .text_color(cx.theme().muted_foreground)
+                .p_2()
+                .child("当前项目暂无请求")
+                .into_any_element(),
+        );
+    }
+
+    items
+}
+
+/// Recursively render a folder and its children.
+fn render_folder_tree(
+    folder: &Folder,
+    depth: usize,
+    expanded: &BTreeSet<String>,
+    selected_id: Option<&str>,
+    cx: &Context<StressPanel>,
+    items: &mut Vec<AnyElement>,
+) {
+    let is_expanded = expanded.contains(&folder.id);
+    let fid = folder.id.clone();
+    let indent = depth as f32 * 14.;
+
+    // Folder header
+    items.push(
+        h_flex()
+            .id(format!("stress-folder-row-{}", folder.id.clone()))
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .pl(px(indent + 8.))
+            .child(
+                div()
+                    .id(format!("stress-tree-folder-chev-{}", folder.id.clone()))
+                    .child(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .text_size(px(10.))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder(&fid, cx))),
+            )
+            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(folder.name.clone()))
+            .into_any_element(),
+    );
+
+    if is_expanded {
+        // Child folders
+        for sub in &folder.folders {
+            render_folder_tree(sub, depth + 1, expanded, selected_id, cx, items);
+        }
+        // Child requests
+        for req in &folder.requests {
+            let is_selected = selected_id == Some(&req.id);
+            let method = req.method;
+            let method_color = crate::ui::method_colors::badge_color(method, cx);
+            let rid = req.id.clone();
+            items.push(
+                h_flex()
+                    .id(format!("stress-nested-req-{}", req.id.clone()))
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(if is_selected { cx.theme().accent } else { Hsla::transparent_black() })
+                    .pl(px(indent + 8. + 16.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(method_color)
+                            .w(px(40.))
+                            .child(method.badge_label()),
+                    )
+                    .child(div().text_size(px(12.)).flex_1().child(req.name.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_target(&rid, cx)))
+                    .into_any_element(),
+            );
+        }
     }
 }
 

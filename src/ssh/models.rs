@@ -152,9 +152,14 @@ impl SshHost {
         }
     }
 
-    /// Human-readable summary: `user@host:port`.
+    /// Human-readable summary for list display: `username ssh`.
     pub fn address_summary(&self) -> String {
-        format!("{}@{}:{}", self.username, self.host, self.port)
+        let user = if self.username.is_empty() {
+            "user".to_string()
+        } else {
+            self.username.clone()
+        };
+        format!("{} ssh", user)
     }
 
     /// Whether this host is a bastion/gateway.
@@ -194,11 +199,11 @@ mod tests {
     #[test]
     fn address_summary() {
         let h = SshHost::new("Test", "example.com");
-        assert_eq!(h.address_summary(), "@example.com:22");
+        assert_eq!(h.address_summary(), "user ssh");
         let mut h2 = h.clone();
         h2.username = "root".into();
         h2.port = 2222;
-        assert_eq!(h2.address_summary(), "root@example.com:2222");
+        assert_eq!(h2.address_summary(), "root ssh");
     }
 
     #[test]

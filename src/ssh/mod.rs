@@ -4,6 +4,7 @@
 pub mod client;
 pub mod credentials;
 pub mod host_store;
+pub mod known_hosts;
 pub mod models;
 pub mod sftp;
 pub mod terminal;

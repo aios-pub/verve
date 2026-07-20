@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::credentials;
 use super::host_store;
+use super::known_hosts;
 use super::models::{SshAuthType, SshHost};
 use super::sftp::SftpSessionWrapper;
 
@@ -43,19 +44,52 @@ pub struct ResizeCmd {
     pub rows: u32,
 }
 
-/// russh client handler — accepts any server key (TOFU for now).
+/// russh client handler with Trust-On-First-Use known_hosts verification.
 #[derive(Clone)]
-struct SshHandler;
+struct SshHandler {
+    /// The target host (the inner-most host, after bastion hops). The host
+    /// key is stored under `host:port` in the known_hosts file.
+    host: String,
+    port: u16,
+}
 
 impl client::Handler for SshHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO: implement known_hosts verification (TOFU + mismatch warning).
-        Ok(true)
+        match known_hosts::verify(&self.host, self.port, server_public_key) {
+            Ok(known_hosts::VerifyDecision::Trusted) => Ok(true),
+            Ok(known_hosts::VerifyDecision::AcceptedNew) => {
+                log::info!(
+                    "ssh: new host key accepted for {}:{} (fingerprint {})",
+                    self.host,
+                    self.port,
+                    known_hosts::fingerprint(server_public_key)
+                );
+                Ok(true)
+            }
+            Ok(known_hosts::VerifyDecision::Mismatch {
+                stored_fingerprint: _,
+                presented_fingerprint,
+            }) => {
+                log::error!(
+                    "ssh: host key MISMATCH for {}:{} — rejecting connection (presented: {})",
+                    self.host,
+                    self.port,
+                    presented_fingerprint
+                );
+                Ok(false)
+            }
+            Err(e) => {
+                // If we can't read/write the store, fail open with a warning
+                // (matches OpenSSH's behaviour when known_hosts is unwritable).
+                log::warn!("ssh: known_hosts verify failed ({e}); accepting key");
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -86,30 +120,46 @@ impl SshConnection {
         let handle = if chain.len() == 1 {
             // Direct connection.
             let addr = format!("{}:{}", host.host, host.port);
-            client::connect(config.clone(), addr, SshHandler)
+            let handler = SshHandler {
+                host: host.host.clone(),
+                port: host.port,
+            };
+            client::connect(config.clone(), addr, handler)
                 .await
                 .map_err(|e| format!("连接失败: {e}"))?
         } else {
             // Multi-hop: connect to first bastion, then tunnel.
+            //
+            // Note: for the bastion itself we still perform TOFU against the
+            // bastion's host/port; the inner (final) target's key is verified
+            // by the connect_stream call below against target.host/target.port.
             let bastion = &chain[0];
             let bastion_addr = format!("{}:{}", bastion.host, bastion.port);
-            let mut bastion_handle = client::connect(config.clone(), bastion_addr, SshHandler)
+            let bastion_handler = SshHandler {
+                host: bastion.host.clone(),
+                port: bastion.port,
+            };
+            let mut bastion_handle = client::connect(config.clone(), bastion_addr, bastion_handler)
                 .await
                 .map_err(|e| format!("连接跳板机失败: {e}"))?;
             authenticate(&mut bastion_handle, bastion).await?;
 
             // Tunnel through to the target.
             let target = chain.last().unwrap();
-            let target_addr = target
+            let target_host = target
                 .bastion_target_override
-                .as_deref()
-                .unwrap_or(&target.host);
+                .clone()
+                .unwrap_or_else(|| target.host.clone());
             let tunnel = bastion_handle
-                .channel_open_direct_tcpip(target_addr, target.port as u32, "127.0.0.1", 0)
+                .channel_open_direct_tcpip(&target_host, target.port as u32, "127.0.0.1", 0)
                 .await
                 .map_err(|e| format!("跳板机隧道失败: {e}"))?;
             let stream = tunnel.into_stream();
-            client::connect_stream(config.clone(), stream, SshHandler)
+            let target_handler = SshHandler {
+                host: target_host.clone(),
+                port: target.port,
+            };
+            client::connect_stream(config.clone(), stream, target_handler)
                 .await
                 .map_err(|e| format!("通过跳板机连接失败: {e}"))?
         };

@@ -29,6 +29,8 @@ pub const HISTORY: &str = "icons/verve/history.svg";
 pub const BRACES: &str = "icons/verve/braces.svg";
 pub const KANBAN: &str = "icons/verve/kanban.svg";
 pub const REFRESH_CW: &str = "icons/verve/refresh-cw.svg";
+pub const DOCKER: &str = "icons/verve/docker.svg";
+pub const K8S: &str = "icons/verve/k8s.svg";
 
 /// Composite asset source passed to `with_assets(...)`.
 pub struct VerveAssets(pub StockAssets);

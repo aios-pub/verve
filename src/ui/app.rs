@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
 };
 
-use crate::assets::{BRACES, DOCS, HISTORY, KANBAN, REFRESH_CW, SHARE};
+use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, HISTORY, K8S as K8S_ICON, KANBAN, REFRESH_CW, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -2077,7 +2077,7 @@ impl VerveApp {
             .when(is_visible(SideView::K8s), |rail| {
                 rail.child(rail_btn(
                     "rail-k8s",
-                    IconName::Cpu.into(),
+                    vicon(K8S_ICON),
                     SideView::K8s,
                     active,
                     &theme,
@@ -2087,7 +2087,7 @@ impl VerveApp {
             .when(is_visible(SideView::Docker), |rail| {
                 rail.child(rail_btn(
                     "rail-docker",
-                    IconName::Frame.into(),
+                    vicon(DOCKER_ICON),
                     SideView::Docker,
                     active,
                     &theme,

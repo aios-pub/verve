@@ -1135,24 +1135,80 @@ impl RequestPanel {
 
             let _ = this.update(cx, |this, cx| {
                 this.state.update(cx, |s, cx| {
-                    if let Some(project) = s.active_project_mut() {
-                        if let Some((_, r)) = project.find_request_mut(&id_clone) {
-                            r.last_response = Some(resp.clone());
+                    // Look up the request once so we can both store last_response
+                    // and build a rich history entry from its authored fields.
+                    let (project_id, name, method, url, query_params, request_headers) = {
+                        match s.active_project_mut() {
+                            Some(project) => {
+                                let pid = project.id.clone();
+                                match project.find_request_mut(&id_clone) {
+                                    Some((_, r)) => {
+                                        r.last_response = Some(resp.clone());
+                                        let qp: Vec<(String, String)> = r
+                                            .params
+                                            .iter()
+                                            .filter(|kv| kv.enabled && !kv.key.is_empty())
+                                            .take(crate::state::HISTORY_KV_MAX)
+                                            .map(|kv| (kv.key.clone(), kv.value.clone()))
+                                            .collect();
+                                        let rh: Vec<(String, String)> = r
+                                            .headers
+                                            .iter()
+                                            .filter(|kv| kv.enabled && !kv.key.is_empty())
+                                            .take(crate::state::HISTORY_KV_MAX)
+                                            .map(|kv| (kv.key.clone(), kv.value.clone()))
+                                            .collect();
+                                        (
+                                            pid,
+                                            r.name.clone(),
+                                            r.method,
+                                            r.url.clone(),
+                                            qp,
+                                            rh,
+                                        )
+                                    }
+                                    None => (
+                                        pid,
+                                        String::new(),
+                                        RequestMethod::Get,
+                                        String::new(),
+                                        Vec::new(),
+                                        Vec::new(),
+                                    ),
+                                }
+                            }
+                            None => (
+                                String::new(),
+                                String::new(),
+                                RequestMethod::Get,
+                                String::new(),
+                                Vec::new(),
+                                Vec::new(),
+                            ),
                         }
-                    }
+                    };
+
+                    // Truncate response body at char boundary.
+                    let (response_body, response_truncated) = truncate_history_body(&resp.body);
+
                     // Append to history.
                     let entry = HistoryEntry {
                         id: new_id(),
-                        project_id: project_id_of(s, &id_clone),
+                        project_id,
                         request_id: Some(id_clone.clone()),
-                        name: String::new(),
-                        method: resp_method(s, &id_clone),
-                        url: String::new(),
+                        name,
+                        method,
+                        url,
                         status: resp.status,
+                        status_text: resp.status_text.clone(),
                         time_ms: resp.time_ms,
                         size: resp.size,
                         at: chrono::Utc::now().to_rfc3339(),
                         error: resp.error.clone(),
+                        query_params,
+                        request_headers,
+                        response_body,
+                        response_truncated,
                     };
                     s.data.history.insert(0, entry);
                     if s.data.history.len() > 200 {
@@ -1688,14 +1744,19 @@ impl RequestPanel {
     }
 }
 
-fn project_id_of(s: &AppState, _req_id: &str) -> String {
-    s.active_project().map(|p| p.id.clone()).unwrap_or_default()
-}
-
-fn resp_method(s: &AppState, req_id: &str) -> RequestMethod {
-    s.active_project()
-        .and_then(|p| p.find_request(req_id).map(|(_, r)| r.method))
-        .unwrap_or(RequestMethod::Get)
+/// Truncate a response body to HISTORY_BODY_MAX_CHARS at a char boundary,
+/// returning (truncated_option, was_truncated). Returns (None, false) when empty.
+fn truncate_history_body(body: &str) -> (Option<String>, bool) {
+    use crate::state::HISTORY_BODY_MAX_CHARS;
+    if body.is_empty() {
+        return (None, false);
+    }
+    if body.chars().count() <= HISTORY_BODY_MAX_CHARS {
+        return (Some(body.to_string()), false);
+    }
+    let mut s: String = body.chars().take(HISTORY_BODY_MAX_CHARS).collect();
+    s.push_str("…");
+    (Some(s), true)
 }
 
 impl Render for RequestPanel {

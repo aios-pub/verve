@@ -8,6 +8,11 @@ view:
   history: 历史记录
   ssh: SSH 管理
 
+history:
+  title: 历史记录
+  entry_count: "共 %{count} 条"
+  click_to_open: 点击在接口管理中打开
+
 title:
   brand: V
   share_project: 分享当前项目文档

@@ -294,22 +294,28 @@ pub fn save_git_config(cfg: &GitConfig) {
 }
 
 /// Load the set of hidden activity-rail views (by SideView name).
-/// Returns an empty set when nothing is configured (all items visible).
+///
+/// Factory default: History is hidden from the rail (users can enable it in
+/// Settings > Activity Bar Items). If the user has explicitly customized the
+/// hidden-rails list (stored as `Some(v)`), that choice is respected verbatim.
+/// Only when the field is `None` (never customized) do we apply the default.
 pub fn load_hidden_rails() -> std::collections::HashSet<String> {
-    load_layout()
-        .and_then(|l| l.hidden_rails)
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    match load_layout().and_then(|l| l.hidden_rails) {
+        Some(v) => v.into_iter().collect(),
+        None => {
+            let mut set = std::collections::HashSet::new();
+            set.insert("History".to_string());
+            set
+        }
+    }
 }
 
-/// Persist the set of hidden activity-rail views.
+/// Persist the set of hidden activity-rail views. Always writes an explicit
+/// array (even when empty) so load_hidden_rails can distinguish "user has
+/// customized" from "never customized" (None), where the latter applies the
+/// factory default of hiding History.
 pub fn save_hidden_rails(hidden: &std::collections::HashSet<String>) {
     let mut layout = load_layout().unwrap_or_default();
-    if hidden.is_empty() {
-        layout.hidden_rails = None;
-    } else {
-        layout.hidden_rails = Some(hidden.iter().cloned().collect());
-    }
+    layout.hidden_rails = Some(hidden.iter().cloned().collect());
     let _ = save_layout(&layout);
 }

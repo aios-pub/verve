@@ -1477,6 +1477,12 @@ fn collect_subtree(folder: &Folder, out: &mut std::collections::HashSet<String>)
     }
 }
 
+/// Maximum characters of response body retained per history entry. Keeps
+/// workspace.json small (200 entries * ~4 KB = ~800 KB worst case).
+pub const HISTORY_BODY_MAX_CHARS: usize = 4096;
+/// Maximum number of query params / request headers retained per entry.
+pub const HISTORY_KV_MAX: usize = 32;
+
 /// A compact history entry for the console / history list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -1488,12 +1494,28 @@ pub struct HistoryEntry {
     pub method: RequestMethod,
     pub url: String,
     pub status: u16,
+    /// Human status text e.g. "OK".
+    #[serde(default)]
+    pub status_text: String,
     pub time_ms: u64,
     pub size: u64,
     /// ISO-8601 timestamp.
     pub at: String,
     #[serde(default)]
     pub error: Option<String>,
+    /// Effective query params actually sent (enabled, non-empty), capped at HISTORY_KV_MAX.
+    /// Stored as (key, value) tuples to keep history decoupled from the editor KeyValue model.
+    #[serde(default)]
+    pub query_params: Vec<(String, String)>,
+    /// Request headers actually sent (user-authored, enabled), capped at HISTORY_KV_MAX.
+    #[serde(default)]
+    pub request_headers: Vec<(String, String)>,
+    /// Truncated response body (first HISTORY_BODY_MAX_CHARS chars). None when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_body: Option<String>,
+    /// Whether response_body was truncated because it exceeded the cap.
+    #[serde(default)]
+    pub response_truncated: bool,
 }
 
 /// The persisted application state for ONE workspace: its projects plus history.
@@ -1708,5 +1730,30 @@ mod tests {
         let json = r#"{"key":"k","value":"v"}"#;
         let kv: KeyValue = serde_json::from_str(json).unwrap();
         assert!(kv.required, "missing `required` should default to true");
+    }
+
+    #[test]
+    fn history_entry_backward_compat() {
+        // Old JSON shape (before richer fields were added) must still deserialize.
+        let json = r#"{
+            "id": "abc",
+            "project_id": "p1",
+            "request_id": null,
+            "name": "",
+            "method": "GET",
+            "url": "",
+            "status": 200,
+            "time_ms": 42,
+            "size": 100,
+            "at": "2024-01-01T00:00:00Z",
+            "error": null
+        }"#;
+        let entry: HistoryEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.id, "abc");
+        assert_eq!(entry.status_text, "");
+        assert!(entry.query_params.is_empty());
+        assert!(entry.request_headers.is_empty());
+        assert!(entry.response_body.is_none());
+        assert!(!entry.response_truncated);
     }
 }

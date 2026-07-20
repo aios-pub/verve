@@ -8,6 +8,11 @@ view:
   history: History
   ssh: SSH
 
+history:
+  title: History
+  entry_count: "%{count} entries"
+  click_to_open: "Click to open in API builder"
+
 title:
   brand: V
   share_project: Share Project Docs

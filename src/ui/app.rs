@@ -26,7 +26,7 @@ use crate::git::GitState;
 use crate::share::models::{ShareConfig, ShareScope};
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
-use crate::ui::console_panel::ConsolePanel;
+use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
 use crate::ui::project_manage_panel::ProjectManagePanel;
 use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::request_panel::RequestPanel;
@@ -574,6 +574,66 @@ impl VerveApp {
             }
         });
 
+        // The console (history) panel emits OpenRequest when the user clicks a row.
+        let console_handle = app.console.clone();
+        let sub_console = cx.subscribe(
+            &console_handle,
+            |this, _src, ev: &ConsoleEvent, cx| match ev {
+                ConsoleEvent::OpenRequest {
+                    request_id: Some(req_id),
+                    project_id,
+                } => {
+                    // Switch project if the history entry belongs to a different project.
+                    let current_pid = this
+                        .state
+                        .read(cx)
+                        .active_project()
+                        .map(|p| p.id.clone())
+                        .unwrap_or_default();
+                    if !project_id.is_empty() && &current_pid != project_id {
+                        if let Some(idx) = this
+                            .state
+                            .read(cx)
+                            .data
+                            .projects
+                            .iter()
+                            .position(|p| &p.id == project_id)
+                        {
+                            this.state.update(cx, |s, cx| {
+                                s.active_project = idx;
+                                s.selected_request = None;
+                                s.selected_folder = None;
+                                cx.emit(AppEvent::WorkspaceChanged);
+                            });
+                        }
+                    }
+
+                    // Switch to API view, select the request, ask the tree to reveal it.
+                    let exists = this
+                        .state
+                        .read(cx)
+                        .active_project()
+                        .map(|p| p.find_request(req_id).is_some())
+                        .unwrap_or(false);
+                    if exists {
+                        this.active_view = SideView::Api;
+                        this.state.update(cx, |s, cx| {
+                            s.selected_request = Some(req_id.clone());
+                            s.selected_folder = None;
+                            cx.emit(AppEvent::SelectionChanged);
+                            cx.emit(AppEvent::LocateActive);
+                        });
+                        // Collapse the bottom dock so the request/response is visible.
+                        this.show_console = false;
+                    }
+                    cx.notify();
+                }
+                ConsoleEvent::OpenRequest { request_id: None, .. } => {
+                    // Legacy entries without a request id: nothing to navigate to.
+                }
+            },
+        );
+
         app._subs = vec![
             sub_edited,
             sub_env,
@@ -581,6 +641,7 @@ impl VerveApp {
             sub_git,
             sub_manage,
             sub_share,
+            sub_console,
         ];
 
         // Silent startup update check: query GitHub for the latest release

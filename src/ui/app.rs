@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
 };
 
-use crate::assets::{BRACES, HISTORY, KANBAN, REFRESH_CW, SHARE};
+use crate::assets::{BRACES, DOCS, HISTORY, KANBAN, REFRESH_CW, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -1971,7 +1971,7 @@ impl VerveApp {
             .when(is_visible(SideView::Share), |rail| {
                 rail.child(rail_btn(
                     "rail-share",
-                    vicon(SHARE),
+                    vicon(DOCS),
                     SideView::Share,
                     active,
                     &theme,

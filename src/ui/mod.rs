@@ -1,6 +1,7 @@
 //! UI layer: panels, the reusable kv table, and the workspace shell.
 
 pub mod app;
+pub mod autotest_panel;
 pub mod console_panel;
 pub mod env_panel;
 pub mod environments_view;

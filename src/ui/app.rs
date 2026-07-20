@@ -33,6 +33,7 @@ use crate::ui::request_panel::RequestPanel;
 use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
+use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::ssh_panel::SshPanel;
 
 pub struct VerveApp {
@@ -49,6 +50,8 @@ pub struct VerveApp {
     pub share: Entity<SharePanel>,
     /// SSH management panel (主机卡片 + 终端).
     pub ssh: Entity<SshPanel>,
+    /// Automated testing panel (套件/用例/步骤 + 运行结果).
+    pub autotest: Entity<AutoTestPanel>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -313,6 +316,7 @@ impl VerveApp {
             cx.new(|cx| ProjectManagePanel::new(git.clone(), state.clone(), window, cx));
         let share = cx.new(|cx| SharePanel::new(state.clone(), window, cx));
         let ssh = cx.new(|cx| SshPanel::new(window, cx));
+        let autotest = cx.new(|cx| AutoTestPanel::new(state.clone(), window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -343,6 +347,7 @@ impl VerveApp {
             project_manage,
             share,
             ssh,
+            autotest,
             share_server,
             share_configs,
             env_select,
@@ -1765,27 +1770,7 @@ impl Render for VerveApp {
                             SideView::ProjectManage => project_manage.clone().into_any_element(),
                             SideView::Share => share.clone().into_any_element(),
                             SideView::Ssh => ssh.clone().into_any_element(),
-                            SideView::AutoTest => {
-                                let muted = theme_clone.muted_foreground;
-                                v_flex()
-                                    .size_full()
-                                    .items_center()
-                                    .justify_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xl()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("自动化测试"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(muted)
-                                            .child("功能开发中，敬请期待。"),
-                                    )
-                                    .into_any_element()
-                            }
+                            SideView::AutoTest => self.autotest.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(

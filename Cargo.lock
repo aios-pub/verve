@@ -10315,6 +10315,7 @@ dependencies = [
  "libc",
  "log",
  "qrcode",
+ "regex",
  "reqwest_client",
  "rfd",
  "russh",

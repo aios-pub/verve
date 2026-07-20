@@ -37,6 +37,8 @@ pub fn demo_workspace() -> WorkspaceData {
     login.description =
         "用户登录接口。\n\n请求成功后将 `token` 写入全局变量 `token` 供后续接口使用。".to_string();
     login.mock = Some(MockRule {
+        // Note: match_path gets backfilled by crate::mock::backfill_path_patterns
+        // at serve time — empty Exact means "use the request's own URL path".
         enabled: true,
         status: 200,
         headers: vec![KeyValue::new("Content-Type", "application/json")],
@@ -47,6 +49,10 @@ pub fn demo_workspace() -> WorkspaceData {
         }))
         .unwrap(),
         delay_ms: 0,
+        match_method: None,
+        match_path: PathPattern::Exact(String::new()),
+        match_query: Vec::new(),
+        match_headers: Vec::new(),
     });
     // Tests script: extract the token from the response and store it in the
     // `token` environment variable, then assert (PRD §7.5 workflow).

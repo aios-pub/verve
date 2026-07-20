@@ -64,7 +64,7 @@ fn main() {
 
         // Start the local Mock server with the active project's rules, if any.
         if let Some(project) = app_state.read(cx).active_project() {
-            let rules = std::sync::Arc::new(mock::rule_map(project));
+            let rules = mock::rule_map(project);
             if !rules.is_empty() {
                 mock::serve(mock::DEFAULT_PORT, rules).detach();
             }

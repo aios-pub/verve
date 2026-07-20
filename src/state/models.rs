@@ -773,6 +773,39 @@ impl ApiRequest {
     }
 }
 
+/// How a mock rule matches an incoming request's path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PathPattern {
+    /// Match the path exactly (current behavior).
+    Exact(String),
+    /// Match when the request path starts with this prefix.
+    Prefix(String),
+    /// Match the path against this regex (anchored; uses the `regex` crate).
+    Regex(String),
+}
+
+impl Default for PathPattern {
+    fn default() -> Self {
+        PathPattern::Exact(String::new())
+    }
+}
+
+impl PathPattern {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PathPattern::Exact(_) => "精确",
+            PathPattern::Prefix(_) => "前缀",
+            PathPattern::Regex(_) => "正则",
+        }
+    }
+    pub fn value(&self) -> &str {
+        match self {
+            PathPattern::Exact(s) | PathPattern::Prefix(s) | PathPattern::Regex(s) => s,
+        }
+    }
+}
+
 /// A mock rule used by the local mock server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MockRule {
@@ -784,6 +817,18 @@ pub struct MockRule {
     /// Delay in milliseconds before responding.
     #[serde(default)]
     pub delay_ms: u64,
+    /// When set, the rule only matches requests with this HTTP method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_method: Option<RequestMethod>,
+    /// Path matching strategy.
+    #[serde(default)]
+    pub match_path: PathPattern,
+    /// Query parameters that must be present (and equal if the value is non-empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_query: Vec<KeyValue>,
+    /// Headers that must be present (and equal if the value is non-empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_headers: Vec<KeyValue>,
 }
 
 impl Default for MockRule {
@@ -794,6 +839,10 @@ impl Default for MockRule {
             headers: vec![KeyValue::new("Content-Type", "application/json")],
             body: "{}".to_string(),
             delay_ms: 0,
+            match_method: None,
+            match_path: PathPattern::Exact(String::new()),
+            match_query: Vec::new(),
+            match_headers: Vec::new(),
         }
     }
 }

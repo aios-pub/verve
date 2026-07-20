@@ -71,6 +71,8 @@ pub enum ReqTab {
     PostRequest,
     /// Generated curl code.
     Curl,
+    /// Mock rule configuration.
+    Mock,
 }
 
 pub struct RequestPanel {
@@ -2123,6 +2125,13 @@ impl Render for RequestPanel {
                             ReqTab::Curl,
                             &theme,
                             cx,
+                        ))
+                        .child(tab_label(
+                            "Mock",
+                            active_tab == ReqTab::Mock,
+                            ReqTab::Mock,
+                            &theme,
+                            cx,
                         )),
                 )
                 .child(
@@ -2356,6 +2365,19 @@ impl RequestPanel {
                         ),
                 )
                 .into_any_element(),
+            ReqTab::Mock => {
+                v_flex()
+                    .size_full()
+                    .p_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Mock 规则：开启后本地 Mock 服务将按方法/路径/查询/请求头匹配并返回自定义响应。详细编辑（匹配条件、动态模板、一键生成）将在下一版本提供。"),
+                    )
+                    .into_any_element()
+            }
             ReqTab::Curl => {
                 let curl = self.generate_curl(cx);
                 let curl_for_btn = curl.clone();

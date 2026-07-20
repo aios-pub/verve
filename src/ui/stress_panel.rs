@@ -12,11 +12,12 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _};
+use gpui_component::chart::{BarChart, LineChart};
 
 use crate::state::models::{Folder, Project};
 use crate::state::{AppEvent, AppState};
 use crate::stress::{
-    find_or_download, run_oha, run_scenario, StressConfig, StressResult, StressSnapshot,
+    find_or_download, run_oha, StressConfig, StressResult, StressSnapshot,
     StressStopHandle, StressTarget,
 };
 
@@ -158,8 +159,6 @@ impl StressPanel {
             return;
         }
 
-        let http_client = cx.http_client();
-
         let project = match self.state.read(cx).active_project().cloned() {
             Some(p) => p,
             None => {
@@ -193,37 +192,58 @@ impl StressPanel {
         let d = cfg.duration_secs;
         let q = cfg.qps;
 
-        let (tx, rx) = std::sync::mpsc::channel::<Result<crate::stress::OhaJsonReport, String>>();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(run_oha(&(), &req, &vars, c, d, q));
-            let _ = tx.send(result);
-        });
+        // Kick off the streaming runner (returns a handle with snapshot + result channels).
+        let mut handle = match run_oha(&(), &req, &vars, c, d, q) {
+            Ok(h) => h,
+            Err(e) => {
+                self.error = Some(e);
+                self.running = false;
+                cx.notify();
+                return;
+            }
+        };
+        // Take the oneshot receiver out; the handle stays in the panel for stop/snapshots.
+        let result_rx = handle.result_rx.take();
+        self.handle = Some(handle);
+
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
+            let mut result_rx = match result_rx {
+                Some(rx) => rx,
+                None => return,
+            };
             loop {
-                match rx.try_recv() {
+                // Drain snapshots by reaching into the panel's handle.
+                let _ = entity.update(cx, |panel, cx| {
+                    if let Some(h) = panel.handle.as_mut() {
+                        while let Some(snap) = h.poll_snapshot() {
+                            panel.snapshot = Some(snap);
+                            cx.notify();
+                        }
+                    }
+                });
+                match result_rx.try_recv() {
                     Ok(result) => {
-                        let _ = entity.update(cx, move |panel, cx| {
+                        let _ = entity.update(cx, |panel, cx| {
                             panel.running = false;
                             panel.handle = None;
-                            match result {
-                                Ok(report) => {
-                                    panel.result = Some(StressResult::from(report));
-                                }
-                                Err(e) => {
-                                    panel.error = Some(e);
-                                }
-                            }
+                            panel.result = Some(result);
                             cx.notify();
                         });
                         break;
                     }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        let _ = entity.update(cx, |panel, cx| {
+                            panel.running = false;
+                            panel.handle = None;
+                            panel.error = Some("压测任务异常退出".into());
+                            cx.notify();
+                        });
+                        break;
                     }
-                    Err(_) => break,
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
+                smol::Timer::after(std::time::Duration::from_millis(150)).await;
             }
         })
         .detach();
@@ -232,11 +252,13 @@ impl StressPanel {
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        if let Some(h) = self.handle.take() {
+        if let Some(h) = self.handle.as_ref() {
             h.stop();
         }
-        // The oha path uses kill_on_drop, but we ran it detached; we flag stop here.
-        // (Full graceful stop for oha is via the scenario runner only in this iteration.)
+        // Keep the handle in place so the polling task can still receive the
+        // partial (or final) StressResult and render it. We optimistically
+        // set running=false so the button flips back to "开始压测" immediately;
+        // the final result will still arrive and be displayed.
         self.running = false;
         cx.notify();
     }
@@ -423,19 +445,18 @@ impl Render for StressPanel {
                     // Snapshot / result.
                     .child(div().h(px(1.)).w_full().bg(border))
                     .when(self.running, |c| {
-                        c.child(
-                            v_flex()
-                                .gap_1()
-                                .child(div().text_sm().child("压测进行中…"))
-                                .child(if let Some(snap) = &self.snapshot {
-                                    div().text_xs().text_color(muted).child(format!(
-                                        "已完成 {} 次, {:.1}s",
-                                        snap.completed, snap.elapsed_secs
+                        c.child(div().text_sm().child("压测进行中…"))
+                            .when_some(self.snapshot.as_ref(), |c, snap| {
+                                c.child(render_live_stats(snap))
+                                    .child(render_latency_chart(
+                                        &snap.latency_bins,
+                                        "响应时间分布（实时）",
+                                        &theme,
                                     ))
-                                } else {
-                                    div().text_xs().text_color(muted).child("正在启动 oha…")
-                                }),
-                        )
+                            })
+                            .when(self.snapshot.is_none(), |c| {
+                                c.child(div().text_xs().text_color(muted).child("正在启动压测…"))
+                            })
                     })
                     .when(!self.running, |c| {
                         c.when(self.result.is_none() && self.error.is_none(), |c| {
@@ -600,6 +621,16 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
                 .child(stat("p99 (ms)".into(), format!("{:.0}", lat.p99)))
                 .child(stat("max (ms)".into(), format!("{:.0}", lat.max))),
         )
+        .when(!r.response_time_histogram.is_empty(), |c| {
+            c.child(render_latency_chart(
+                &r.response_time_histogram,
+                "响应时间分布",
+                theme,
+            ))
+        })
+        .when(!r.rps_timeline.is_empty(), |c| {
+            c.child(render_rps_chart(&r.rps_timeline, theme))
+        })
         .when(!r.status_distribution.is_empty(), |c| {
             c.child(
                 v_flex()
@@ -610,6 +641,148 @@ fn render_result(r: &StressResult, theme: &gpui_component::Theme) -> AnyElement 
                     })),
             )
         })
+        .when(!r.errors.is_empty(), |c| {
+            c.child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xs().text_color(theme.muted_foreground).child("错误分布"))
+                    .children(r.errors.iter().map(|(msg, n)| {
+                        div().text_size(px(12.)).child(format!("{msg}: {n}"))
+                    })),
+            )
+        })
+        .into_any_element()
+}
+
+fn render_live_stats(snap: &StressSnapshot) -> AnyElement {
+    h_flex()
+        .gap_4()
+        .child(stat("已完成".into(), format!("{}", snap.completed)))
+        .child(stat("成功".into(), format!("{}", snap.success)))
+        .child(stat("失败".into(), format!("{}", snap.failed)))
+        .child(stat("QPS".into(), format!("{:.0}", snap.rps)))
+        .child(stat("p50".into(), format!("{:.0}ms", snap.p50_ms)))
+        .child(stat("p95".into(), format!("{:.0}ms", snap.p95_ms)))
+        .child(stat("p99".into(), format!("{:.0}ms", snap.p99_ms)))
+        .child(stat("耗时".into(), format!("{:.1}s", snap.elapsed_secs)))
+        .into_any_element()
+}
+
+/// A single (bucket_ms, count) datum for the bar chart.
+#[derive(Clone)]
+struct HistoBar {
+    label: gpui::SharedString,
+    count: u64,
+    bucket_ms: f64,
+}
+
+fn render_latency_chart(
+    bins: &[(f64, u64)],
+    title: &str,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let title: gpui::SharedString = title.to_string().into();
+    // Take up to ~30 most-relevant non-empty bins to keep the chart readable.
+    let non_empty: Vec<(f64, u64)> = bins.iter().copied().filter(|(_, c)| *c > 0).collect();
+    let data: Vec<HistoBar> = non_empty
+        .iter()
+        .map(|(upper_ms, count)| HistoBar {
+            label: format_bucket_label(*upper_ms).into(),
+            count: *count,
+            bucket_ms: *upper_ms,
+        })
+        .collect();
+
+    if data.is_empty() {
+        let empty_msg: gpui::SharedString = format!("{}（暂无数据）", title).into();
+        return div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(empty_msg)
+            .into_any_element();
+    }
+
+    // Color thresholds: green ≤ 100ms, yellow ≤ 500ms, red otherwise.
+    let green = theme.success;
+    let yellow = theme.warning;
+    let red = theme.danger;
+    let chart_id: gpui::SharedString = format!("latency-histo-{}", title).into();
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(div().text_xs().text_color(theme.muted_foreground).child(title.clone()))
+        .child(
+            div()
+                .w_full()
+                .h(px(200.))
+                .child(
+                    BarChart::new(data)
+                        .id(chart_id)
+                        .band(|d| d.label.clone())
+                        .value(|d| d.count as f64)
+                        .fill(move |d, _, _, _| {
+                            if d.bucket_ms <= 100.0 {
+                                green
+                            } else if d.bucket_ms <= 500.0 {
+                                yellow
+                            } else {
+                                red
+                            }
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
+fn format_bucket_label(upper_ms: f64) -> String {
+    if upper_ms > 60_000.0 {
+        ">60s".to_string()
+    } else if upper_ms >= 1000.0 {
+        format!("{:.0}s", upper_ms / 1000.0)
+    } else {
+        format!("{:.0}ms", upper_ms)
+    }
+}
+
+#[derive(Clone)]
+struct RpsPoint {
+    t_sec: gpui::SharedString,
+    rps: f64,
+}
+
+fn render_rps_chart(timeline: &[(f64, f64)], theme: &gpui_component::Theme) -> AnyElement {
+    if timeline.len() < 2 {
+        return div().into_any_element();
+    }
+    // Downsample to at most 60 points so the line chart stays readable.
+    let step = (timeline.len() / 60).max(1);
+    let data: Vec<RpsPoint> = timeline
+        .iter()
+        .step_by(step)
+        .map(|(t, rps)| RpsPoint {
+            t_sec: format!("{:.1}s", t).into(),
+            rps: *rps,
+        })
+        .collect();
+
+    let color = theme.primary;
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(div().text_xs().text_color(theme.muted_foreground).child("QPS 随时间变化"))
+        .child(
+            div()
+                .w_full()
+                .h(px(160.))
+                .child(
+                    LineChart::new(data)
+                        .id("rps-timeline")
+                        .x(|d| d.t_sec.clone())
+                        .y(|d| d.rps)
+                        .name("QPS")
+                        .linear(),
+                ),
+        )
         .into_any_element()
 }
 

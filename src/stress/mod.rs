@@ -1,13 +1,13 @@
 //! HTTP stress testing.
 //!
 //! Two execution paths:
-//! - **Single-request stress** via [`oha`](https://github.com/hatoo/oha) (a Rust
-//!   HTTP load generator): oha is integrated directly as a library, no external
-//!   binary required. Its JSON report is parsed into a [`OhaJsonReport`] and
-//!   surfaced to the UI.
-//! - **Scenario stress** for multi-step test cases (oha cannot drive multi-URL
-//!   flows): workers spawned on Tokio each run the autotest runner in a loop,
-//!   tracking latency percentiles locally.
+//! - **Single-request stress** via a built-in `reqwest`-based load generator
+//!   (formerly oha): keeps `concurrency` workers looping over the same
+//!   prepared request for `duration_secs`, streaming live snapshots to the UI
+//!   for real-time chart rendering. Final result is a [`StressResult`].
+//! - **Scenario stress** for multi-step test cases: workers spawned on Tokio
+//!   each run the autotest runner in a loop, tracking latency percentiles
+//!   locally.
 
 pub mod models;
 pub mod oha;

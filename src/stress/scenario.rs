@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use http_client::HttpClient;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::autotest::runner::run_case;
 use crate::autotest::TestCase;
@@ -20,12 +20,12 @@ use crate::state::models::Project;
 
 use super::models::{LatencyPercentiles, StressResult, StressSnapshot};
 
-/// Handle returned by [`run_scenario`]; call [`stop()`](StressStopHandle::stop)
+/// Handle returned by stress runners; call [`stop()`](StressStopHandle::stop)
 /// to request graceful shutdown, or drop it to abort.
 pub struct StressStopHandle {
-    stop: Arc<AtomicBool>,
-    task: Option<tokio::task::JoinHandle<StressResult>>,
-    snapshot_rx: Option<mpsc::UnboundedReceiver<StressSnapshot>>,
+    pub(crate) stop: Arc<AtomicBool>,
+    pub(crate) result_rx: Option<oneshot::Receiver<StressResult>>,
+    pub(crate) snapshot_rx: Option<mpsc::UnboundedReceiver<StressSnapshot>>,
 }
 
 impl StressStopHandle {
@@ -35,8 +35,8 @@ impl StressStopHandle {
     }
     /// Await the aggregated result.
     pub async fn result(mut self) -> StressResult {
-        match self.task.take() {
-            Some(t) => t.await.unwrap_or_default(),
+        match self.result_rx.take() {
+            Some(rx) => rx.await.unwrap_or_default(),
             None => StressResult::default(),
         }
     }
@@ -59,6 +59,7 @@ pub fn run_scenario(
 ) -> StressStopHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let (snap_tx, snap_rx) = mpsc::unbounded_channel::<StressSnapshot>();
+    let (result_tx, result_rx) = oneshot::channel::<StressResult>();
     let completed = Arc::new(AtomicU64::new(0));
     let failed = Arc::new(AtomicU64::new(0));
     let latencies: Arc<tokio::sync::Mutex<Vec<u64>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -105,6 +106,7 @@ pub fn run_scenario(
     // Snapshot pumper.
     let stop_snap = stop.clone();
     let completed_snap = completed.clone();
+    let failed_snap = failed.clone();
     let snap_task = tokio::spawn(async move {
         while !stop_snap.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -112,6 +114,13 @@ pub fn run_scenario(
             let _ = snap_tx.send(StressSnapshot {
                 elapsed_secs: start.elapsed().as_secs_f64(),
                 completed: done,
+                success: done,
+                failed: failed_snap.load(Ordering::SeqCst),
+                rps: 0.0,
+                latency_bins: Vec::new(),
+                p50_ms: 0.0,
+                p95_ms: 0.0,
+                p99_ms: 0.0,
                 status: format!("完成 {} 次", done),
             });
             if start.elapsed().as_secs() >= duration_secs as u64 {
@@ -121,7 +130,7 @@ pub fn run_scenario(
     });
 
     // Aggregator task.
-    let agg_handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         for w in workers {
             let _ = w.await;
         }
@@ -130,7 +139,7 @@ pub fn run_scenario(
         let elapsed = start.elapsed().as_secs_f64().max(f64::MIN_POSITIVE);
         let mut lat = latencies.lock().await.clone();
         lat.sort();
-        StressResult {
+        let result = StressResult {
             total_secs: elapsed,
             total,
             success: completed.load(Ordering::SeqCst),
@@ -139,12 +148,15 @@ pub fn run_scenario(
             latency_ms: percentiles_from_sorted(&lat),
             status_distribution: BTreeMap::new(),
             errors: BTreeMap::new(),
-        }
+            response_time_histogram: Vec::new(),
+            rps_timeline: Vec::new(),
+        };
+        let _ = result_tx.send(result);
     });
 
     StressStopHandle {
         stop,
-        task: Some(agg_handle),
+        result_rx: Some(result_rx),
         snapshot_rx: Some(snap_rx),
     }
 }

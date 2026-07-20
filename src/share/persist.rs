@@ -54,14 +54,19 @@ pub fn save_shares(shares: &[ShareConfig]) {
     }
 }
 
-/// Insert or replace a share (matched by id).
+/// Insert a share, replacing any existing share for the same document target
+/// (same project_id + scope + target_id). Only the latest share for a given
+/// document is kept; older shares become invalid.
 pub fn upsert_share(share: ShareConfig) -> Vec<ShareConfig> {
     let mut shares = load_shares();
-    if let Some(existing) = shares.iter_mut().find(|s| s.id == share.id) {
-        *existing = share;
-    } else {
-        shares.push(share);
-    }
+    // Remove any existing share for the same document target
+    shares.retain(|s| {
+        !(s.project_id == share.project_id
+          && s.scope == share.scope
+          && s.target_id == share.target_id)
+    });
+    // Add the new share
+    shares.push(share);
     save_shares(&shares);
     shares
 }
@@ -103,6 +108,100 @@ mod tests {
 
         let after_remove = remove_share(&s.id);
         assert!(after_remove.is_empty());
+        assert!(load_shares().is_empty());
+
+        // Restore HOME.
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn same_target_replaces_old_share() {
+        // Use the shared ssh mutex to serialize all HOME-dependent tests.
+        let _guard = crate::ssh::TEST_HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        // Create first share for project proj-1, project scope
+        let s1 = ShareConfig::new("proj-1", "My Project");
+        let id1 = s1.id.clone();
+        upsert_share(s1);
+        assert_eq!(load_shares().len(), 1);
+
+        // Create second share for the same target
+        let mut s2 = ShareConfig::new("proj-1", "My Project");
+        s2.title = "Updated Docs".into();
+        let id2 = s2.id.clone();
+        let saved = upsert_share(s2);
+
+        // Should only have one share, the new one
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, id2);
+        assert_eq!(saved[0].title, "Updated Docs");
+
+        let loaded = load_shares();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, id2);
+        assert_ne!(loaded[0].id, id1);
+
+        // Cleanup
+        remove_share(&id2);
+        assert!(load_shares().is_empty());
+
+        // Restore HOME.
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn different_targets_coexist() {
+        // Use the shared ssh mutex to serialize all HOME-dependent tests.
+        let _guard = crate::ssh::TEST_HOME_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &tmp);
+
+        // Create share for project proj-1
+        let s1 = ShareConfig::new("proj-1", "Project 1");
+        let id1 = s1.id.clone();
+        upsert_share(s1);
+
+        // Create share for different project proj-2
+        let s2 = ShareConfig::new("proj-2", "Project 2");
+        let id2 = s2.id.clone();
+        upsert_share(s2);
+
+        // Create share for same project but different target (specific request)
+        let mut s3 = ShareConfig::new("proj-1", "Project 1");
+        s3.scope = crate::share::ShareScope::Request;
+        s3.target_id = Some("req-123".into());
+        let id3 = s3.id.clone();
+        upsert_share(s3);
+
+        // All three should exist
+        let loaded = load_shares();
+        assert_eq!(loaded.len(), 3);
+        assert!(loaded.iter().any(|s| s.id == id1));
+        assert!(loaded.iter().any(|s| s.id == id2));
+        assert!(loaded.iter().any(|s| s.id == id3));
+
+        // Cleanup
+        remove_share(&id1);
+        remove_share(&id2);
+        remove_share(&id3);
         assert!(load_shares().is_empty());
 
         // Restore HOME.

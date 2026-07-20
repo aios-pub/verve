@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::time::Duration;
 
 use clap::Parser as _;
 
@@ -62,6 +61,14 @@ pub async fn run_oha(
         format!("-c={concurrency}"),
         format!("-z={duration_secs}s"),
         format!("-m={}", method_str(prepared.method)),
+        // Skip pre-lookup which uses hickory-resolver that can fail on macOS
+        "--no-pre-lookup".to_string(),
+        // Use IPv4 only to avoid IPv6 routing issues
+        "--ipv4".to_string(),
+        // Skip TLS certificate verification (useful for internal/test environments)
+        "--insecure".to_string(),
+        // Longer connect timeout
+        "--connect-timeout=10s".to_string(),
     ];
 
     if let Some(q) = qps {
@@ -93,14 +100,27 @@ pub async fn run_oha(
     // Run oha
     let result = oha::run(opts).await;
 
-    // Read output file regardless of result (in case of partial failure)
+    // Read output file regardless of result
     let json_output = fs::read_to_string(&temp_file).unwrap_or_default();
 
     // Clean up temp file
     let _ = fs::remove_file(&temp_file);
 
     // Check for oha runtime error
-    result.map_err(|e| format!("oha run: {e}"))?;
+    result.map_err(|e| {
+        // If we got JSON output even with an error, we can still parse it
+        if json_output.trim().starts_with('{') {
+            // Silently ignore the error if we have valid JSON output
+            // (warnings like DNS resolv.conf issues shouldn't fail the run if it completed)
+            return String::new();
+        }
+        format!("oha run: {e}")
+    })?;
+
+    // If we got empty error but no JSON, return error
+    if json_output.trim().is_empty() {
+        return Err("oha produced no output".to_string());
+    }
 
     // Parse JSON output
     serde_json::from_str::<OhaJsonReport>(&json_output)

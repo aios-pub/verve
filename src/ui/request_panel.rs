@@ -394,7 +394,7 @@ impl RequestPanel {
             None => return,
         };
         // Signal the stop flag, then clear the streaming marker.
-        self.state.update(cx, |s, cx| {
+        self.state.update(cx, |s, _cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, r)) = project.find_request_mut(&id) {
                     if let Some(resp) = r.last_response.as_mut() {
@@ -403,8 +403,18 @@ impl RequestPanel {
                 }
             }
             s.sending = None;
-            cx.emit(AppEvent::ResponseUpdated(id.clone()));
         });
+        // 必须在可变借用释放后再emit，避免双重借用panic。
+        // 使用 spawn 异步任务，在当前同步事件处理完成后执行，借用已释放。
+        let state = self.state.clone();
+        let emit_id = id.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::ResponseUpdated(emit_id));
+            });
+        })
+        .detach();
         // Flip the shared stop flag if one is set for this request.
         if let Some(flag) = stop_flags().lock().unwrap().get(&id) {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -645,8 +655,20 @@ impl RequestPanel {
                     folder.variables = variables;
                 }
             }
-            s.notify_edited(cx);
+            s.dirty = true;
+            s.schedule_save(cx);
         });
+        // 注意：必须在可变借用 AppState 释放后再 emit 事件，避免订阅者
+        // （如 project_tree_panel）尝试 read state 时造成双重借用 panic。
+        // 使用 spawn 异步任务，它会在当前同步事件处理完成后才执行，此时借用已释放。
+        let state = self.state.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::RequestEdited);
+            });
+        })
+        .detach();
     }
 
     /// Read the current editor state back into the request model.
@@ -723,8 +745,20 @@ impl RequestPanel {
                     req.tests_script = tests_script;
                 }
             }
-            s.notify_edited(cx);
+            s.dirty = true;
+            s.schedule_save(cx);
         });
+        // 注意：必须在可变借用 AppState 释放后再 emit 事件，避免订阅者
+        // （如 project_tree_panel）尝试 read state 时造成双重借用 panic。
+        // 使用 spawn 异步任务，它会在当前同步事件处理完成后才执行，此时借用已释放。
+        let state = self.state.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::RequestEdited);
+            });
+        })
+        .detach();
     }
 
     /// Build the effective variable map for the active request.
@@ -1032,7 +1066,7 @@ impl RequestPanel {
         ) {
             Ok(p) => p,
             Err(e) => {
-                self.state.update(cx, |s, cx| {
+                self.state.update(cx, |s, _cx| {
                     if let Some(project) = s.active_project_mut() {
                         if let Some((_, r)) = project.find_request_mut(&id) {
                             r.last_response = Some(Response {
@@ -1041,8 +1075,17 @@ impl RequestPanel {
                             });
                         }
                     }
-                    cx.emit(AppEvent::ResponseUpdated(id.clone()));
                 });
+                // 必须在可变借用释放后再emit，避免双重借用panic。
+                // spawn异步任务在当前同步流程结束后执行，借用已释放。
+                let state = self.state.clone();
+                cx.spawn(async move |_, cx| {
+                    let _ = state.update(cx, |s, cx| {
+                        let _ = s;
+                        cx.emit(AppEvent::ResponseUpdated(id.clone()));
+                    });
+                })
+                .detach();
                 return;
             }
         };
@@ -1713,7 +1756,7 @@ impl RequestPanel {
     /// gRPC / Socket.IO placeholder (only for unimplemented edge cases).
     fn send_placeholder(&mut self, id: String, protocol: Protocol, cx: &mut Context<Self>) {
         let name = protocol.to_string();
-        self.state.update(cx, |s, cx| {
+        self.state.update(cx, |s, _cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, r)) = project.find_request_mut(&id) {
                     r.last_response = Some(Response {
@@ -1723,14 +1766,22 @@ impl RequestPanel {
                     });
                 }
             }
-            cx.emit(AppEvent::ResponseUpdated(id));
         });
+        // 必须在可变借用释放后再emit，避免双重借用panic。
+        let state = self.state.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::ResponseUpdated(id));
+            });
+        })
+        .detach();
         cx.notify();
     }
 
     /// Helper: write a plain error response onto the request.
     fn set_error_response(&mut self, id: &str, msg: String, cx: &mut Context<Self>) {
-        self.state.update(cx, |s, cx| {
+        self.state.update(cx, |s, _cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, r)) = project.find_request_mut(id) {
                     r.last_response = Some(Response {
@@ -1739,8 +1790,18 @@ impl RequestPanel {
                     });
                 }
             }
-            cx.emit(AppEvent::ResponseUpdated(id.to_string()));
         });
+        // 必须在可变借用释放后再emit，避免双重借用panic。
+        // spawn异步任务在当前同步流程结束后执行，借用已释放。
+        let state = self.state.clone();
+        let emit_id = id.to_string();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::ResponseUpdated(emit_id));
+            });
+        })
+        .detach();
     }
 }
 
@@ -3672,8 +3733,19 @@ impl RequestPanel {
                         r.body.raw_parameter = body.raw_parameter.clone();
                     }
                 }
-                s.notify_edited(cx);
+                s.dirty = true;
+                s.schedule_save(cx);
             });
+            // 注意：必须在可变借用 AppState 释放后再 emit 事件，避免双重借用 panic。
+            // spawn异步任务在当前同步流程结束后执行，借用已释放。
+            let state = self.state.clone();
+            cx.spawn(async move |_, cx| {
+                let _ = state.update(cx, |s, cx| {
+                    let _ = s;
+                    cx.emit(AppEvent::RequestEdited);
+                });
+            })
+            .detach();
         }
         // Rebuild the persistent row entities on next render.
         self.pending_reload = true;
@@ -3751,8 +3823,19 @@ impl RequestPanel {
                     r.body.sync_fields_to_raw();
                 }
             }
-            s.notify_edited(cx);
+            s.dirty = true;
+            s.schedule_save(cx);
         });
+        // 注意：必须在可变借用 AppState 释放后再 emit 事件，避免双重借用 panic。
+        // spawn异步任务在当前同步流程结束后执行，借用已释放。
+        let state = self.state.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::RequestEdited);
+            });
+        })
+        .detach();
     }
 
     /// Update a single visual-mode row's plain fields (enabled/type/required),
@@ -3795,8 +3878,19 @@ impl RequestPanel {
                     r.body.sync_fields_to_raw();
                 }
             }
-            s.notify_edited(cx);
+            s.dirty = true;
+            s.schedule_save(cx);
         });
+        // 注意：必须在可变借用 AppState 释放后再 emit 事件，避免双重借用 panic。
+        // spawn异步任务在当前同步流程结束后执行，借用已释放。
+        let state = self.state.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = state.update(cx, |s, cx| {
+                let _ = s;
+                cx.emit(AppEvent::RequestEdited);
+            });
+        })
+        .detach();
         cx.notify();
     }
 }

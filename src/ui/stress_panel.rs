@@ -196,22 +196,38 @@ impl StressPanel {
         let d = cfg.duration_secs;
         let q = cfg.qps;
 
+        let (tx, rx) = std::sync::mpsc::channel::<Result<crate::stress::OhaJsonReport, String>>();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(run_oha(&oha_path, &req, &vars, c, d, q));
+            let _ = tx.send(result);
+        });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            let result = run_oha(&oha_path, &req, &vars, c, d, q).await;
-            let _ = entity.update(cx, move |panel, cx| {
-                panel.running = false;
-                panel.handle = None;
-                match result {
-                    Ok(report) => {
-                        panel.result = Some(StressResult::from(report));
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        let _ = entity.update(cx, move |panel, cx| {
+                            panel.running = false;
+                            panel.handle = None;
+                            match result {
+                                Ok(report) => {
+                                    panel.result = Some(StressResult::from(report));
+                                }
+                                Err(e) => {
+                                    panel.error = Some(e);
+                                }
+                            }
+                            cx.notify();
+                        });
+                        break;
                     }
-                    Err(e) => {
-                        panel.error = Some(e);
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(100)).await;
                     }
+                    Err(_) => break,
                 }
-                cx.notify();
-            });
+            }
         })
         .detach();
 

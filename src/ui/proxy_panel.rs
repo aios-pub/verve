@@ -49,7 +49,7 @@ impl ProxyPanel {
             Ok(u16),
             Err(String),
         }
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Ev>();
+        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
@@ -73,20 +73,29 @@ impl ProxyPanel {
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            if let Some(ev) = rx.recv().await {
-                let _ = ent.update(cx, |panel, cx| match ev {
-                    Ev::Ok(port) => {
-                        panel.port = port;
-                        panel.running = true;
-                        panel.error = None;
-                        panel.start_tick(cx);
-                        cx.notify();
+            loop {
+                match rx.try_recv() {
+                    Ok(ev) => {
+                        let _ = ent.update(cx, |panel, cx| match ev {
+                            Ev::Ok(port) => {
+                                panel.port = port;
+                                panel.running = true;
+                                panel.error = None;
+                                panel.start_tick(cx);
+                                cx.notify();
+                            }
+                            Ev::Err(e) => {
+                                panel.error = Some(e);
+                                cx.notify();
+                            }
+                        });
+                        break;
                     }
-                    Ev::Err(e) => {
-                        panel.error = Some(e);
-                        cx.notify();
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
                     }
-                });
+                    Err(_) => break,
+                }
             }
         })
         .detach();

@@ -15,6 +15,6 @@ pub mod kubectl;
 
 pub use config::{kubeconfig_path, Cluster, Context as KubeContext, KubeConfig, UserEntry, load_default};
 pub use kubectl::{
-    list_pods, port_forward, stream_logs, ContainerStatus, LogStream, Pod, PodError, PodMeta,
-    PodStatus, PortForwardHandle,
+    exec_pod, list_pods, port_forward, stream_logs, ContainerStatus, ExecSession, LogStream, Pod,
+    PodError, PodMeta, PodStatus, PortForwardHandle,
 };

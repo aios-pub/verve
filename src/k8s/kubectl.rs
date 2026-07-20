@@ -15,8 +15,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Deserialize;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 /// A pod summary returned by [`list_pods`].
@@ -224,6 +224,50 @@ fn parse_forwarding_port(line: &str) -> Option<u16> {
     let colon = line.rfind(':')?;
     let space = line[colon..].find(' ').map(|p| colon + p).unwrap_or(line.len());
     line[colon + 1..space].parse().ok()
+}
+
+/// Handle for an interactive `kubectl exec` session. After creation the caller
+/// takes stdin/stdout/stderr via the Option fields; the child is kept alive so
+/// Drop kills kubectl.
+pub struct ExecSession {
+    pub child: Child,
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+/// Spawn `kubectl exec -it pod [-n ns] -- shell` with stdin/stdout piped so the
+/// caller can drive an interactive terminal. The shell defaults to `/bin/sh`.
+pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>) -> Result<ExecSession, PodError> {
+    let shell = shell.unwrap_or("/bin/sh");
+    let mut cmd = Command::new("kubectl");
+    cmd.arg("exec")
+        .arg("-i")
+        .arg("-t")
+        .arg(pod)
+        .arg("--")
+        .arg(shell);
+    if let Some(ns) = namespace {
+        if !ns.is_empty() {
+            cmd.args(["-n", ns]);
+        }
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| PodError(format!("启动 kubectl exec 失败: {e}")))?;
+    let stdin = child.stdin.take().ok_or_else(|| PodError("kubectl 未提供 stdin".into()))?;
+    let stdout = child.stdout.take().ok_or_else(|| PodError("kubectl 未提供 stdout".into()))?;
+    let stderr = child.stderr.take().ok_or_else(|| PodError("kubectl 未提供 stderr".into()))?;
+    Ok(ExecSession {
+        child,
+        stdin: Some(stdin),
+        stdout: Some(stdout),
+        stderr: Some(stderr),
+    })
 }
 
 #[cfg(test)]

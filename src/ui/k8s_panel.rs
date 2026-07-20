@@ -8,14 +8,18 @@
 //! Pod exec (interactive shell) is reserved for a future iteration (it needs a
 //! PTY, analogous to the SSH TerminalView).
 
+use std::sync::Arc;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use tokio::io::AsyncWriteExt;
 
-use crate::k8s::kubectl::{list_pods, port_forward, stream_logs, LogStream, Pod, PortForwardHandle};
+use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod, PortForwardHandle};
 use crate::k8s::{kubeconfig_path, load_default, KubeConfig};
+use crate::ssh::terminal::TerminalView;
 
 /// Which sub-view is active.
 #[derive(Clone, PartialEq, Eq)]
@@ -24,6 +28,7 @@ enum View {
     Pods,
     Logs,
     Forwards,
+    Exec,
 }
 
 pub struct K8sPanel {
@@ -40,6 +45,11 @@ pub struct K8sPanel {
     log_stream: Option<LogStream>,
     // --- forwards ---
     forwards: Vec<PortForwardHandle>,
+    // --- exec ---
+    exec_target: Option<String>,
+    exec_terminal: Option<Entity<TerminalView>>,
+    exec_stdin: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    exec_child: Option<tokio::process::Child>,
 }
 
 impl K8sPanel {
@@ -60,6 +70,10 @@ impl K8sPanel {
             log_lines: Vec::new(),
             log_stream: None,
             forwards: Vec::new(),
+            exec_target: None,
+            exec_terminal: None,
+            exec_stdin: None,
+            exec_child: None,
         };
         me.maybe_default_namespace();
         me
@@ -105,12 +119,113 @@ impl K8sPanel {
 
     fn set_view(&mut self, v: View, cx: &mut Context<Self>) {
         let leaving_logs = v != View::Logs;
+        let leaving_exec = v != View::Exec;
         self.active_view = v;
-        // If leaving logs, drop the stream.
         if leaving_logs {
             self.log_stream = None;
         }
+        if leaving_exec {
+            self.exec_stdin = None;
+            self.exec_terminal = None;
+            if let Some(mut c) = self.exec_child.take() {
+                let _ = c.start_kill();
+            }
+        }
         cx.notify();
+    }
+
+    fn start_exec(&mut self, pod: String, window: &mut Window, cx: &mut Context<Self>) {
+        let ns = self
+            .namespace_input
+            .as_ref()
+            .map(|i| i.read(cx).value().to_string());
+        match exec_pod(&pod, ns.as_deref(), None) {
+            Ok(mut sess) => {
+                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
+                // Install a keystroke sender that funnels bytes to the child stdin.
+                let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+                let child_stdin = sess.stdin.take();
+                let child_stdout = sess.stdout.take();
+                let child_stderr = sess.stderr.take();
+                self.exec_child = Some(sess.child);
+                self.exec_stdin = Some(stdin_tx);
+                self.exec_terminal = Some(terminal.clone());
+                self.exec_target = Some(pod.clone());
+                self.active_view = View::Exec;
+                self.error = None;
+
+                // Wire terminal input_tx to our stdin channel.
+                let tx_for_term = self.exec_stdin.clone();
+                terminal.update(cx, |tv, _cx| {
+                    if let Ok(mut slot) = tv.input_tx.lock() {
+                        *slot = tx_for_term;
+                    }
+                });
+
+                // Pump stdin → child.
+                if let Some(mut child_stdin) = child_stdin {
+                    cx.spawn(async move |_this, _cx| {
+                        while let Some(bytes) = stdin_rx.recv().await {
+                            if child_stdin.write_all(&bytes).await.is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
+
+                // Pump stdout → terminal feed.
+                if let Some(stdout) = child_stdout {
+                    let term = terminal.clone();
+                    cx.spawn(async move |_this, cx| {
+                        use tokio::io::AsyncReadExt;
+                        let mut stdout = stdout;
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match stdout.read(&mut buf).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    let chunk = buf[..n].to_vec();
+                                    let _ = term.update(cx, |tv, cx| {
+                                        tv.feed(&chunk);
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }
+                    })
+                    .detach();
+                }
+                // Same for stderr.
+                if let Some(stderr) = child_stderr {
+                    let term = terminal.clone();
+                    cx.spawn(async move |_this, cx| {
+                        use tokio::io::AsyncReadExt;
+                        let mut stderr = stderr;
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match stderr.read(&mut buf).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    let chunk = buf[..n].to_vec();
+                                    let _ = term.update(cx, |tv, cx| {
+                                        tv.feed(&chunk);
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }
+                    })
+                    .detach();
+                }
+
+                cx.notify();
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                cx.notify();
+            }
+        }
     }
 
     fn reload_pods(&mut self, cx: &mut Context<Self>) {
@@ -296,6 +411,7 @@ impl Render for K8sPanel {
                 View::Pods => self.render_pods(&theme, ns_input.clone(), pods_loading, cx).into_any_element(),
                 View::Logs => self.render_logs(&theme, cx).into_any_element(),
                 View::Forwards => self.render_forwards(&theme, cx).into_any_element(),
+                View::Exec => self.render_exec(&theme, cx).into_any_element(),
             })
     }
 }
@@ -464,6 +580,7 @@ impl K8sPanel {
                         };
                         let logs_name = name.clone();
                         let fwd_name = name.clone();
+                        let exec_name = name.clone();
                         h_flex()
                             .gap_2()
                             .items_center()
@@ -501,6 +618,16 @@ impl K8sPanel {
                                     .label("日志")
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.start_logs(logs_name.clone(), cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(format!("k8s-exec-{}", p.metadata.name))
+                                    .xsmall()
+                                    .ghost()
+                                    .label("Shell")
+                                    .tooltip("kubectl exec -it 进入 Pod")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.start_exec(exec_name.clone(), window, cx);
                                     })),
                             )
                             .child(
@@ -555,6 +682,36 @@ impl K8sPanel {
                             .font_family(theme.mono_font_family.clone())
                             .child(line.clone())
                     })),
+            )
+            .into_any_element()
+    }
+
+    fn render_exec(&mut self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let target = self.exec_target.clone().unwrap_or_else(|| "(未连接)".into());
+        // Lazily create a terminal if we don't have one (defensive: start_exec creates it).
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .px_4()
+                    .pt_2()
+                    .child(div().text_size(px(12.)).text_color(muted).child("Pod"))
+                    .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(target)),
+            )
+            .child(div().h(px(1.)).w_full().bg(border))
+            .child(
+                div()
+                    .id("k8s-exec-term")
+                    .flex_1()
+                    .min_h_0()
+                    .bg(theme.muted)
+                    .children(self.exec_terminal.clone().map(|t| t.into_any_element())),
             )
             .into_any_element()
     }

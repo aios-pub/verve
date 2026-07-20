@@ -18,6 +18,7 @@ pub mod share_panel;
 pub mod sftp_browser;
 pub mod ssh_host_dialog;
 pub mod ssh_panel;
+pub mod stress_panel;
 pub mod theme;
 pub mod themes;
 

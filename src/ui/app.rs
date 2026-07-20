@@ -35,6 +35,7 @@ use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::ssh_panel::SshPanel;
+use crate::ui::stress_panel::StressPanel;
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -52,6 +53,8 @@ pub struct VerveApp {
     pub ssh: Entity<SshPanel>,
     /// Automated testing panel (套件/用例/步骤 + 运行结果).
     pub autotest: Entity<AutoTestPanel>,
+    /// Stress testing panel (oha/runner + live results).
+    pub stress: Entity<StressPanel>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -150,6 +153,8 @@ pub enum SideView {
     Share,
     /// Automated testing (自动化测试).
     AutoTest,
+    /// Stress testing (压测).
+    Stress,
     /// SSH connection management (SSH 管理).
     Ssh,
 }
@@ -159,6 +164,7 @@ impl SideView {
     pub const ALL: &'static [SideView] = &[
         SideView::Api,
         SideView::AutoTest,
+        SideView::Stress,
         SideView::Share,
         SideView::ProjectManage,
         SideView::Environments,
@@ -177,6 +183,7 @@ impl SideView {
             SideView::ProjectManage => "ProjectManage",
             SideView::Share => "Share",
             SideView::AutoTest => "AutoTest",
+            SideView::Stress => "Stress",
             SideView::Ssh => "Ssh",
         }
     }
@@ -190,6 +197,7 @@ impl SideView {
             "ProjectManage" => SideView::ProjectManage,
             "Share" => SideView::Share,
             "AutoTest" => SideView::AutoTest,
+            "Stress" => SideView::Stress,
             "Ssh" => SideView::Ssh,
             _ => SideView::Api,
         }
@@ -205,6 +213,7 @@ impl SideView {
             SideView::ProjectManage => rust_i18n::t!("view.project_manage").to_string(),
             SideView::Share => rust_i18n::t!("view.share").to_string(),
             SideView::AutoTest => rust_i18n::t!("view.autotest").to_string(),
+            SideView::Stress => "压测".to_string(),
             SideView::Ssh => rust_i18n::t!("view.ssh").to_string(),
         }
     }
@@ -317,6 +326,7 @@ impl VerveApp {
         let share = cx.new(|cx| SharePanel::new(state.clone(), window, cx));
         let ssh = cx.new(|cx| SshPanel::new(window, cx));
         let autotest = cx.new(|cx| AutoTestPanel::new(state.clone(), window, cx));
+        let stress = cx.new(|cx| StressPanel::new(state.clone(), window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -348,6 +358,7 @@ impl VerveApp {
             share,
             ssh,
             autotest,
+            stress,
             share_server,
             share_configs,
             env_select,
@@ -1712,7 +1723,7 @@ impl Render for VerveApp {
         let side_left: gpui::AnyElement = match self.active_view {
             SideView::Api | SideView::Environments | SideView::Mock => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Ssh => {
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -1778,15 +1789,13 @@ impl Render for VerveApp {
         // replace the entire workbench (rail + tree + request/response).
         let _exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh
         );
 
-        // SSH mode shares the same layout as other exclusive views —
-        // the activity rail + title bar are still visible so the user can
-        // switch to other views. SshPanel renders its own tab bar + content.
+        // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Ssh
         );
 
         v_flex()
@@ -1812,6 +1821,7 @@ impl Render for VerveApp {
                             SideView::Share => share.clone().into_any_element(),
                             SideView::Ssh => ssh.clone().into_any_element(),
                             SideView::AutoTest => self.autotest.clone().into_any_element(),
+                            SideView::Stress => self.stress.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(
@@ -1993,6 +2003,16 @@ impl VerveApp {
                     "rail-test",
                     IconName::Play.into(),
                     SideView::AutoTest,
+                    active,
+                    &theme,
+                    cx,
+                ))
+            })
+            .when(is_visible(SideView::Stress), |rail| {
+                rail.child(rail_btn(
+                    "rail-stress",
+                    IconName::ChartPie.into(),
+                    SideView::Stress,
                     active,
                     &theme,
                     cx,

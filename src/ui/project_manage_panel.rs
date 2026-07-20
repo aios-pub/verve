@@ -41,6 +41,7 @@ pub enum ManageSection {
     IfaceStatus,
     ExternalCaps,
     ImportExport,
+    HostsFile,
 }
 
 impl ManageSection {
@@ -58,6 +59,7 @@ impl ManageSection {
             ("iface-status", "接口状态", ManageSection::IfaceStatus),
             ("external", "对外能力", ManageSection::ExternalCaps),
             ("io", "导入 / 导出", ManageSection::ImportExport),
+            ("hosts", "Hosts 文件", ManageSection::HostsFile),
         ]
     }
 }
@@ -627,6 +629,9 @@ impl Render for ProjectManagePanel {
                     }
                     ManageSection::ImportExport => {
                         self.render_import_export(&theme, cx).into_any_element()
+                    }
+                    ManageSection::HostsFile => {
+                        self.render_hosts_file(&theme, cx).into_any_element()
                     }
                 },
             ))
@@ -1849,6 +1854,103 @@ impl ProjectManagePanel {
                     .child(token_table(&tokens, &theme, self.state.clone())),
             )
             .into_any_element()
+    }
+
+    fn render_hosts_file(
+        &mut self,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use crate::hosts;
+        let theme = theme.clone();
+        let path = hosts::hosts_path();
+        let path_display = path.display().to_string();
+        let (entries, error) = match hosts::read_hosts() {
+            Ok(e) => (e, None),
+            Err(msg) => (Vec::new(), Some(msg)),
+        };
+
+        let open_btn = cx.entity();
+        v_flex()
+            .size_full()
+            .id("hosts-scroll")
+            .overflow_y_scroll()
+            .child(
+                v_flex()
+                    .p_6()
+                    .gap_4()
+                    .max_w(px(720.))
+                    .child(section_title("Hosts 文件"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(format!("只读查看系统 hosts 文件 ({}). 点\"用编辑器打开\"以 sudo 权限修改。", path_display)),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("hosts-open")
+                                    .primary()
+                                    .small()
+                                    .icon(IconName::ExternalLink)
+                                    .label("用编辑器打开")
+                                    .on_click(cx.listener(move |_this, _, _, cx| {
+                                        match hosts::open_in_editor() {
+                                            Ok(()) => {}
+                                            Err(e) => {
+                                                log::error!("open hosts editor failed: {e}");
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .when(error.is_some(), |c| {
+                        c.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme.danger)
+                                .child(error.clone().unwrap_or_default()),
+                        )
+                    })
+                    .child(div().h(px(1.)).w_full().bg(theme.border))
+                    .child(
+                        v_flex()
+                            .gap_0()
+                            .children(entries.into_iter().map(|e| {
+                                h_flex()
+                                    .gap_3()
+                                    .px_2()
+                                    .py_1()
+                                    .border_b_1()
+                                    .border_color(theme.border)
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .w(px(130.))
+                                            .font_family(theme.mono_font_family.clone())
+                                            .child(e.ip),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .flex_1()
+                                            .font_family(theme.mono_font_family.clone())
+                                            .child(e.host),
+                                    )
+                                    .when(e.comment.is_some(), |c| {
+                                        c.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(theme.muted_foreground)
+                                                .child(e.comment.unwrap_or_default()),
+                                        )
+                                    })
+                            })),
+                    ),
+            )
     }
 }
 

@@ -9,6 +9,7 @@ pub mod assets;
 pub mod autotest;
 pub mod export;
 pub mod git;
+pub mod hosts;
 pub mod http;
 pub mod import;
 pub mod mock;

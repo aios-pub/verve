@@ -53,6 +53,7 @@ pub fn demo_workspace() -> WorkspaceData {
         match_path: PathPattern::Exact(String::new()),
         match_query: Vec::new(),
         match_headers: Vec::new(),
+        enable_templates: false,
     });
     // Tests script: extract the token from the response and store it in the
     // `token` environment variable, then assert (PRD §7.5 workflow).

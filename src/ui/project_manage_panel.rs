@@ -69,6 +69,8 @@ pub enum ManageEvent {
     Import,
     /// User clicked one of the export buttons.
     Export(crate::export::Format),
+    /// User clicked "一键生成 Mock" — create default mock rules for requests that lack them.
+    GenerateMocks,
 }
 
 pub struct ProjectManagePanel {
@@ -1546,6 +1548,18 @@ impl ProjectManagePanel {
                                     .rounded(px(4.))
                                     .bg(theme.primary.opacity(0.18))
                                     .child(format!("已启用 {} 条", mocked.len())),
+                            )
+                            .child(
+                                Button::new("mock-generate")
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::Plus)
+                                    .label("一键生成 Mock")
+                                    .tooltip("为所有还没有 Mock 规则的接口生成默认规则")
+                                    .on_click(cx.listener(|this, _, _w, cx| {
+                                        cx.emit(ManageEvent::GenerateMocks);
+                                        let _ = this;
+                                    })),
                             ),
                     )
                     .child(div().h(px(1.)).w_full().bg(theme.border))

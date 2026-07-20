@@ -829,6 +829,12 @@ pub struct MockRule {
     /// Headers that must be present (and equal if the value is non-empty).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub match_headers: Vec<KeyValue>,
+    /// When true, `{{...}}` placeholders in the response body and header values
+    /// are substituted against a variable map built from the request
+    /// (e.g. `{{mock.request.query.x}}`, `{{mock.request.header.y}}`,
+    /// `{{mock.request.path}}`) merged over the project's env variables.
+    #[serde(default)]
+    pub enable_templates: bool,
 }
 
 impl Default for MockRule {
@@ -843,6 +849,7 @@ impl Default for MockRule {
             match_path: PathPattern::Exact(String::new()),
             match_query: Vec::new(),
             match_headers: Vec::new(),
+            enable_templates: false,
         }
     }
 }

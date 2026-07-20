@@ -1,5 +1,7 @@
 //! Central application state, shared across all panels via a single GPUI entity.
 
+use std::sync::Arc;
+
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global};
 
 use super::models::*;
@@ -55,6 +57,9 @@ pub struct AppState {
     /// Outstanding debounced-save timer; replaced on each edit so saves
     /// coalesce ~1s after the last keystroke.
     pub save_timer: Option<gpui::Task<()>>,
+    /// Shared, hot-swappable mock rule set (written by the UI, read by the
+    /// running mock server on every request). Populated at startup in main.rs.
+    pub mock_rules: Option<crate::mock::SharedRules>,
 }
 
 /// Global wrapper holding the single shared [`AppState`] entity.
@@ -80,6 +85,7 @@ impl AppState {
             sending: None,
             dirty: false,
             save_timer: None,
+            mock_rules: None,
         });
         cx.set_global(AppStateGlobal(entity.clone()));
         entity
@@ -118,7 +124,20 @@ impl AppState {
     /// Mark the workspace dirty and emit a [`AppEvent::WorkspaceChanged`].
     pub fn notify_workspace(&mut self, cx: &mut Context<Self>) {
         self.dirty = true;
+        // Hot-swap the mock server's rule set so newly-added/edited/toggled
+        // rules take effect immediately without restart.
+        self.refresh_mock_rules();
         cx.emit(AppEvent::WorkspaceChanged);
+    }
+
+    /// Rebuild the rule set from the active project and publish it to the
+    /// running mock server via the SharedRules handle.
+    pub fn refresh_mock_rules(&mut self) {
+        if let (Some(shared), Some(p)) = (self.mock_rules.clone(), self.active_project()) {
+            let entries = Arc::try_unwrap(crate::mock::rule_map(p))
+                .unwrap_or_else(|arc| (*arc).clone());
+            crate::mock::swap_rules(&shared, entries);
+        }
     }
 
     pub fn notify_edited(&mut self, cx: &mut Context<Self>) {

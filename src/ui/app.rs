@@ -502,6 +502,9 @@ impl VerveApp {
                 crate::ui::project_manage_panel::ManageEvent::Export(fmt) => {
                     this.export_project(fmt.clone(), cx);
                 }
+                crate::ui::project_manage_panel::ManageEvent::GenerateMocks => {
+                    this.generate_mocks(cx);
+                }
             },
         );
 
@@ -1178,6 +1181,44 @@ impl VerveApp {
                         })
                 })
         });
+    }
+
+    /// Generate default mock rules for every request that doesn't have one yet,
+    /// persist the change, and hot-swap the running mock server.
+    fn generate_mocks(&mut self, cx: &mut Context<Self>) {
+        let app = self.state.read(cx);
+        let idx = app.active_project;
+        let mut s = app.data.clone();
+        drop(app);
+        let Some(p) = s.projects.get_mut(idx) else { return };
+        let generated = crate::mock::generate_missing(p);
+        if generated.is_empty() {
+            return;
+        }
+        let total = generated.len();
+        let mut map: std::collections::HashMap<String, crate::state::models::MockRule> =
+            generated.into_iter().collect();
+        for r in p.requests.iter_mut() {
+            if let Some(m) = map.remove(&r.id) {
+                r.mock = Some(m);
+            }
+        }
+        fn walk(folders: &mut [crate::state::models::Folder], map: &mut std::collections::HashMap<String, crate::state::models::MockRule>) {
+            for r in folders.iter_mut().flat_map(|f| f.requests.iter_mut()) {
+                if let Some(m) = map.remove(&r.id) {
+                    r.mock = Some(m);
+                }
+            }
+            for sub in folders.iter_mut() {
+                walk(&mut sub.folders, map);
+            }
+        }
+        walk(&mut p.folders, &mut map);
+        self.state.update(cx, |app, cx| {
+            app.data = s;
+            app.notify_workspace(cx);
+        });
+        log::info!("mock: generated defaults for {total} request(s)");
     }
 
     /// Export the active project to a chosen file (Markdown or JSON).

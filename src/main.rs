@@ -12,6 +12,8 @@
 // Some serde data structs are fine to derive-impl via macros.
 #![allow(clippy::derivable_impls)]
 
+use std::sync::Arc;
+
 use gpui::*;
 use gpui_component::{button::*, *};
 
@@ -62,13 +64,19 @@ fn main() {
         // Load persistent workspace state.
         let app_state = state::AppState::init(cx);
 
-        // Start the local Mock server with the active project's rules, if any.
-        if let Some(project) = app_state.read(cx).active_project() {
-            let rules = mock::rule_map(project);
-            if !rules.is_empty() {
-                mock::serve(mock::DEFAULT_PORT, rules).detach();
-            }
-        }
+        // Start the local Mock server with the active project's rules.
+        // The SharedRules handle is stored on AppState so UI actions can hot-swap.
+        let initial: Vec<mock::RuleEntry> = app_state
+            .read(cx)
+            .active_project()
+            .map(|p| Arc::try_unwrap(mock::rule_map(&p)).unwrap_or_else(|arc| (*arc).clone()))
+            .unwrap_or_default();
+        let shared = mock::shared_rules(initial);
+        let shared_for_state = shared.clone();
+        app_state.update(cx, move |s, _| {
+            s.mock_rules = Some(shared_for_state);
+        });
+        mock::serve(mock::DEFAULT_PORT, shared).detach();
 
         // Keybindings (PRD §6). macOS uses Cmd, others use Ctrl.
         #[cfg(target_os = "macos")]

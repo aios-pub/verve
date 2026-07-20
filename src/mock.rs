@@ -14,13 +14,14 @@
 //!
 //! Dynamic `{{...}}` template substitution is added in the next iteration.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
 use regex::Regex;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
 use smol::net::{TcpListener, TcpStream};
 
+use crate::http::variable::substitute;
 use crate::state::models::{KeyValue, MockRule, PathPattern, Project, RequestMethod};
 
 /// Default Mock server port.
@@ -145,8 +146,76 @@ pub(crate) fn path_of(url: &str) -> Option<String> {
     }
 }
 
-/// Run the Mock server until the returned task is dropped.
-pub fn serve(port: u16, rules: Arc<Vec<RuleEntry>>) -> smol::Task<()> {
+/// Walk every request in the project and synthesize a default MockRule for any
+/// that don't have one yet (200, Content-Type: application/json, empty body `{}`),
+/// returning the list of (request_id, new_rule) pairs so the caller can persist
+/// them onto the project. Requests that already have a mock rule are skipped.
+pub fn generate_missing(project: &Project) -> Vec<(String, MockRule)> {
+    let mut out = Vec::new();
+    let mut walk = |req: &crate::state::models::ApiRequest| {
+        if req.mock.is_some() {
+            return;
+        }
+        let rule = MockRule {
+            enabled: true,
+            status: 200,
+            headers: vec![KeyValue::new("Content-Type", "application/json")],
+            body: "{}".to_string(),
+            delay_ms: 0,
+            match_method: None,
+            match_path: PathPattern::Exact(path_of(&req.url).unwrap_or_else(|| "/".into())),
+            match_query: Vec::new(),
+            match_headers: Vec::new(),
+            enable_templates: false,
+        };
+        out.push((req.id.clone(), rule));
+    };
+    for r in &project.requests {
+        walk(r);
+    }
+    for f in &project.folders {
+        walk_folder_req(f, &mut walk);
+    }
+    out
+}
+
+fn walk_folder_req<F: FnMut(&crate::state::models::ApiRequest)>(
+    folder: &crate::state::models::Folder,
+    walk: &mut F,
+) {
+    for r in &folder.requests {
+        walk(r);
+    }
+    for s in &folder.folders {
+        walk_folder_req(s, walk);
+    }
+}
+
+/// Shared, swap-able rule set. The mock server re-reads this on every request
+/// so UI actions (e.g. "一键生成 Mock", toggling a rule) take effect without
+/// a restart.
+pub type SharedRules = Arc<RwLock<Arc<Vec<RuleEntry>>>>;
+
+/// Build a SharedRules handle from a rule snapshot.
+pub fn shared_rules(entries: Vec<RuleEntry>) -> SharedRules {
+    Arc::new(RwLock::new(Arc::new(entries)))
+}
+
+/// Atomically replace the rules served by a running mock server.
+pub fn swap_rules(shared: &SharedRules, entries: Vec<RuleEntry>) {
+    if let Ok(mut guard) = shared.write() {
+        *guard = Arc::new(entries);
+    }
+}
+
+/// Extract a current snapshot of the rules from a SharedRules handle.
+pub fn current_rules(shared: &SharedRules) -> Arc<Vec<RuleEntry>> {
+    shared.read().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Run the Mock server. Reads rules from `shared` on every request, so the rule
+/// set can be hot-swapped via [`swap_rules`] without restarting the listener.
+pub fn serve(port: u16, shared: SharedRules) -> smol::Task<()> {
     smol::spawn(async move {
         let listener = match TcpListener::bind(("127.0.0.1", port)).await {
             Ok(l) => l,
@@ -161,7 +230,7 @@ pub fn serve(port: u16, rules: Arc<Vec<RuleEntry>>) -> smol::Task<()> {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            let rules = rules.clone();
+            let rules = shared.read().map(|g| g.clone()).unwrap_or_default();
             smol::spawn(handle(stream, rules)).detach();
         }
     })
@@ -221,7 +290,36 @@ async fn handle(mut stream: TcpStream, rules: Arc<Vec<RuleEntry>>) {
         smol::Timer::after(std::time::Duration::from_millis(rule.delay_ms)).await;
     }
 
-    let _ = write_response(&mut stream, rule.status, &rule.headers, rule.body.as_bytes(), 0).await;
+    // Build a template variable map from the incoming request when templates
+    // are enabled:
+    //   mock.request.path       → request path
+    //   mock.request.method     → HTTP method
+    //   mock.request.query.<k>  → query param value
+    //   mock.request.header.<k> → header value (lowercase keys)
+    // These are merged on top of the project env variables (passed in via the
+    // request headers? not here — we don't have project access; pure request-scope).
+    let mut body_bytes = rule.body.as_bytes().to_vec();
+    let mut rendered_headers = rule.headers.clone();
+    if rule.enable_templates {
+        let mut vars: BTreeMap<String, String> = BTreeMap::new();
+        vars.insert("mock.request.path".into(), req.path.clone());
+        vars.insert("mock.request.method".into(), req.method.clone());
+        for (k, v) in &req.query {
+            vars.insert(format!("mock.request.query.{k}"), v.clone());
+        }
+        for (k, v) in &req.headers {
+            vars.insert(format!("mock.request.header.{k}"), v.clone());
+        }
+        let body_str = substitute(&rule.body, &vars);
+        body_bytes = body_str.into_bytes();
+        for h in rendered_headers.iter_mut() {
+            if h.enabled {
+                h.value = substitute(&h.value, &vars);
+            }
+        }
+    }
+
+    let _ = write_response(&mut stream, rule.status, &rendered_headers, &body_bytes, 0).await;
 }
 
 fn rule_matches(entry: &RuleEntry, req: &IncomingRequest) -> bool {
@@ -479,5 +577,23 @@ mod tests {
         assert!(!rule_matches(&e, &req("GET", "/a")));
         assert!(rule_matches(&e, &req("GET", "/a?debug=1")));
         assert!(!rule_matches(&e, &req("GET", "/a?debug=2")));
+    }
+
+    #[test]
+    fn generate_missing_creates_rules() {
+        let mut p = Project::new("t");
+        let mut r1 = crate::state::models::ApiRequest::new("a", RequestMethod::Get, "/api/a");
+        r1.mock = None;
+        p.requests.push(r1);
+        let mut r2 = crate::state::models::ApiRequest::new("b", RequestMethod::Get, "/api/b");
+        r2.mock = Some(MockRule { enabled: false, ..Default::default() });
+        p.requests.push(r2);
+        let gen = generate_missing(&p);
+        assert_eq!(gen.len(), 1, "only the request without a rule gets one");
+        let (id, rule) = &gen[0];
+        assert_eq!(p.requests[0].id, *id);
+        assert!(rule.enabled);
+        assert_eq!(rule.status, 200);
+        assert_eq!(rule.body, "{}");
     }
 }

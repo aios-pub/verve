@@ -23,6 +23,7 @@ pub mod html;
 pub mod models;
 pub mod persist;
 pub mod qrcode;
+pub mod remote;
 pub mod server;
 
 pub use models::{AccessControl, Expiration, FieldDisplay, ShareConfig, ShareMethod, ShareScope};

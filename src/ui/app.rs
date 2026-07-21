@@ -1,7 +1,7 @@
 //! Workspace shell: title bar + three-pane body, wired together.
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::*;
+use gpui::{img, *};
 
 // Actions for keybindings (PRD §6).
 actions!(verve, [SaveWorkspace, NewRequest]);
@@ -592,11 +592,11 @@ impl VerveApp {
                     cx.notify();
                 }
                 ShareEvent::Open(id) => {
-                    let url = format!("http://{}:{}/s/{}", this.share_host, this.share_port, id);
+                    let url = this.build_share_url(id);
                     cx.open_url(&url);
                 }
                 ShareEvent::Copy(id) => {
-                    let url = format!("http://{}:{}/s/{}", this.share_host, this.share_port, id);
+                    let url = this.build_share_url(id);
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(url));
                 }
                 ShareEvent::Delete(id) => {
@@ -1418,11 +1418,12 @@ impl VerveApp {
         let share_port = self.share_port;
         let active_ws = self.active_workspace_id_cache.clone();
         let remote_cfg = crate::state::persistence::load_remote_config();
+        let is_cloud = crate::share::remote::is_cloud_mode(&remote_cfg);
         // The confirm handler needs `this` to start/refresh the server + panel,
         // but `this` isn't movable into `open_dialog`. We close over the pieces
         // we need (the config store) and do the panel refresh via cx.notify.
         share_dialog::open_dialog(
-            state,
+            state.clone(),
             scope,
             target_id,
             target_name,
@@ -1438,162 +1439,90 @@ impl VerveApp {
                     cfg
                 };
                 log::info!("创建分享: id={} title={}", cfg.id, cfg.display_title());
-                // Persist + update the shared config store.
+
+                if is_cloud {
+                    // ---- Cloud mode: push to remote server over HTTP ----
+                    // Resolve the project to upload.
+                    let project_id_str = cfg.project_id.clone();
+                    let project = state.read(cx)
+                        .data
+                        .projects
+                        .iter()
+                        .find(|p| p.id == project_id_str)
+                        .cloned();
+                    let Some(project) = project else {
+                        let not_found_id = project_id_str.clone();
+                        window.open_dialog(cx, move |dialog, _window, _cx| {
+                            let msg = format!("找不到项目：{}", not_found_id);
+                            dialog.title("分享失败").content(move |c, _, _| {
+                                c.child(div().p_4().text_sm().child(msg.clone()))
+                            })
+                        });
+                        return;
+                    };
+                    let cfg_for_push = cfg.clone();
+                    let cfg_for_err = cfg.clone();
+                    let client = cx.http_client();
+                    let remote_cfg_clone = remote_cfg.clone();
+                    let window_handle = window.window_handle();
+                    cx.spawn(async move |cx| {
+                        let cfg_for_result = cfg_for_push.clone();
+                        let result = crate::share::remote::push_share(
+                            client,
+                            &remote_cfg_clone,
+                            &project,
+                            &cfg_for_push,
+                        ).await;
+                        let _ = window_handle.update(cx, |_this, window, cx| {
+                            match result {
+                                Ok(remote_id) => {
+                                    let url = crate::share::remote::share_url(&remote_cfg_clone, &remote_id)
+                                        .unwrap_or_default();
+                                    show_share_result_dialog(window, cx, cfg_for_result, url);
+                                }
+                                Err(e) => {
+                                    let err_msg = format!("推送到远程服务失败：{e}");
+                                    log::error!("{}", err_msg);
+                                    window.open_dialog(cx, move |dialog, _window, cx| {
+                                        let msg = err_msg.clone();
+                                        dialog.title("分享失败").content(move |c, _, _| {
+                                            c.child(div().p_4().w(px(400.)).text_sm().child(msg.clone()))
+                                        })
+                                        .footer(
+                                            Button::new("share-error-close")
+                                                .primary().small().label("关闭")
+                                                .on_click(|_, w, cx| w.close_dialog(cx)),
+                                        )
+                                    });
+                                }
+                            }
+                        });
+                    }).detach();
+                    return;
+                }
+
+                // ---- Local mode: persist + serve from embedded server ----
                 let all = crate::share::persist::upsert_share(cfg.clone());
                 if let Ok(mut guard) = configs_store.write() {
                     *guard = all;
                 }
 
                 let url = format!("http://{share_host}:{share_port}/s/{}", cfg.id);
-
-                // Build a result message summarizing what happened, including a
-                // QR code image if the user selected the 二维码 method.
-                let wants_qr = cfg
-                    .share_methods
-                    .iter()
-                    .any(|m| matches!(m, crate::share::models::ShareMethod::QrCode));
-                let qr_data_url = if wants_qr {
-                    crate::share::qrcode::to_svg_data_url(&url)
-                } else {
-                    None
-                };
-
-                // If the share method includes "导出 HTML", also write a copy
-                // to the exports folder.
-                if cfg
-                    .share_methods
-                    .iter()
-                    .any(|m| matches!(m, crate::share::models::ShareMethod::ExportHtml))
-                {
-                    if let Ok(export_dir) =
-                        crate::state::persistence::data_dir().map(|d| d.join("exports"))
-                    {
-                        let _ = std::fs::create_dir_all(&export_dir);
-                        let project = crate::state::persistence::load_or_default()
-                            .projects
-                            .iter()
-                            .find(|p| p.id == cfg.project_id)
-                            .cloned();
-                        if let Some(project) = project {
-                            let html = crate::share::html::render_doc_html(&cfg, &project);
-                            let fname = format!("{}.html", cfg.id);
-                            let _ = std::fs::write(export_dir.join(&fname), html);
-                        }
-                    }
-                }
-
-                // Open the link in the system browser (postman opens the doc
-                // immediately after creating a share).
-                cx.open_url(&url);
-
-                // Show a result dialog with the link (and QR code if requested).
-                let title = cfg.display_title();
-                let url_for_dialog = url.clone();
-                // Wrap in Arc so the `Fn` open_dialog closure can hand a clone
-                // to its content builder on each invocation without moving.
-                let url_arc = std::sync::Arc::new(url_for_dialog);
-                window.open_dialog(cx, move |dialog, _window, cx| {
-                    let theme = cx.theme().clone();
-                    let muted = theme.muted_foreground;
-                    let border = theme.border;
-                    let qr = qr_data_url.clone();
-                    let title_text = title.clone();
-                    let expire_label = cfg.expire.label().to_string();
-                    let access_label = cfg.access_label().to_string();
-                    // Clone the Arc for the content closure (which is also `Fn`).
-                    let url_for_content = url_arc.clone();
-                    dialog
-                        .title("分享已创建")
-                        .content(move |content, _window, _cx| {
-                            // Clone per-build since this `Fn` may run multiple times.
-                            let url_content = (*url_for_content).clone();
-                            let url_copy = (*url_for_content).clone();
-                            let qr = qr.clone();
-                            let title_text = title_text.clone();
-                            let expire_label = expire_label.clone();
-                            let access_label = access_label.clone();
-                            content.child(
-                                v_flex()
-                                    .p_4()
-                                    .w(px(440.))
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(format!("文档「{}」分享成功", title_text)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(muted)
-                                            .child("访问以下链接查看文档："),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .rounded_md()
-                                                    .bg(theme.muted)
-                                                    .text_xs()
-                                                    .child(url_content),
-                                            )
-                                            .child(
-                                                Button::new("share-copy-link")
-                                                    .ghost()
-                                                    .small()
-                                                    .label("复制")
-                                                    .on_click(move |_, _, cx| {
-                                                        cx.write_to_clipboard(
-                                                            gpui::ClipboardItem::new_string(
-                                                                url_copy.clone(),
-                                                            ),
-                                                        );
-                                                    }),
-                                            ),
-                                    )
-                                    .when_some(qr.as_ref(), |col, qr_url| {
-                                        col.child(
-                                            div()
-                                                .mt_2()
-                                                .items_center()
-                                                .justify_center()
-                                                .flex()
-                                                .child(img(qr_url.clone()).w(px(200.)).h(px(200.))),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(muted)
-                                                .text_center()
-                                                .child("扫描二维码访问"),
-                                        )
-                                    })
-                                    .child(div().h(px(1.)).w_full().bg(border).text_color(muted))
-                                    .child(div().text_xs().text_color(muted).child(format!(
-                                        "有效期：{}  ·  访问限制：{}",
-                                        expire_label, access_label
-                                    ))),
-                            )
-                        })
-                        .footer(
-                            Button::new("share-result-close")
-                                .primary()
-                                .small()
-                                .label("完成")
-                                .on_click(|_, window, cx| {
-                                    window.close_dialog(cx);
-                                }),
-                        )
-                });
+                show_share_result_dialog(window, cx, cfg, url);
             },
             window,
             cx,
         );
+    }
+
+    /// Build the public URL for a share, using the remote server address when
+    /// cloud mode is active, or the local bind host/port otherwise.
+    fn build_share_url(&self, id: &str) -> String {
+        let remote_cfg = crate::state::persistence::load_remote_config();
+        if let Some(cloud_url) = crate::share::remote::share_url(&remote_cfg, id) {
+            return cloud_url;
+        }
+        format!("http://{}:{}/s/{}", self.share_host, self.share_port, id)
     }
 
     /// Delete a share config (after the panel's confirm) and refresh the panel.
@@ -3208,11 +3137,11 @@ impl VerveApp {
     fn render_docker_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let docker = self.docker.clone();
-        let docker_read = self.docker.read(cx);
-        let host_count = docker_read.host_count();
-        let active_host = docker_read.active_host_name();
-        let cur_view = docker_read.current_view();
-        drop(docker_read);
+        let (host_count, active_host, cur_view) = {
+            let r = self.docker.read(cx);
+            (r.host_count(), r.active_host_name(), r.current_view().to_string())
+        };
+        let cur_view: &str = &cur_view;
 
         let docker_containers = docker.clone();
         let docker_images = docker.clone();
@@ -3333,12 +3262,16 @@ impl VerveApp {
     fn render_k8s_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let k8s = self.k8s.clone();
-        let k8s_read = self.k8s.read(cx);
-        let ctx_name = k8s_read.active_context_display();
-        let ctx_count = k8s_read.context_count();
-        let fwd_count = k8s_read.forward_count();
-        let cur_view = k8s_read.current_view();
-        drop(k8s_read);
+        let (ctx_name, ctx_count, fwd_count, cur_view_str) = {
+            let r = self.k8s.read(cx);
+            (
+                r.active_context_display(),
+                r.context_count(),
+                r.forward_count(),
+                r.current_view().to_string(),
+            )
+        };
+        let cur_view: &str = &cur_view_str;
 
         let k8s_pods = k8s.clone();
         let k8s_ctx = k8s.clone();
@@ -3459,7 +3392,7 @@ impl VerveApp {
                         // k8s_cluster_dialog::open_dialog takes &mut App.
                         window.defer(cx, move |window, cx| {
                             crate::ui::k8s_cluster_dialog::open_dialog(window, cx);
-                            let _ = panel.update(cx, |p, cx| p.refresh_config(cx));
+                            let _ = panel.update(cx, |p, cx| p.refresh_current(cx));
                         });
                     })),
             )
@@ -3604,4 +3537,150 @@ fn menu_item(
 /// A thin separator between menu groups.
 fn menu_separator(theme: &gpui_component::Theme) -> impl IntoElement {
     div().w_full().h(px(1.)).my(px(2.)).bg(theme.border)
+}
+
+/// Show the "share created" result dialog with the given URL. Used by both
+/// local-mode and cloud-mode share flows.
+fn show_share_result_dialog(
+    window: &mut Window,
+    cx: &mut App,
+    cfg: crate::share::ShareConfig,
+    url: String,
+) {
+    // Build a QR code if the user selected that method.
+    let wants_qr = cfg
+        .share_methods
+        .iter()
+        .any(|m| matches!(m, crate::share::models::ShareMethod::QrCode));
+    let qr_data_url = if wants_qr {
+        crate::share::qrcode::to_svg_data_url(&url)
+    } else {
+        None
+    };
+
+    // If the user chose "导出 HTML", write a copy to the exports folder.
+    // (In cloud mode this still happens locally — it's an offline artifact.)
+    let cfg_id_for_html = cfg.id.clone();
+    let cfg_project_id = cfg.project_id.clone();
+    if cfg
+        .share_methods
+        .iter()
+        .any(|m| matches!(m, crate::share::models::ShareMethod::ExportHtml))
+    {
+        if let Ok(export_dir) =
+            crate::state::persistence::data_dir().map(|d| d.join("exports"))
+        {
+            let _ = std::fs::create_dir_all(&export_dir);
+            let project = crate::state::persistence::load_or_default()
+                .projects
+                .iter()
+                .find(|p| p.id == cfg_project_id)
+                .cloned();
+            if let Some(project) = project {
+                let html = crate::share::html::render_doc_html(&cfg, &project);
+                let fname = format!("{}.html", cfg_id_for_html);
+                let _ = std::fs::write(export_dir.join(&fname), html);
+            }
+        }
+    }
+
+    cx.open_url(&url);
+
+    let title = cfg.display_title();
+    let expire_label = cfg.expire.label().to_string();
+    let access_label = cfg.access_label().to_string();
+    let url_arc = std::sync::Arc::new(url);
+    let qr_arc = std::sync::Arc::new(qr_data_url);
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let theme_muted = theme.muted;
+        let qr = (*qr_arc).clone();
+        let title_text = title.clone();
+        let expire_label = expire_label.clone();
+        let access_label = access_label.clone();
+        let url_for_content = url_arc.clone();
+        dialog
+            .title("分享已创建")
+            .content(move |content, _window, _cx| {
+                let url_content = (*url_for_content).clone();
+                let url_copy = (*url_for_content).clone();
+                content.child(
+                    v_flex()
+                        .p_4()
+                        .w(px(440.))
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("文档「{}」分享成功", title_text)),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(muted)
+                                .child("访问以下链接查看文档："),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme_muted)
+                                        .text_xs()
+                                        .child(url_content),
+                                )
+                                .child(
+                                    Button::new("share-copy-link")
+                                        .ghost()
+                                        .small()
+                                        .label("复制")
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(
+                                                gpui::ClipboardItem::new_string(url_copy.clone()),
+                                            );
+                                        }),
+                                ),
+                        )
+                        .when_some(qr.as_ref(), |col, qr_url| {
+                            col.child(
+                                div()
+                                    .mt_2()
+                                    .items_center()
+                                    .justify_center()
+                                    .flex()
+                                    .child(img(qr_url.clone()).w(px(200.)).h(px(200.))),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .text_center()
+                                    .child("扫描二维码访问"),
+                            )
+                        })
+                        .child(div().h(px(1.)).w_full().bg(border).text_color(muted))
+                        .child(div().text_xs().text_color(muted).child(format!(
+                            "有效期：{}  ·  访问限制：{}",
+                            expire_label, access_label
+                        ))),
+                )
+            })
+            .footer(
+                Button::new("share-result-close")
+                    .primary()
+                    .small()
+                    .label("完成")
+                    .on_click(|_, window, cx| {
+                        window.close_dialog(cx);
+                    }),
+            )
+    });
 }

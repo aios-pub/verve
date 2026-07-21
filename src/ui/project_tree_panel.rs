@@ -1710,26 +1710,26 @@ impl ProjectTreePanel {
 
         match action {
             TreeAction::Share(_) => {
-                self.show_info("分享", "分享链接生成功能开发中。", cx);
+                self.show_info("分享", "分享链接生成功能开发中。", window, cx);
             }
             TreeAction::CopyAsCurl(_) => {
                 if let Some(r) = req_snapshot {
                     let curl = build_curl(&r);
                     self.copy_to_clipboard(curl, cx);
-                    self.show_info("复制为 cURL", "已复制到剪贴板。", cx);
+                    self.show_info("复制为 cURL", "已复制到剪贴板。", window, cx);
                 }
             }
             TreeAction::CopyToBranch(_) => {
-                self.show_info("复制到其它分支", "分支功能开发中。", cx);
+                self.show_info("复制到其它分支", "分支功能开发中。", window, cx);
             }
             TreeAction::MoveTo(_) => {
-                self.show_info("移动至", "请拖拽或右键选择目标文件夹。", cx);
+                self.show_info("移动至", "请拖拽或右键选择目标文件夹。", window, cx);
             }
             TreeAction::Copy(_) => {
                 if let Some(id) = req_id {
                     // Copy = duplicate but keep selection on the original.
                     self.duplicate_request_keep_selection(id, cx);
-                    self.show_info("复制", "已创建副本。", cx);
+                    self.show_info("复制", "已创建副本。", window, cx);
                 }
             }
             TreeAction::Clone(_) => {
@@ -1769,10 +1769,16 @@ impl ProjectTreePanel {
         });
     }
 
-    /// Show a transient info banner (reuses the rename dialog as a simple
-    /// message popup with only an OK button).
-    fn show_info(&self, title: &str, message: &str, _cx: &mut Context<Self>) {
+    /// Show a transient info notification (toast) that auto-hides.
+    fn show_info(&self, title: &str, message: &str, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("[{title}] {message}");
+        window.push_notification(
+            gpui_component::notification::Notification::new()
+                .title(title)
+                .message(message)
+                .autohide(true),
+            cx,
+        );
     }
 
     /// Copy text to the system clipboard.
@@ -1787,12 +1793,39 @@ fn build_curl(r: &crate::state::models::ApiRequest) -> String {
     use crate::state::models::BodyType;
     let mut parts: Vec<String> = vec!["curl".into(), "-X".into(), r.method.to_string()];
     parts.push(format!("'{}'", r.url));
+
+    // Track whether user already set a Content-Type so we don't override it
+    // when auto-injecting one for the body.
+    let mut has_content_type = false;
     for h in r.headers.iter().filter(|h| h.enabled && !h.is_empty()) {
+        if h.key.eq_ignore_ascii_case("content-type") {
+            has_content_type = true;
+        }
         parts.push("-H".into());
         parts.push(format!("'{}: {}'", h.key, h.value));
     }
+
+    // Auth headers (Bearer/Basic).
+    use crate::state::models::AuthType;
+    match r.auth.auth_type {
+        AuthType::Bearer if !r.auth.token.is_empty() => {
+            parts.push("-H".into());
+            parts.push(format!("'Authorization: Bearer {}'", r.auth.token));
+        }
+        AuthType::Basic if !r.auth.username.is_empty() => {
+            parts.push("-u".into());
+            parts.push(format!("'{}:{}'", r.auth.username, r.auth.password));
+        }
+        _ => {}
+    }
+
     match r.body.body_type {
         BodyType::Raw if !r.body.raw.is_empty() => {
+            if !has_content_type {
+                let ct = r.body.raw_language.content_type();
+                parts.push("-H".into());
+                parts.push(format!("'Content-Type: {}'", ct));
+            }
             parts.push("-d".into());
             parts.push(format!("'{}'", r.body.raw.replace('\'', "'\\''")));
         }
@@ -1805,9 +1838,25 @@ fn build_curl(r: &crate::state::models::ApiRequest) -> String {
                 .map(|kv| format!("{}={}", kv.key, kv.value))
                 .collect();
             if !kv.is_empty() {
+                if !has_content_type {
+                    parts.push("-H".into());
+                    parts.push("'Content-Type: application/x-www-form-urlencoded'".into());
+                }
                 parts.push("-d".into());
                 parts.push(format!("'{}'", kv.join("&")));
             }
+        }
+        BodyType::FormData => {
+            for kv in r
+                .body
+                .form_data
+                .iter()
+                .filter(|kv| kv.enabled && !kv.is_empty())
+            {
+                parts.push("-F".into());
+                parts.push(format!("'{}={}'", kv.key, kv.value));
+            }
+            // curl auto-sets multipart/form-data with boundary when using -F.
         }
         _ => {}
     }

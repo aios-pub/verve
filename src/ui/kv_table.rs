@@ -59,9 +59,15 @@ impl KvRow {
         }
     }
 
-    /// Empty enabled row (used as a trailing input slot).
+    /// Empty enabled row (used as a trailing input slot). New rows default to
+    /// enabled so that anything the user types immediately takes effect (e.g.
+    /// shows up in generated curl, is sent with the request) without requiring
+    /// an extra click on the checkbox.
     pub fn empty(window: &mut Window, cx: &mut App) -> Self {
-        Self::new(&KeyValue::default(), window, cx)
+        let mut kv = KeyValue::default();
+        kv.enabled = true;
+        kv.required = true;
+        Self::new(&kv, window, cx)
     }
 
     pub fn to_kv(&self, cx: &App) -> KeyValue {

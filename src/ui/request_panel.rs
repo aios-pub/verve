@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::WindowExt as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
@@ -838,11 +839,16 @@ impl RequestPanel {
             parts.push(format!("-X {}", method));
         }
 
-        // Headers.
+        // Headers. Track whether the user already set a Content-Type so we
+        // don't override it when auto-injecting one for the body.
+        let mut has_content_type = false;
         for kv in &self.headers_rows {
             let key = kv.key.read(cx).value().to_string();
             let val = kv.value.read(cx).value().to_string();
             if kv.enabled && !key.trim().is_empty() {
+                if key.eq_ignore_ascii_case("content-type") {
+                    has_content_type = true;
+                }
                 parts.push(format!("-H '{}: {}'", key, val));
             }
         }
@@ -865,20 +871,37 @@ impl RequestPanel {
             _ => {}
         }
 
-        // Body.
+        // Body. Auto-inject a Content-Type when missing, matching the real
+        // HTTP client prepare() logic.
+        let body_lang = self
+            .body_lang_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .and_then(|s| RawLanguage::parse_name(&s))
+            .unwrap_or_default();
         if self.body_type == crate::state::models::BodyType::Raw {
             let raw = self.body_editor.read(cx).text().to_string();
             if !raw.trim().is_empty() {
+                if !has_content_type {
+                    let ct = body_lang.content_type();
+                    parts.push(format!("-H 'Content-Type: {}'", ct));
+                }
                 parts.push(format!("-d '{}'", raw.replace('\'', "'\\''")));
             }
         } else if self.body_type == crate::state::models::BodyType::FormData {
+            let mut has_form_field = false;
             for kv in &self.body_rows {
                 let key = kv.key.read(cx).value().to_string();
                 let val = kv.value.read(cx).value().to_string();
                 if kv.enabled && !key.trim().is_empty() {
                     parts.push(format!("-F '{}={}'", key, val));
+                    has_form_field = true;
                 }
             }
+            // curl sets multipart/form-data automatically when using -F, so
+            // no need to inject Content-Type manually here.
+            let _ = has_form_field;
         } else if self.body_type == crate::state::models::BodyType::Urlencoded {
             let pairs: Vec<String> = self
                 .body_rows
@@ -891,6 +914,9 @@ impl RequestPanel {
                 })
                 .collect();
             if !pairs.is_empty() {
+                if !has_content_type {
+                    parts.push("-H 'Content-Type: application/x-www-form-urlencoded'".into());
+                }
                 parts.push(format!("-d '{}'", pairs.join("&")));
             }
         }
@@ -2413,16 +2439,44 @@ impl RequestPanel {
                                     // Visual field table for the parsed JSON.
                                     self.render_raw_visual(cx).into_any_element()
                                 } else {
-                                    // Plain code editor.
-                                    div()
+                                    // Plain code editor + JSON validation error.
+                                    let raw_text = self.body_editor.read(cx).text().to_string();
+                                    let json_error = if is_json && !raw_text.trim().is_empty() {
+                                        match serde_json::from_str::<serde_json::Value>(&raw_text) {
+                                            Ok(_) => None,
+                                            Err(e) => Some(e.to_string()),
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    v_flex()
                                         .flex_1()
                                         .min_h_0()
+                                        .gap_1()
                                         .child(
-                                            Input::new(&self.body_editor)
-                                                .h_full()
-                                                .font_family(theme.mono_font_family.clone())
-                                                .text_size(theme.mono_font_size),
+                                            div()
+                                                .flex_1()
+                                                .min_h_0()
+                                                .child(
+                                                    Input::new(&self.body_editor)
+                                                        .h_full()
+                                                        .font_family(theme.mono_font_family.clone())
+                                                        .text_size(theme.mono_font_size)
+                                                        // Apply a red border when JSON is invalid.
+                                                        .when_some(json_error.as_ref(), |inp, _| {
+                                                            inp.border_color(theme.danger)
+                                                        }),
+                                                ),
                                         )
+                                        // Show JSON parse error below the editor.
+                                        .when_some(json_error, |col, err| {
+                                            col.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.danger)
+                                                    .child(format!("JSON 解析错误: {err}")),
+                                            )
+                                        })
                                         .into_any_element()
                                 })
                                 .into_any_element()
@@ -2525,8 +2579,15 @@ impl RequestPanel {
                                     .icon(IconName::Copy)
                                     .label("复制")
                                     .tooltip("复制到剪贴板")
-                                    .on_click(move |_ev, _window, cx: &mut App| {
+                                    .on_click(move |_ev, window, cx: &mut App| {
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(curl_for_btn.clone()));
+                                        window.push_notification(
+                                            gpui_component::notification::Notification::new()
+                                                .title("已复制")
+                                                .message("cURL 命令已复制到剪贴板。")
+                                                .autohide(true),
+                                            cx,
+                                        );
                                     }),
                             ),
                     )

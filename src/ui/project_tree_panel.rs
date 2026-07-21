@@ -1679,16 +1679,7 @@ impl ProjectTreePanel {
     pub fn duplicate_request(&mut self, id: String, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
-                let cloned = find_request_owned(&mut project.folders, &mut project.requests, &id)
-                    .map(|r| {
-                        let mut dup = r.clone();
-                        dup.id = new_id();
-                        dup.name = format!("{} copy", r.name);
-                        dup
-                    });
-                if let Some(dup) = cloned {
-                    let new_id = dup.id.clone();
-                    project.requests.push(dup);
+                if let Some(new_id) = duplicate_request_in_place(&mut project.folders, &mut project.requests, &id) {
                     s.selected_request = Some(new_id);
                     s.selected_folder = None;
                     cx.emit(AppEvent::SelectionChanged);
@@ -1767,16 +1758,7 @@ impl ProjectTreePanel {
         let selected = self.state.read(cx).selected_request.clone();
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
-                let cloned = find_request_owned(&mut project.folders, &mut project.requests, &id)
-                    .map(|r| {
-                        let mut dup = r.clone();
-                        dup.id = new_id();
-                        dup.name = format!("{} copy", r.name);
-                        dup
-                    });
-                if let Some(dup) = cloned {
-                    project.requests.push(dup);
-                }
+                let _ = duplicate_request_in_place(&mut project.folders, &mut project.requests, &id);
             }
             s.notify_workspace(cx);
         });
@@ -1905,23 +1887,47 @@ fn remove_folder(folders: &mut Vec<crate::state::models::Folder>, id: &str) {
     }
 }
 
-fn find_request_owned(
+/// Duplicate a request in place, keeping the original and inserting the copy
+/// right after it in the same folder/root. Returns the new request id if successful.
+fn duplicate_request_in_place(
     folders: &mut [crate::state::models::Folder],
     root: &mut Vec<crate::state::models::ApiRequest>,
     id: &str,
-) -> Option<crate::state::models::ApiRequest> {
+) -> Option<String> {
+    // Check root requests first
     if let Some(pos) = root.iter().position(|r| r.id == id) {
-        return Some(root.remove(pos));
+        let original = &root[pos];
+        let mut dup = original.clone();
+        dup.id = new_id();
+        dup.name = format!("{} copy", original.name);
+        let new_id = dup.id.clone();
+        root.insert(pos + 1, dup);
+        return Some(new_id);
     }
-    for f in folders.iter_mut() {
-        if let Some(pos) = f.requests.iter().position(|r| r.id == id) {
-            return Some(f.requests.remove(pos));
+
+    // Check folders recursively
+    fn duplicate_in_folders(
+        folders: &mut [crate::state::models::Folder],
+        id: &str,
+    ) -> Option<String> {
+        for f in folders.iter_mut() {
+            if let Some(pos) = f.requests.iter().position(|r| r.id == id) {
+                let original = &f.requests[pos];
+                let mut dup = original.clone();
+                dup.id = new_id();
+                dup.name = format!("{} copy", original.name);
+                let new_id = dup.id.clone();
+                f.requests.insert(pos + 1, dup);
+                return Some(new_id);
+            }
+            if let Some(found) = duplicate_in_folders(&mut f.folders, id) {
+                return Some(found);
+            }
         }
-        if let Some(found) = find_request_owned(&mut f.folders, root, id) {
-            return Some(found);
-        }
+        None
     }
-    None
+
+    duplicate_in_folders(folders, id)
 }
 
 impl Focusable for ProjectTreePanel {

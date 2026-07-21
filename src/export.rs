@@ -175,8 +175,15 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
         .enumerate()
         .map(|(i, env)| {
             let mut vars = Map::new();
+            // Find the baseUrl server URI (pull from variables named "baseUrl" or
+            // "server_1"; skip it from env_var_list so it lives in server_list).
+            let mut server_uri = String::new();
             for v in &env.variables {
-                vars.insert(v.key.clone(), json!(v.value));
+                if v.key == "baseUrl" || v.key == "server_1" {
+                    server_uri = v.value.clone();
+                } else {
+                    vars.insert(v.key.clone(), json!(v.value));
+                }
             }
             json!({
                 "env_id": (i + 1).to_string(),
@@ -187,7 +194,7 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
                     "server_id": "1",
                     "name": "默认服务",
                     "sort": 0,
-                    "uri": ""
+                    "uri": server_uri
                 }],
                 "env_var_list": vars,
             })
@@ -249,12 +256,20 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
 /// Recursively emit a folder node + its API children + sub-folder nodes.
 fn folder_to_postman_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde_json::Value>) {
     let folder_id = format!("folder_{}", &folder.id[..8.min(folder.id.len())]);
+    // Map folder.base_url → server_id:
+    // - Some("{{baseUrl}}") → server_id "1" (uses default server)
+    // - None or empty → server_id "0" (inherit from parent)
+    let server_id = match &folder.base_url {
+        Some(url) if url.contains("baseUrl") || url.contains("server_1") => "1",
+        _ => "0",
+    };
     out.push(json!({
         "target_id": folder_id,
         "parent_id": parent_id,
         "target_type": "folder",
         "name": folder.name,
         "description": folder.description,
+        "server_id": server_id,
     }));
     for req in &folder.requests {
         out.push(api_to_postman_node(req, &folder_id));

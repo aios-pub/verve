@@ -236,7 +236,20 @@ struct postmanGlobal {
     envs: Vec<postmanEnv>,
     #[serde(default)]
     global_param: postmanGlobalParam,
+    /// Global server definitions (server_id → name).
+    #[serde(default)]
+    servers: Vec<postmanServerDef>,
     // Status-code dictionary / describe library / marks are ignored for now.
+}
+
+#[derive(serde::Deserialize, Default)]
+struct postmanServerDef {
+    #[serde(default)]
+    server_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    sort: i32,
 }
 
 #[derive(serde::Deserialize)]
@@ -246,6 +259,19 @@ struct postmanEnv {
     /// env_var_list is a free-form map of key → value strings.
     #[serde(default)]
     env_var_list: serde_json::Map<String, serde_json::Value>,
+    /// Per-environment server list mapping server_id → URI.
+    #[serde(default)]
+    server_list: Vec<postmanServerEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct postmanServerEntry {
+    #[serde(default)]
+    server_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    uri: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -326,6 +352,9 @@ struct postmanNode {
     description: Option<String>,
     #[serde(default)]
     mark_id: Option<String>,
+    /// For folders: references a server_id from global.servers (0 = inherit).
+    #[serde(default)]
+    server_id: Option<String>,
     #[serde(default)]
     request: postmanRequest,
     /// Tags array (strings).
@@ -419,7 +448,21 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
     let mut project = Project::new(name);
     project.description = doc.intro.unwrap_or_default();
 
-    // Environments.
+    // Build a map of server_id → variable name from global server definitions.
+    // Server with id "1" is the default; map it to "baseUrl" for convenience.
+    let mut server_var_names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for srv in &doc.global.servers {
+        if let Some(sid) = &srv.server_id {
+            let var_name = if sid == "1" {
+                "baseUrl".to_string()
+            } else {
+                format!("server_{}", sid)
+            };
+            server_var_names.insert(sid.clone(), var_name);
+        }
+    }
+
+    // Environments — include both env_var_list entries and server URIs as variables.
     project.environments = doc
         .global
         .envs
@@ -431,6 +474,18 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
                 .iter()
                 .map(|(k, v)| KeyValue::new(k.clone(), v.as_str().unwrap_or("").to_string()))
                 .collect();
+            // Add server URIs as variables
+            for srv in &env.server_list {
+                if let (Some(sid), Some(uri)) = (&srv.server_id, &srv.uri) {
+                    if !uri.trim().is_empty() {
+                        let var_name = server_var_names
+                            .get(sid)
+                            .cloned()
+                            .unwrap_or_else(|| format!("server_{}", sid));
+                        e.variables.push(KeyValue::new(var_name, uri.clone()));
+                    }
+                }
+            }
             e
         })
         .collect();
@@ -457,7 +512,8 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
         .collect();
 
     // Build the folder/request tree from the flat apis list.
-    let (folders, requests) = build_postman_tree(&doc.apis, &root);
+    // Build a map of server_id → env var name for folder base_url resolution.
+    let (folders, requests) = build_postman_tree(&doc.apis, &root, &server_var_names);
     project.folders = folders;
     project.requests = requests;
 
@@ -469,6 +525,7 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
 fn build_postman_tree(
     nodes: &[postmanNode],
     root: &serde_json::Value,
+    server_var_names: &std::collections::BTreeMap<String, String>,
 ) -> (Vec<Folder>, Vec<ApiRequest>) {
     // Index nodes by id for quick lookup, separating folders from APIs.
     let mut folders: Vec<&postmanNode> = Vec::new();
@@ -490,7 +547,7 @@ fn build_postman_tree(
     let root_folders: Vec<Folder> = folders
         .iter()
         .filter(|n| is_root(n.parent_id.as_deref()))
-        .map(|f| build_postman_folder(f, &folders, &apis, root))
+        .map(|f| build_postman_folder(f, &folders, &apis, root, server_var_names))
         .collect();
 
     (root_folders, root_apis)
@@ -507,10 +564,22 @@ fn build_postman_folder(
     all_folders: &[&postmanNode],
     all_apis: &[&postmanNode],
     root: &serde_json::Value,
+    server_var_names: &std::collections::BTreeMap<String, String>,
 ) -> Folder {
     let fid = folder.target_id.clone().unwrap_or_default();
     let mut f = Folder::new(folder.name.clone().unwrap_or_else(|| "Unnamed".to_string()));
     f.description = folder.description.clone().unwrap_or_default();
+
+    // Set folder base_url from server_id:
+    // - server_id "0" or None → inherit from parent (leave as None)
+    // - otherwise → use {{server_<id>}} or {{baseUrl}} for default server
+    if let Some(sid) = &folder.server_id {
+        if sid != "0" {
+            if let Some(var_name) = server_var_names.get(sid) {
+                f.base_url = Some(format!("{{{{{}}}}}", var_name));
+            }
+        }
+    }
 
     f.requests = all_apis
         .iter()
@@ -521,7 +590,7 @@ fn build_postman_folder(
     f.folders = all_folders
         .iter()
         .filter(|n| n.parent_id.as_deref() == Some(fid.as_str()))
-        .map(|sub| build_postman_folder(sub, all_folders, all_apis, root))
+        .map(|sub| build_postman_folder(sub, all_folders, all_apis, root, server_var_names))
         .collect();
 
     f
@@ -857,5 +926,94 @@ mod tests {
         assert_eq!(api2.body.raw, "{\"k\":1}");
         // noauth → default (None).
         assert_eq!(api2.auth.auth_type, AuthType::None);
+    }
+
+    #[test]
+    fn postman_import_with_servers() {
+        // Apipost format with server_list in environments and server_id on folders.
+        let json = r#"{
+            "project_id": "35ff847188e5000",
+            "name": "李靖个人项目",
+            "global": {
+                "servers": [
+                    {"server_id": "1", "name": "默认服务", "sort": 1000}
+                ],
+                "envs": [
+                    {
+                        "env_id": "1",
+                        "name": "默认环境",
+                        "server_list": [
+                            {"server_id": "1", "name": "默认服务", "uri": ""}
+                        ],
+                        "env_var_list": {}
+                    },
+                    {
+                        "env_id": "2",
+                        "name": "Mock环境",
+                        "server_list": [
+                            {"server_id": "1", "name": "默认服务", "uri": "https://mock.apipost.net/mock/35ff847188e5000"}
+                        ],
+                        "env_var_list": {}
+                    },
+                    {
+                        "env_id": "3",
+                        "name": "本地环境",
+                        "server_list": [
+                            {"server_id": "1", "name": "默认服务", "uri": "localhost:3002"}
+                        ],
+                        "env_var_list": {}
+                    }
+                ],
+                "global_param": {"header": {"parameter": []}, "query": {"parameter": []}}
+            },
+            "apis": [
+                {
+                    "target_id": "folder1", "parent_id": "0", "target_type": "folder",
+                    "name": "AgentOS", "server_id": "0"
+                },
+                {
+                    "target_id": "folder2", "parent_id": "0", "target_type": "folder",
+                    "name": "系统功能测试", "server_id": "1"
+                },
+                {
+                    "target_id": "api1", "parent_id": "folder2", "target_type": "api",
+                    "name": "用户登录", "method": "POST", "url": "/api/auth/login",
+                    "request": {"body": {"mode": "none"}, "header": {"parameter": []}, "query": {"parameter": []}, "cookie": {"parameter": []}, "restful": {"parameter": []}, "auth": {"type": "inherit"}}
+                }
+            ]
+        }"#;
+
+        let project = postman(json).unwrap();
+
+        // Project metadata.
+        assert_eq!(project.name, "李靖个人项目");
+
+        // 3 environments, each with server URIs as variables.
+        assert_eq!(project.environments.len(), 3);
+
+        // 默认环境: empty URI → no baseUrl var
+        assert_eq!(project.environments[0].name, "默认环境");
+        assert!(project.environments[0].variables.iter().find(|v| v.key == "baseUrl").is_none());
+
+        // Mock环境: has baseUrl = mock server URI
+        assert_eq!(project.environments[1].name, "Mock环境");
+        let mock_base = project.environments[1].variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        assert_eq!(mock_base.value, "https://mock.apipost.net/mock/35ff847188e5000");
+
+        // 本地环境: baseUrl = localhost:3002
+        assert_eq!(project.environments[2].name, "本地环境");
+        let local_base = project.environments[2].variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        assert_eq!(local_base.value, "localhost:3002");
+
+        // Folder AgentOS has server_id "0" → inherit → no base_url set
+        let agentos = project.folders.iter().find(|f| f.name == "AgentOS").unwrap();
+        assert_eq!(agentos.base_url, None);
+
+        // Folder 系统功能测试 has server_id "1" → {{baseUrl}}
+        let sys_folder = project.folders.iter().find(|f| f.name == "系统功能测试").unwrap();
+        assert_eq!(sys_folder.base_url, Some("{{baseUrl}}".to_string()));
+
+        // Child API URL remains relative (will be prefixed at send time).
+        assert_eq!(sys_folder.requests[0].url, "/api/auth/login");
     }
 }

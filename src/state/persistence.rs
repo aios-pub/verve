@@ -252,6 +252,10 @@ pub struct PanelLayout {
     /// (e.g. "History", "Ssh"). Absent/empty means all items are shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_rails: Option<Vec<String>>,
+    /// Custom order of activity-rail items (SideView names). When present, rail
+    /// buttons render in this order. Items not in the list appear after in default order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rail_order: Option<Vec<String>>,
     /// Remote document-sharing server configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteConfig>,
@@ -491,6 +495,19 @@ pub fn load_hidden_rails() -> std::collections::HashSet<String> {
 pub fn save_hidden_rails(hidden: &std::collections::HashSet<String>) {
     let mut layout = load_layout().unwrap_or_default();
     layout.hidden_rails = Some(hidden.iter().cloned().collect());
+    let _ = save_layout(&layout);
+}
+
+/// Load the custom order of activity-rail views (SideView names).
+/// Returns None when no custom order is set (caller should use default order).
+pub fn load_rail_order() -> Option<Vec<String>> {
+    load_layout().and_then(|l| l.rail_order)
+}
+
+/// Persist the custom order of activity-rail views.
+pub fn save_rail_order(order: &[String]) {
+    let mut layout = load_layout().unwrap_or_default();
+    layout.rail_order = Some(order.to_vec());
     let _ = save_layout(&layout);
 }
 

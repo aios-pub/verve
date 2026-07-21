@@ -140,7 +140,36 @@ pub struct VerveApp {
     pub update_checking: bool,
     /// The result of the last *manual* update check (shown in the settings page).
     pub update_check_result: Option<crate::updater::UpdateCheckResult>,
+    /// Custom order of activity rail items (SideView names).
+    pub rail_order: Vec<String>,
+    /// The SideView name currently being dragged (if any).
+    pub dragging_rail: Option<String>,
+    /// The SideView name that is the current drop target (if any).
+    pub rail_drop_target: Option<String>,
     _subs: Vec<gpui::Subscription>,
+}
+
+/// Drag payload for activity rail reordering — carries the SideView name.
+#[derive(Debug, Clone)]
+struct RailDrag(pub String);
+
+impl Render for RailDrag {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let view = SideView::parse(&self.0);
+        let label = view.label();
+        h_flex()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .rounded(theme.radius)
+            .bg(theme.primary.opacity(0.9))
+            .text_color(gpui::white())
+            .text_xs()
+            .shadow_md()
+            .child(VerveApp::rail_icon_for(view))
+            .child(label)
+    }
 }
 
 /// A management dialog queued for opening in render (where a Window exists).
@@ -479,6 +508,11 @@ impl VerveApp {
             update_info: None,
             update_checking: false,
             update_check_result: None,
+            rail_order: crate::state::persistence::load_rail_order().unwrap_or_else(|| {
+                SideView::ALL.iter().map(|v| v.name().to_string()).collect()
+            }),
+            dragging_rail: None,
+            rail_drop_target: None,
             _subs: Vec::new(),
         };
 
@@ -2046,40 +2080,70 @@ impl VerveApp {
         });
     }
 
+    /// Return the icon for a given SideView (built-in or custom Verve icon).
+    fn rail_icon_for(view: SideView) -> Icon {
+        match view {
+            SideView::Api => IconName::Network.into(),
+            SideView::AutoTest => IconName::Play.into(),
+            SideView::Stress => IconName::ChartPie.into(),
+            SideView::Proxy => IconName::Globe.into(),
+            SideView::Share => vicon(DOCS),
+            SideView::K8s => vicon(K8S_ICON),
+            SideView::Docker => vicon(DOCKER_ICON),
+            SideView::Hosts => vicon(SERVER),
+            SideView::Notes => vicon(NOTEBOOK),
+            SideView::ProjectManage => vicon(KANBAN),
+            SideView::Environments => vicon(BRACES),
+            SideView::Mock => IconName::Cpu.into(),
+            SideView::History => vicon(HISTORY),
+            SideView::Ssh => IconName::SquareTerminal.into(),
+        }
+    }
+
+    /// Reorder rail_order so that `dragged` moves to just before `target`.
+    /// If target is None, move to end of list.
+    fn apply_rail_drop(&mut self, dragged_name: &str, target_name: Option<&str>, cx: &mut Context<Self>) {
+        let mut order = self.rail_order.clone();
+        order.retain(|n| n != dragged_name);
+        match target_name {
+            Some(target) => {
+                if let Some(idx) = order.iter().position(|n| n == target) {
+                    order.insert(idx, dragged_name.to_string());
+                } else {
+                    order.push(dragged_name.to_string());
+                }
+            }
+            None => order.push(dragged_name.to_string()),
+        }
+        self.rail_order = order.clone();
+        crate::state::persistence::save_rail_order(&order);
+        self.state.update(cx, |s, cx| {
+            s.dirty = true;
+            cx.emit(AppEvent::Persisted);
+        });
+    }
+
     /// The far-left vertical activity rail (postman-style icon sidebar).
     fn render_activity_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let active = self.active_view;
-        let hidden = &self.hidden_rails;
+        let hidden = self.hidden_rails.clone();
+        let entity = cx.entity();
 
-        // Helper: is a given SideView visible (not the home view, not hidden)?
-        let is_visible = |v: SideView| v != self.home_view && !hidden.contains(v.name());
-
-        // A rail button: icon that highlights when its view is active.
-        // The tooltip is derived from the view's i18n label.
-        let rail_btn = |id: &'static str,
-                        icon: Icon,
-                        view: SideView,
-                        active_view: SideView,
-                        theme: &gpui_component::Theme,
-                        cx: &mut Context<Self>| {
-            let is_active = active_view == view;
-            let tooltip = view.label();
-            Button::new(id)
-                .ghost()
-                .small()
-                .icon(icon)
-                .selected(is_active)
-                .tooltip(tooltip)
-                .when(is_active, |btn| {
-                    btn.bg(theme.accent.opacity(0.5))
-                        .text_color(theme.foreground)
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.active_view = view;
-                    cx.notify();
-                }))
-        };
+        // Build ordered list of visible views from self.rail_order.
+        let ordered_views: Vec<SideView> = self
+            .rail_order
+            .iter()
+            .filter_map(|name| {
+                let v = SideView::parse(name);
+                // Filter home view and hidden views.
+                if v != self.home_view && !hidden.contains(v.name()) {
+                    Some(v)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         v_flex()
             .w(px(44.))
@@ -2088,12 +2152,8 @@ impl VerveApp {
             .py_2()
             .gap_1()
             .items_center()
-            // No right border — the adjacent tree panel has its own border, and
-            // a border here would create a visible seam/gap between the rail
-            // and the resizable group.
             .bg(theme.muted)
-            // Brand mark "V" — click to return to the home/API workbench.
-            // Hover lightens the background so the highlight is always visible.
+            // Brand mark "V"
             .child({
                 let p = theme.primary;
                 let hover_bg = gpui::hsla(p.h, p.s, (p.l + 0.12).min(1.0), p.a);
@@ -2115,155 +2175,70 @@ impl VerveApp {
                         cx.notify();
                     }))
             })
-            .when(is_visible(SideView::Api), |rail| {
-                rail.child(rail_btn(
-                    "rail-api",
-                    IconName::Network.into(),
-                    SideView::Api,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::AutoTest), |rail| {
-                rail.child(rail_btn(
-                    "rail-test",
-                    IconName::Play.into(),
-                    SideView::AutoTest,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Stress), |rail| {
-                rail.child(rail_btn(
-                    "rail-stress",
-                    IconName::ChartPie.into(),
-                    SideView::Stress,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Proxy), |rail| {
-                rail.child(rail_btn(
-                    "rail-proxy",
-                    IconName::Globe.into(),
-                    SideView::Proxy,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Share), |rail| {
-                rail.child(rail_btn(
-                    "rail-share",
-                    vicon(DOCS),
-                    SideView::Share,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::K8s), |rail| {
-                rail.child(rail_btn(
-                    "rail-k8s",
-                    vicon(K8S_ICON),
-                    SideView::K8s,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Docker), |rail| {
-                rail.child(rail_btn(
-                    "rail-docker",
-                    vicon(DOCKER_ICON),
-                    SideView::Docker,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Hosts), |rail| {
-                rail.child(rail_btn(
-                    "rail-hosts",
-                    vicon(SERVER),
-                    SideView::Hosts,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Notes), |rail| {
-                rail.child(rail_btn(
-                    "rail-notes",
-                    vicon(NOTEBOOK),
-                    SideView::Notes,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::ProjectManage), |rail| {
-                rail.child(rail_btn(
-                    "rail-project",
-                    vicon(KANBAN),
-                    SideView::ProjectManage,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            // Environment variables button → opens the Settings window directly
-            // (no dedicated sidebar panel; managed via the environments dialog).
-            .when(!hidden.contains(SideView::Environments.name()), |rail| {
-                rail.child(
-                    Button::new("rail-env")
-                        .ghost()
-                        .small()
-                        .icon(vicon(BRACES))
-                        .selected(false)
-                        .tooltip(rust_i18n::t!("view.environments").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.pending_dialog = Some(PendingDialog::Environments);
+            // Rail buttons in custom order with drag-and-drop support.
+            .children(ordered_views.iter().map(|&view| {
+                let view_name = view.name().to_string();
+                let is_active = active == view;
+                let is_dragging = self.dragging_rail.as_deref() == Some(view_name.as_str());
+                let is_drop_target = self.rail_drop_target.as_deref() == Some(view_name.as_str());
+
+                let btn = Button::new(format!("rail-btn-{}", view.name()))
+                    .ghost()
+                    .small()
+                    .icon(Self::rail_icon_for(view))
+                    .selected(is_active)
+                    .tooltip(view.label())
+                    .when(is_active, |btn| {
+                        btn.bg(theme.accent.opacity(0.5))
+                            .text_color(theme.foreground)
+                    });
+                // Environments opens a dialog instead of switching side view.
+                let btn = if view == SideView::Environments {
+                    btn.on_click(cx.listener(|this, _, _, cx| {
+                        this.pending_dialog = Some(PendingDialog::Environments);
+                        cx.notify();
+                    }))
+                } else {
+                    btn.on_click(cx.listener(move |this, _, _, cx| {
+                        this.active_view = view;
+                        cx.notify();
+                    }))
+                };
+
+                let drop_name = view_name.clone();
+
+                let drag_payload = RailDrag(view_name.clone());
+                let entity_drag = entity.clone();
+                let entity_drop = entity.clone();
+
+                div()
+                    .id(format!("rail-{}", view.name()))
+                    .when(is_dragging, |d| d.opacity(0.9))
+                    .when(is_drop_target, |d| {
+                        d.border_t_2().border_color(theme.primary)
+                    })
+                    .on_drag(drag_payload, move |drag: &RailDrag, _pos, _window, cx| {
+                        let _ = entity_drag.update(cx, |this, cx| {
+                            this.dragging_rail = Some(drag.0.clone());
                             cx.notify();
-                        }))
-                )
-            })
-            .when(is_visible(SideView::Mock), |rail| {
-                rail.child(rail_btn(
-                    "rail-mock",
-                    IconName::Cpu.into(),
-                    SideView::Mock,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::History), |rail| {
-                rail.child(rail_btn(
-                    "rail-history",
-                    vicon(HISTORY),
-                    SideView::History,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
-            .when(is_visible(SideView::Ssh), |rail| {
-                rail.child(rail_btn(
-                    "rail-ssh",
-                    IconName::SquareTerminal.into(),
-                    SideView::Ssh,
-                    active,
-                    &theme,
-                    cx,
-                ))
-            })
+                        });
+                        cx.new(|_| drag.clone())
+                    })
+                    .on_drop(move |drag: &RailDrag, _window, cx: &mut App| {
+                        let source = drag.0.clone();
+                        let target = drop_name.clone();
+                        let _ = entity_drop.update(cx, |this, cx| {
+                            let target_opt = if source == target { None } else { Some(target.as_str()) };
+                            this.apply_rail_drop(&source, target_opt, cx);
+                            this.dragging_rail = None;
+                            this.rail_drop_target = None;
+                            cx.notify();
+                        });
+                    })
+                    .child(btn)
+            }))
             .child(div().flex_1())
-            // ---- Settings + theme picker (isolated from the feature buttons) ----
-            // A thin separator + the Settings entry, then the theme picker below.
+            // Separator + Settings + theme picker.
             .child(
                 div()
                     .w(px(24.))
@@ -2271,7 +2246,6 @@ impl VerveApp {
                     .my_1()
                     .bg(theme.border.opacity(0.5)),
             )
-            // Settings button — opens the settings window (通用设置 + 环境管理).
             .child(
                 Button::new("rail-settings")
                     .ghost()
@@ -2283,7 +2257,6 @@ impl VerveApp {
                         cx.notify();
                     })),
             )
-            // Theme picker at the bottom.
             .child({
                 let open = self.theme_popover_open;
                 let theme_name = crate::ui::themes::current_theme_name(cx);
@@ -2310,7 +2283,6 @@ impl VerveApp {
                         let theme_accent = cx.theme().accent;
                         let cols = 3usize;
                         let per = names.len().div_ceil(cols);
-                        // Build a single column of theme items.
                         let build_items =
                             |slice: &[String],
                              offset: usize,

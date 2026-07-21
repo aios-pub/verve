@@ -7,6 +7,69 @@ view:
   mock: Mock 服务
   history: 历史记录
   ssh: SSH 管理
+  hosts: Hosts 编辑器
+  notes: 记事本
+
+hosts:
+  title: Hosts 快速编辑器
+  profile_name: 配置组名称
+  add_profile: 新建配置组
+  delete_profile: 删除配置组
+  delete_profile_confirm: 确定要删除配置组「%{name}」吗？
+  search_ph: 搜索 IP、主机名、注释…
+  apply_system: 应用到系统 /etc/hosts
+  apply_virtual: 应用内虚拟覆盖
+  bound_envs: 绑定环境
+  add_entry: 添加条目
+  ip_ph: IP 地址
+  host_ph: 主机名
+  comment_ph: 注释
+  enable_profile: 启用此配置组
+  system_write_success: 已成功写入系统 Hosts 文件
+  system_write_failed: 写入系统 Hosts 失败：%{error}
+  virtual_only: 仅虚拟覆盖（无权限）
+  need_admin: 需要管理员权限
+  open_editor: 打开 Hosts 编辑器
+  no_entries: 暂无条目
+  all_envs: 所有环境生效
+  env_bound: 绑定到 %{count} 个环境
+
+notes:
+  title: 记事本
+  new_note: 新建笔记
+  search_ph: 搜索笔记…
+  untitled: 无标题笔记
+  split_view: 分屏
+  edit_view: 编辑
+  preview_view: 预览
+  confirm_delete: 确认删除笔记
+  confirm_delete_msg: 确定要删除笔记「%{title}」吗？此操作不可撤销。
+  last_updated: 更新于 %{time}
+  empty: 还没有笔记。点击「新建笔记」开始记录。
+  empty_editor: 从左侧选择笔记或新建一个
+
+git_bootstrap:
+  title: 欢迎使用 Verve
+  welcome: 欢迎！请选择如何开始：
+  choose_path: 初始化配置
+  start_fresh: 开始使用（本地模式）
+  start_fresh_desc: 不使用 Git 同步，数据仅保存在本地
+  clone_existing: 从 Git 仓库克隆配置
+  clone_existing_desc: 从远程仓库拉取已有的项目和配置
+  url_ph: Git 仓库地址（例如 https://github.com/your/verve-config.git）
+  username_ph: 用户名（可选，私有仓库需要）
+  token_ph: Token/密码（可选，私有仓库需要）
+  cloning: 正在克隆仓库…
+  clone_success: 克隆成功，正在加载配置…
+  clone_failed: 克隆失败：%{error}
+  retry: 重试
+  conflict_detected: Git 合并冲突
+  conflict_msg: 本地和远程有冲突，请选择如何解决：
+  keep_ours: 保留我的版本
+  keep_theirs: 使用远程版本
+  abort_merge: 中止合并
+  pulling: 正在同步远程更改…
+  pull_success: 同步成功
 
 history:
   title: 历史记录

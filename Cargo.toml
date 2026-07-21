@@ -136,6 +136,8 @@ rust-embed = "8.7"
 # oha load testing library (integrated directly, no external binary needed)
 oha = { version = "1.15.0", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive"] }
+# Markdown parser (CommonMark compliant) for the notepad live preview.
+pulldown-cmark = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }

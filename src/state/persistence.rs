@@ -143,9 +143,10 @@ pub fn set_active_workspace(id: &str) {
     let _ = save_workspaces_index(&idx);
 }
 
-/// The `.gitignore` content excluding cross-branch / non-data files from git.
+/// The `.gitignore` content excluding cross-branch / non-data / machine-local files from git.
+/// layout.json is now tracked (shared settings); layout.local.json contains machine-specific panel sizes.
 const GITIGNORE: &str =
-    "workspaces.json\nlayout.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\n";
+    "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\nhosts.staging\n.bootstrap_done\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into
@@ -154,20 +155,66 @@ pub fn ensure_gitignore() {
     let Ok(dir) = data_dir() else { return };
     let path = dir.join(".gitignore");
     // Re-write if missing or if it's missing any of the known exclusions so
-    // newly added entries (e.g. shares.json) are picked up on existing installs.
+    // newly added entries (e.g. layout.local.json) are picked up on existing installs.
     let needs_write = match fs::read_to_string(&path) {
         Ok(existing) => {
             !existing.contains("workspaces.json")
+                || !existing.contains("layout.local.json")
                 || !existing.contains("shares.json")
                 || !existing.contains("ssh_hosts.json")
                 || !existing.contains("docker_hosts.json")
                 || !existing.contains("kube_config.yaml")
+                || existing.contains("layout.json\n")
         }
         Err(_) => true,
     };
     if needs_write {
         let _ = fs::write(&path, GITIGNORE);
     }
+}
+
+// ---------------------------------------------------------------------------
+// First-run bootstrap marker.
+// ---------------------------------------------------------------------------
+
+/// Check if this is the first run (bootstrap not yet completed).
+pub fn is_first_run() -> bool {
+    let Ok(dir) = data_dir() else { return false };
+    !dir.join(".bootstrap_done").exists()
+}
+
+/// Mark first-run bootstrap as completed.
+pub fn mark_bootstrap_done() {
+    let Ok(dir) = data_dir() else { return };
+    let _ = fs::write(dir.join(".bootstrap_done"), "");
+}
+
+// ---------------------------------------------------------------------------
+// Hosts profiles persistence.
+// ---------------------------------------------------------------------------
+
+/// Load hosts profiles from disk.
+pub fn load_hosts_profiles() -> crate::hosts_profiles::HostsProfileStore {
+    crate::hosts_profiles::load()
+}
+
+/// Save hosts profiles to disk.
+pub fn save_hosts_profiles(store: &crate::hosts_profiles::HostsProfileStore) -> Result<()> {
+    crate::hosts_profiles::save(store)
+}
+
+// ---------------------------------------------------------------------------
+// Notes persistence.
+// ---------------------------------------------------------------------------
+
+/// Load notes from disk.
+pub fn load_notes() -> crate::notes::NotesStore {
+    crate::notes::load()
+}
+
+/// Save notes to disk.
+pub fn save_notes(store: &crate::notes::NotesStore) -> Result<()> {
+    crate::notes::save(store)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,19 +354,76 @@ fn layout_path(dir: &Path) -> PathBuf {
     dir.join("layout.json")
 }
 
-/// Load the saved panel layout, or `None` on first run / corruption.
-pub fn load_layout() -> Option<PanelLayout> {
-    let dir = data_dir().ok()?;
-    let path = layout_path(&dir);
-    let contents = fs::read_to_string(&path).ok()?;
-    serde_json::from_str::<PanelLayout>(&contents).ok()
+fn local_layout_path(dir: &Path) -> PathBuf {
+    dir.join("layout.local.json")
 }
 
-/// Persist the panel layout.
+/// Machine-specific panel sizes (kept out of git so different machines can have different layouts).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct LocalLayout {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f32; 3]>,
+}
+
+/// Load the saved panel layout, or `None` on first run / corruption.
+/// Merges shared settings from layout.json with machine-specific sizes from layout.local.json.
+pub fn load_layout() -> Option<PanelLayout> {
+    let dir = data_dir().ok()?;
+
+    // Load shared layout.
+    let mut layout: PanelLayout = match fs::read_to_string(layout_path(&dir)) {
+        Ok(contents) => serde_json::from_str::<PanelLayout>(&contents)
+            .map(|mut l| {
+                // Migration: if old layout.json contains main/center, extract to local and save back.
+                if l.main.is_some() || l.center.is_some() {
+                    let local = LocalLayout { main: l.main.take(), center: l.center.take() };
+                    let _ = save_local_layout(&local);
+                    let _ = save_layout(&l);
+                    log::info!("Migrated layout: panel sizes moved to layout.local.json");
+                }
+                l
+            })
+            .ok()?,
+        Err(_) => return None,
+    };
+
+    // Overlay machine-specific sizes.
+    if let Ok(contents) = fs::read_to_string(local_layout_path(&dir)) {
+        if let Ok(local) = serde_json::from_str::<LocalLayout>(&contents) {
+            layout.main = local.main;
+            layout.center = local.center;
+        }
+    }
+
+    Some(layout)
+}
+
+/// Save machine-specific panel sizes to layout.local.json (git-ignored).
+fn save_local_layout(local: &LocalLayout) -> Result<()> {
+    let dir = data_dir()?;
+    let path = local_layout_path(&dir);
+    let json = serde_json::to_string_pretty(local)?;
+    fs::write(&path, json).with_context(|| format!("write local layout {:?}", path))?;
+    Ok(())
+}
+
+/// Persist the panel layout. Shared settings go to layout.json (tracked by git);
+/// panel sizes go to layout.local.json (ignored by git).
 pub fn save_layout(layout: &PanelLayout) -> Result<()> {
     let dir = data_dir()?;
+
+    // Save machine-specific sizes separately.
+    let local = LocalLayout { main: layout.main, center: layout.center };
+    save_local_layout(&local)?;
+
+    // Save shared settings to layout.json (without main/center).
+    let mut shared = layout.clone();
+    shared.main = None;
+    shared.center = None;
     let path = layout_path(&dir);
-    let json = serde_json::to_string_pretty(layout)?;
+    let json = serde_json::to_string_pretty(&shared)?;
     fs::write(&path, json).with_context(|| format!("write layout {:?}", path))?;
     Ok(())
 }

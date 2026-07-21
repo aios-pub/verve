@@ -324,6 +324,45 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Apply virtual hosts override: if the URL's hostname matches an enabled
+/// hosts profile entry, rewrite the URL to point to the override IP and add
+/// a `Host:` header so name-based virtual hosting still works.
+/// Returns (possibly rewritten url, extra headers).
+fn apply_virtual_hosts(url_str: &str, headers: &[(String, String)]) -> (String, Vec<(String, String)>) {
+    let mut extra = Vec::new();
+    let Ok(mut url) = Url::parse(url_str) else {
+        return (url_str.to_string(), extra);
+    };
+
+    let hostname = url.host_str().unwrap_or("").to_string();
+    if hostname.is_empty() {
+        return (url_str.to_string(), extra);
+    }
+
+    // Load overrides. Note: we call load() here (cheap: one JSON read per request).
+    let store = crate::hosts_profiles::load();
+    // Determine active env id (we pass None here because env binding is resolved
+    // at the UI/per-request level; for simplicity all-enabled overrides apply).
+    // A more complete integration would thread the active env id through to here.
+    let overrides = crate::hosts_profiles::effective_virtual_overrides(&store, None);
+
+    for (host, ip) in overrides {
+        if host == hostname {
+            // Rewrite the URL's host to the IP.
+            if url.set_host(Some(&ip)).is_ok() {
+                // Add Host header with the original hostname unless already set.
+                let has_host = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host"));
+                if !has_host {
+                    extra.push(("Host".to_string(), hostname.clone()));
+                }
+                return (url.to_string(), extra);
+            }
+        }
+    }
+
+    (url_str.to_string(), extra)
+}
+
 /// Execute a prepared request via the given HTTP client and capture a `Response`.
 /// Errors (build failure, timeout, transport) are returned as a `Response` with
 /// `status == 0` and the `error` field set, so callers always get a value.
@@ -342,12 +381,18 @@ pub async fn execute(
         RequestMethod::Options => Method::OPTIONS,
     };
 
+    // Apply virtual hosts override (rewrite URL + add Host header if needed).
+    let (final_url, extra_headers) = apply_virtual_hosts(&prepared.url, &prepared.headers);
+
     let mut builder = Builder::new()
-        .uri(&prepared.url)
+        .uri(&final_url)
         .method(method)
         .follow_redirects(RedirectPolicy::FollowAll);
 
     for (k, v) in &prepared.headers {
+        builder = builder.header(k.clone(), v.clone());
+    }
+    for (k, v) in &extra_headers {
         builder = builder.header(k.clone(), v.clone());
     }
 

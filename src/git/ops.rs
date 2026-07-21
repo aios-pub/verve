@@ -399,9 +399,20 @@ fn stage_worktree_tree(repo: &gix::Repository) -> Result<gix::hash::ObjectId> {
         }
     }
 
-    // Remove global config files from the tree if they were previously
+    // Remove global/machine config files from the tree if they were previously
     // committed (so future checkouts don't restore stale versions).
-    for untrack in &["ssh_hosts.json", "shares.json"] {
+    for untrack in &[
+        "workspaces.json",
+        "layout.local.json",
+        "ssh_hosts.json",
+        "shares.json",
+        "docker_hosts.json",
+        "docker_active.json",
+        "kube_config.yaml",
+        "kube_clusters.json",
+        "hosts.staging",
+        ".bootstrap_done",
+    ] {
         let _ = editor.remove(*untrack);
     }
 
@@ -412,21 +423,27 @@ fn stage_worktree_tree(repo: &gix::Repository) -> Result<gix::hash::ObjectId> {
 }
 
 /// Recursively collect file paths (relative to `root`) under `dir`, skipping
-/// `.git` and cross-branch / non-data files (`workspaces.json`, `layout.json`,
-/// the askpass helper). These must NOT enter per-workspace commits because they
-/// are shared across all workspace branches.
+/// `.git` and cross-branch / non-data / machine-local files. These must NOT
+/// enter per-workspace commits because they are shared across branches or
+/// machine-specific.
+/// layout.json IS now tracked (shared settings); layout.local.json is machine-specific and skipped.
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    /// Files that are cross-branch infrastructure, not per-workspace data.
-    /// These are global config files that must NOT be overwritten when
-    /// switching workspace branches (git checkout -f). If they were tracked,
-    /// switching branches would roll back SSH hosts / share configs.
+    /// Files that are cross-branch infrastructure or machine-local, not per-workspace data.
+    /// These are global/machine config files that must NOT be overwritten when
+    /// switching workspace branches (git checkout -f).
     const SKIP_FILES: &[&str] = &[
         "workspaces.json",
-        "layout.json",
+        "layout.local.json",
         "ssh_hosts.json",
         "shares.json",
+        "docker_hosts.json",
+        "docker_active.json",
+        "kube_config.yaml",
+        "kube_clusters.json",
         ".verve-askpass.sh",
         ".gitignore",
+        "hosts.staging",
+        ".bootstrap_done",
     ];
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -934,4 +951,59 @@ fn has_upstream(repo: &gix::Repository) -> Result<bool> {
     };
     let ref_name = format!("refs/remotes/origin/{branch}");
     Ok(repo.try_find_reference(ref_name.as_str())?.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Clone (first-run bootstrap)
+// ---------------------------------------------------------------------------
+
+/// Clone a remote repository into `dir` using the system git CLI.
+/// `dir` must NOT already exist. Uses GIT_ASKPASS for credential handling.
+pub fn clone(dir: &Path, url: &str, auth: &GitAuth) -> Result<()> {
+    if dir.exists() {
+        bail!("target directory {:?} already exists", dir);
+    }
+    let parent = dir.parent().context("clone target has no parent")?;
+    let name = dir.file_name().context("invalid clone target")?;
+    let out = run_git(parent, auth, &["clone", url, &name.to_string_lossy()])?;
+    log::info!("git clone: {}", out);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Conflict detection and resolution
+// ---------------------------------------------------------------------------
+
+/// Check if the working tree at `dir` has unresolved merge conflicts.
+pub fn has_conflict(dir: &Path) -> Result<bool> {
+    // git diff --name-only --diff-filter=U lists unmerged files.
+    let output = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .output()
+        .context("git diff failed")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(!stdout.trim().is_empty())
+}
+
+/// Abort an in-progress merge, returning to the pre-merge state.
+pub fn abort_merge(dir: &Path, auth: &GitAuth) -> Result<()> {
+    run_git(dir, auth, &["merge", "--abort"])?;
+    Ok(())
+}
+
+/// Resolve conflicts by keeping our (local) version of all conflicted files,
+/// then stage them.
+pub fn resolve_keep_ours(dir: &Path, auth: &GitAuth) -> Result<()> {
+    run_git(dir, auth, &["checkout", "--ours", "."])?;
+    run_git(dir, auth, &["add", "-A"])?;
+    Ok(())
+}
+
+/// Resolve conflicts by keeping their (remote) version of all conflicted files,
+/// then stage them.
+pub fn resolve_keep_theirs(dir: &Path, auth: &GitAuth) -> Result<()> {
+    run_git(dir, auth, &["checkout", "--theirs", "."])?;
+    run_git(dir, auth, &["add", "-A"])?;
+    Ok(())
 }

@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
 };
 
-use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, EXPORT, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, REFRESH_CW, SHARE};
+use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, EXPORT, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, NOTEBOOK, REFRESH_CW, SERVER, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -27,6 +27,8 @@ use crate::share::models::{ShareConfig, ShareScope};
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
 use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
+use crate::ui::hosts_panel::HostsPanel;
+use crate::ui::notes_panel::NotesPanel;
 use crate::ui::project_manage_panel::ProjectManagePanel;
 use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::request_panel::RequestPanel;
@@ -64,6 +66,10 @@ pub struct VerveApp {
     pub k8s: Entity<K8sPanel>,
     /// Docker container panel.
     pub docker: Entity<DockerPanel>,
+    /// Hosts quick editor panel.
+    pub hosts: Entity<HostsPanel>,
+    /// Notepad panel with markdown preview.
+    pub notes: Entity<NotesPanel>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -183,6 +189,10 @@ pub enum SideView {
     Docker,
     /// SSH connection management (SSH 管理).
     Ssh,
+    /// Hosts quick editor.
+    Hosts,
+    /// Notepad with markdown rendering.
+    Notes,
 }
 
 impl SideView {
@@ -196,6 +206,8 @@ impl SideView {
         SideView::ProjectManage,
         SideView::K8s,
         SideView::Docker,
+        SideView::Hosts,
+        SideView::Notes,
         SideView::Environments,
         SideView::Mock,
         SideView::History,
@@ -217,6 +229,8 @@ impl SideView {
             SideView::K8s => "K8s",
             SideView::Docker => "Docker",
             SideView::Ssh => "Ssh",
+            SideView::Hosts => "Hosts",
+            SideView::Notes => "Notes",
         }
     }
 
@@ -234,6 +248,8 @@ impl SideView {
             "K8s" => SideView::K8s,
             "Docker" => SideView::Docker,
             "Ssh" => SideView::Ssh,
+            "Hosts" => SideView::Hosts,
+            "Notes" => SideView::Notes,
             _ => SideView::Api,
         }
     }
@@ -253,6 +269,8 @@ impl SideView {
             SideView::K8s => "K8s".to_string(),
             SideView::Docker => "Docker".to_string(),
             SideView::Ssh => rust_i18n::t!("view.ssh").to_string(),
+            SideView::Hosts => rust_i18n::t!("view.hosts").to_string(),
+            SideView::Notes => rust_i18n::t!("view.notes").to_string(),
         }
     }
 }
@@ -340,6 +358,7 @@ impl VerveApp {
             }
             let cfg = crate::state::persistence::load_git_config();
             let sync_minutes = cfg.sync_interval_minutes.unwrap_or(crate::state::persistence::DEFAULT_SYNC_INTERVAL_MINUTES);
+            let has_remote = cfg.remote.is_some();
             git.update(cx, |g, cx| {
                 g.load_config(
                     cfg.auto_commit,
@@ -350,6 +369,10 @@ impl VerveApp {
                 );
                 // Trigger an initial refresh now that config is loaded.
                 g.refresh_async(cx);
+                // On startup, if a remote is configured, pull latest changes.
+                if has_remote {
+                    g.pull_async(cx);
+                }
                 // Auto-sync on the configured interval: commit dirty changes +
                 // push/pull so work is versioned without manual intervention.
                 g.start_auto_sync(cx, std::time::Duration::from_secs((sync_minutes as u64) * 60));
@@ -368,6 +391,8 @@ impl VerveApp {
         let proxy = cx.new(|cx| ProxyPanel::new(window, cx));
         let k8s = cx.new(|cx| K8sPanel::new(window, cx));
         let docker = cx.new(|cx| DockerPanel::new(window, cx));
+        let hosts = cx.new(|cx| HostsPanel::new(state.clone(), window, cx));
+        let notes = cx.new(|cx| NotesPanel::new(state.clone(), window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -417,6 +442,8 @@ impl VerveApp {
             proxy,
             k8s,
             docker,
+            hosts,
+            notes,
             share_server,
             share_configs,
             share_host,
@@ -1818,7 +1845,7 @@ impl Render for VerveApp {
         let side_left: gpui::AnyElement = match self.active_view {
             SideView::Api | SideView::Environments | SideView::Mock => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh => {
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -1884,13 +1911,13 @@ impl Render for VerveApp {
         // replace the entire workbench (rail + tree + request/response).
         let _exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes
         );
 
         // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes
         );
 
         v_flex()
@@ -1920,6 +1947,8 @@ impl Render for VerveApp {
                             SideView::Proxy => self.proxy.clone().into_any_element(),
                             SideView::K8s => self.k8s.clone().into_any_element(),
                             SideView::Docker => self.docker.clone().into_any_element(),
+                            SideView::Hosts => self.hosts.clone().into_any_element(),
+                            SideView::Notes => self.notes.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(
@@ -2151,6 +2180,26 @@ impl VerveApp {
                     "rail-docker",
                     vicon(DOCKER_ICON),
                     SideView::Docker,
+                    active,
+                    &theme,
+                    cx,
+                ))
+            })
+            .when(is_visible(SideView::Hosts), |rail| {
+                rail.child(rail_btn(
+                    "rail-hosts",
+                    vicon(SERVER),
+                    SideView::Hosts,
+                    active,
+                    &theme,
+                    cx,
+                ))
+            })
+            .when(is_visible(SideView::Notes), |rail| {
+                rail.child(rail_btn(
+                    "rail-notes",
+                    vicon(NOTEBOOK),
+                    SideView::Notes,
                     active,
                     &theme,
                     cx,

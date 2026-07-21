@@ -31,9 +31,14 @@ pub fn hosts_path() -> PathBuf {
 /// Read and parse the hosts file. Returns an empty vec on IO / permission error
 /// (the UI surfaces the error string separately).
 pub fn read_hosts() -> Result<Vec<HostEntry>, String> {
-    let path = hosts_path();
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let raw = read_hosts_string();
     Ok(parse_hosts(&raw))
+}
+
+/// Read the raw hosts file content. Returns empty string on error.
+pub fn read_hosts_string() -> String {
+    let path = hosts_path();
+    std::fs::read_to_string(&path).unwrap_or_default()
 }
 
 /// Parse hosts file content into entries. Lines starting with `#` are comments.

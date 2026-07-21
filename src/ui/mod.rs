@@ -2,16 +2,20 @@
 
 pub mod app;
 pub mod autotest_panel;
+pub mod bootstrap_dialog;
 pub mod console_panel;
 pub mod docker_host_dialog;
 pub mod docker_panel;
 pub mod env_panel;
 pub mod environments_view;
+pub mod hosts_panel;
 pub mod kv_manager_view;
 pub mod k8s_cluster_dialog;
 pub mod k8s_panel;
 pub mod kv_table;
+pub mod markdown_view;
 pub mod method_colors;
+pub mod notes_panel;
 pub mod project_manage_panel;
 pub mod project_tree_panel;
 pub mod proxy_panel;

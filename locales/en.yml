@@ -7,6 +7,69 @@ view:
   mock: Mock Server
   history: History
   ssh: SSH
+  hosts: Hosts Editor
+  notes: Notepad
+
+hosts:
+  title: Hosts Quick Editor
+  profile_name: Profile name
+  add_profile: New Profile
+  delete_profile: Delete Profile
+  delete_profile_confirm: "Delete profile \"%{name}\"?"
+  search_ph: "Search IP, hostname, comment..."
+  apply_system: "Apply to system /etc/hosts"
+  apply_virtual: In-app virtual override
+  bound_envs: Bound environments
+  add_entry: Add entry
+  ip_ph: IP address
+  host_ph: Hostname
+  comment_ph: Comment
+  enable_profile: Enable this profile
+  system_write_success: Successfully wrote to system hosts file
+  system_write_failed: "Failed to write system hosts: %{error}"
+  virtual_only: Virtual override only (no privileges)
+  need_admin: Administrator privileges required
+  open_editor: Open Hosts Editor
+  no_entries: No entries yet
+  all_envs: All environments
+  env_bound: "Bound to %{count} env(s)"
+
+notes:
+  title: Notepad
+  new_note: New Note
+  search_ph: "Search notes..."
+  untitled: Untitled Note
+  split_view: Split
+  edit_view: Edit
+  preview_view: Preview
+  confirm_delete: Confirm Delete Note
+  confirm_delete_msg: "Delete note \"%{title}\"? This cannot be undone."
+  last_updated: "Updated %{time}"
+  empty: 'No notes yet. Click "New Note" to start writing.'
+  empty_editor: Select a note from the left or create a new one
+
+git_bootstrap:
+  title: Welcome to Verve
+  welcome: "Welcome! Choose how to get started:"
+  choose_path: Initialize Configuration
+  start_fresh: Start Fresh (Local Mode)
+  start_fresh_desc: No Git sync, data stored locally only
+  clone_existing: Clone from Git Repository
+  clone_existing_desc: Pull existing projects and configurations from a remote repo
+  url_ph: "Git repository URL (e.g. https://github.com/your/verve-config.git)"
+  username_ph: Username (optional, for private repos)
+  token_ph: Token/password (optional, for private repos)
+  cloning: "Cloning repository..."
+  clone_success: "Cloned successfully, loading configuration..."
+  clone_failed: "Clone failed: %{error}"
+  retry: Retry
+  conflict_detected: Git Merge Conflict
+  conflict_msg: "Local and remote changes conflict. Choose how to resolve:"
+  keep_ours: Keep My Changes
+  keep_theirs: Use Remote Version
+  abort_merge: Abort Merge
+  pulling: "Syncing remote changes..."
+  pull_success: Sync successful
 
 history:
   title: History

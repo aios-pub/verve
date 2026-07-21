@@ -33,6 +33,8 @@ pub const DOCKER: &str = "icons/verve/docker.svg";
 pub const K8S: &str = "icons/verve/k8s.svg";
 pub const IMPORT: &str = "icons/verve/import.svg";
 pub const EXPORT: &str = "icons/verve/export.svg";
+pub const SERVER: &str = "icons/verve/server.svg";
+pub const NOTEBOOK: &str = "icons/verve/notebook-pen.svg";
 
 /// Composite asset source passed to `with_assets(...)`.
 pub struct VerveAssets(pub StockAssets);

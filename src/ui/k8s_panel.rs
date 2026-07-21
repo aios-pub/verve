@@ -17,9 +17,13 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
 use tokio::io::AsyncWriteExt;
 
+use crate::k8s::clusters::{
+    import_kubeconfig as import_kubeconfig_file, load_manual_clusters, ClusterAuth, ManualCluster,
+};
 use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, LogStream, Pod};
-use crate::k8s::{kubeconfig_path, load_default, KubeConfig};
+use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
 use crate::ssh::terminal::TerminalView;
+use crate::ui::k8s_cluster_dialog;
 
 /// Which sub-view is active.
 #[derive(Clone, PartialEq, Eq)]
@@ -59,7 +63,7 @@ impl K8sPanel {
             s
         });
         let mut me = Self {
-            cfg: load_default(),
+            cfg: load_merged(),
             error: None,
             active_view: View::Contexts,
             namespace_input: Some(namespace_input),
@@ -88,31 +92,32 @@ impl K8sPanel {
     }
 
     fn refresh_config(&mut self, cx: &mut Context<Self>) {
-        self.cfg = load_default();
+        self.cfg = load_merged();
         self.error = None;
         cx.notify();
     }
 
-    fn switch_context(&mut self, name: String, cx: &mut Context<Self>) {
-        let out = std::process::Command::new("kubectl")
-            .args(["config", "use-context", &name])
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                self.refresh_config(cx);
-                self.pods.clear();
-            }
-            Ok(o) => {
-                self.error = Some(
-                    String::from_utf8_lossy(&o.stderr).trim().to_string(),
-                );
-                cx.notify();
-            }
-            Err(e) => {
-                self.error = Some(format!("执行 kubectl 失败: {e}"));
-                cx.notify();
-            }
+    /// Return the current context name (passed as --context to kubectl).
+    fn current_context_name(&self) -> Option<&str> {
+        let name = &self.cfg.current_context;
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.as_str())
         }
+    }
+
+    fn switch_context(&mut self, name: String, cx: &mut Context<Self>) {
+        // Update in-memory state. kubectl commands use --context, so we don't
+        // need to modify any kubeconfig file on disk.
+        self.cfg.current_context = name.clone();
+        // Persist in the verve kubeconfig so the selection survives restarts.
+        let mut verve_cfg = crate::k8s::clusters::load_verve_kubeconfig();
+        verve_cfg.current_context = name;
+        let _ = crate::k8s::clusters::save_verve_kubeconfig(&verve_cfg);
+        self.pods.clear();
+        self.error = None;
+        cx.notify();
     }
 
     fn set_view(&mut self, v: View, cx: &mut Context<Self>) {
@@ -142,12 +147,13 @@ impl K8sPanel {
             .namespace_input
             .as_ref()
             .map(|i| i.read(cx).value().to_string());
+        let ctx = self.current_context_name().map(String::from);
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let pod_for_thread = pod.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match exec_pod(&pod_for_thread, ns.as_deref(), None) {
+                match exec_pod(&pod_for_thread, ns.as_deref(), None, ctx.as_deref()) {
                     Ok(mut sess) => {
                         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
                         let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -279,13 +285,14 @@ impl K8sPanel {
             .namespace_input
             .as_ref()
             .map(|i| i.read(cx).value().to_string());
+        let ctx = self.current_context_name().map(String::from);
         self.pods_loading = true;
         self.error = None;
         cx.notify();
         let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<Pod>, String>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let res = rt.block_on(list_pods(ns.as_deref())).map_err(|e| e.to_string());
+            let res = rt.block_on(list_pods(ns.as_deref(), ctx.as_deref())).map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
         let ent = cx.entity().downgrade();
@@ -323,13 +330,14 @@ impl K8sPanel {
             .namespace_input
             .as_ref()
             .map(|i| i.read(cx).value().to_string());
+        let ctx = self.current_context_name().map(String::from);
         let pod_for_ui = pod.clone();
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let pod_for_thread = pod;
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match stream_logs(&pod_for_thread, ns.as_deref(), None, 50) {
+                match stream_logs(&pod_for_thread, ns.as_deref(), None, 50, ctx.as_deref()) {
                     Ok(mut s) => {
                         let Some(mut lines_rx) = s.take_lines() else { return };
                         let _ = tx.send(Ev::Started);
@@ -388,12 +396,13 @@ impl K8sPanel {
             .namespace_input
             .as_ref()
             .map(|i| i.read(cx).value().to_string());
+        let ctx = self.current_context_name().map(String::from);
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let pod_for_thread = pod.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match port_forward(&pod_for_thread, ns.as_deref(), 0, remote_port).await {
+                match port_forward(&pod_for_thread, ns.as_deref(), 0, remote_port, ctx.as_deref()).await {
                     Ok(h) => {
                         let port = h.local_port;
                         log::info!("k8s port-forward {}:{} → localhost:{}", pod_for_thread, remote_port, port);
@@ -440,6 +449,46 @@ impl K8sPanel {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Open a native file picker to import an external kubeconfig file.
+    fn import_kubeconfig_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new()
+                .add_filter("kubeconfig", &["yaml", "yml", "conf", "*"])
+                .pick_file();
+            let _ = tx.send(res.map(|p| p.to_path_buf()));
+        });
+        let ent = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(Some(path)) => {
+                        let result = import_kubeconfig_file(&path);
+                        let _ = ent.update(cx, |panel, cx| {
+                            match result {
+                                Ok(n) => {
+                                    panel.error = Some(format!("成功导入 {n} 个 context"));
+                                    panel.refresh_config(cx);
+                                }
+                                Err(e) => {
+                                    panel.error = Some(e);
+                                    cx.notify();
+                                }
+                            }
+                        });
+                        break;
+                    }
+                    Ok(None) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .detach();
     }
 }
 
@@ -594,10 +643,36 @@ impl K8sPanel {
             }))
             .child(div().h(px(1.)).w_full().bg(border))
             .child(
-                div()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("可用 Context (点击切换)"),
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .flex_1()
+                            .child("可用 Context (点击切换)"),
+                    )
+                    .child(
+                        Button::new("k8s-import-kubeconfig")
+                            .xsmall()
+                            .ghost()
+                            .label("导入 kubeconfig")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.import_kubeconfig_dialog(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("k8s-add-cluster")
+                            .xsmall()
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("添加集群")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                k8s_cluster_dialog::open_dialog(window, cx);
+                                this.refresh_config(cx);
+                            })),
+                    ),
             )
             .children(if self.cfg.contexts.is_empty() {
                 Some(div().text_size(px(12.)).text_color(muted).child(format!(

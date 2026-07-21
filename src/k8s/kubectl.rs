@@ -64,10 +64,22 @@ impl std::fmt::Display for PodError {
     }
 }
 
-/// List pods in the given namespace (or "" for the context default).
-pub async fn list_pods(namespace: Option<&str>) -> Result<Vec<Pod>, PodError> {
+/// Build a `kubectl` Command with the merged KUBECONFIG env var set.
+fn kubectl_command() -> Command {
     let mut cmd = Command::new("kubectl");
+    cmd.env("KUBECONFIG", crate::k8s::clusters::merged_kubeconfig_env());
+    cmd
+}
+
+/// List pods in the given namespace (or "" for the context default).
+pub async fn list_pods(namespace: Option<&str>, context: Option<&str>) -> Result<Vec<Pod>, PodError> {
+    let mut cmd = kubectl_command();
     cmd.arg("get").arg("pods").arg("-o").arg("json");
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
     if let Some(ns) = namespace {
         if !ns.is_empty() {
             cmd.args(["-n", ns]);
@@ -109,13 +121,19 @@ pub fn stream_logs(
     namespace: Option<&str>,
     container: Option<&str>,
     tail: u32,
+    context: Option<&str>,
 ) -> Result<LogStream, PodError> {
-    let mut cmd = Command::new("kubectl");
+    let mut cmd = kubectl_command();
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
         .arg(tail.to_string())
         .arg(pod);
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
     if let Some(ns) = namespace {
         if !ns.is_empty() {
             cmd.args(["-n", ns]);
@@ -176,15 +194,21 @@ pub async fn port_forward(
     namespace: Option<&str>,
     local_port: u16,
     remote_port: u16,
+    context: Option<&str>,
 ) -> Result<PortForwardHandle, PodError> {
     use tokio::io::AsyncBufReadExt as _;
     use tokio::time::timeout;
 
-    let mut cmd = Command::new("kubectl");
+    let mut cmd = kubectl_command();
     let port_spec = format!("{local_port}:{remote_port}");
     cmd.arg("port-forward")
         .arg(format!("pod/{pod}"))
         .arg(&port_spec);
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
     if let Some(ns) = namespace {
         if !ns.is_empty() {
             cmd.args(["-n", ns]);
@@ -238,15 +262,20 @@ pub struct ExecSession {
 
 /// Spawn `kubectl exec -it pod [-n ns] -- shell` with stdin/stdout piped so the
 /// caller can drive an interactive terminal. The shell defaults to `/bin/sh`.
-pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>) -> Result<ExecSession, PodError> {
+pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context: Option<&str>) -> Result<ExecSession, PodError> {
     let shell = shell.unwrap_or("/bin/sh");
-    let mut cmd = Command::new("kubectl");
+    let mut cmd = kubectl_command();
     cmd.arg("exec")
         .arg("-i")
         .arg("-t")
         .arg(pod)
         .arg("--")
         .arg(shell);
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
     if let Some(ns) = namespace {
         if !ns.is_empty() {
             cmd.args(["-n", ns]);

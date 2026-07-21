@@ -140,18 +140,20 @@ impl GitState {
     pub fn refresh_async(&mut self, cx: &mut Context<Self>) {
         let dir = self.dir.clone();
         let weak = cx.weak_entity();
+        // Run blocking gix ops on a DEDICATED OS thread (8 MB stack on macOS) instead of the
+        // GPUI background executor (GCD worker, ~512 KB stack). gix's loose-object write path
+        // uses miniz_oxide::deflate which recurses deeply and overflows the small worker stack
+        // (SIGBUS / "Thread stack size exceeded" observed after autosave).
+        let handle = std::thread::spawn(move || {
+            let repo = ops::ensure_repo(&dir)?;
+            let status = ops::status(&repo)?;
+            let commits = ops::log(&repo, 50).unwrap_or_default();
+            let branches = ops::branches(&repo).unwrap_or_default();
+            let remote = ops::get_remote(&repo);
+            Ok::<_, anyhow::Error>((status, commits, branches, remote))
+        });
         cx.spawn(async move |_, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move {
-                    let repo = ops::ensure_repo(&dir)?;
-                    let status = ops::status(&repo)?;
-                    let commits = ops::log(&repo, 50).unwrap_or_default();
-                    let branches = ops::branches(&repo).unwrap_or_default();
-                    let remote = ops::get_remote(&repo);
-                    Ok::<_, anyhow::Error>((status, commits, branches, remote))
-                })
-                .await;
+            let res = handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("refresh 线程崩溃")));
             let _ = weak.update(cx, |this, cx| {
                 if let Ok((status, commits, branches, remote)) = res {
                     this.status = status;
@@ -413,14 +415,18 @@ impl GitState {
         cx.notify();
         let weak = cx.weak_entity();
         let label_owned = label.to_string();
+        // Run blocking gix ops on a DEDICATED OS thread (8 MB stack) instead of the
+        // GPUI background executor (GCD worker, ~512 KB stack). gix's write path
+        // (commit/checkout) uses miniz_oxide::deflate which recurses deeply and can
+        // overflow the small worker stack.
+        let handle = std::thread::spawn(move || {
+            let repo = ops::ensure_repo(&dir)?;
+            op(repo)
+        });
         cx.spawn(async move |_, cx| {
-            let res = cx
-                .background_executor()
-                .spawn(async move {
-                    let repo = ops::ensure_repo(&dir)?;
-                    op(repo)
-                })
-                .await;
+            let res = handle.join().unwrap_or_else(|_| {
+                Err(anyhow::anyhow!("{label_owned} 后台线程崩溃"))
+            });
             let _ = weak.update(cx, |this, cx| {
                 this.busy = None;
                 match res {

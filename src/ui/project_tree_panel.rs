@@ -1168,7 +1168,9 @@ fn picker_card(
                         }
                     }
                     s.selected_request = Some(req_id);
+                    s.selected_folder = None;
                     s.notify_workspace(cx);
+                    cx.emit(AppEvent::SelectionChanged);
                 });
             }
             // Close the popover after creating the request.
@@ -1554,7 +1556,9 @@ impl ProjectTreePanel {
                 }
             }
             s.selected_request = Some(req_id);
+            s.selected_folder = None;
             s.notify_workspace(cx);
+            cx.emit(AppEvent::SelectionChanged);
         });
     }
 
@@ -1649,17 +1653,26 @@ impl ProjectTreePanel {
 
     pub fn delete_node(&mut self, node: String, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
+            let mut changed = false;
             if let Some(project) = s.active_project_mut() {
                 if let Some(id) = node.strip_prefix("request:") {
                     remove_request(&mut project.folders, &mut project.requests, id);
                     if s.selected_request.as_deref() == Some(id) {
                         s.selected_request = None;
+                        changed = true;
                     }
                 } else if let Some(id) = node.strip_prefix("folder:") {
                     remove_folder(&mut project.folders, id);
+                    if s.selected_folder.as_deref() == Some(id) {
+                        s.selected_folder = None;
+                        changed = true;
+                    }
                 }
             }
             s.notify_workspace(cx);
+            if changed {
+                cx.emit(AppEvent::SelectionChanged);
+            }
         });
     }
 
@@ -1677,6 +1690,8 @@ impl ProjectTreePanel {
                     let new_id = dup.id.clone();
                     project.requests.push(dup);
                     s.selected_request = Some(new_id);
+                    s.selected_folder = None;
+                    cx.emit(AppEvent::SelectionChanged);
                 }
             }
             s.notify_workspace(cx);

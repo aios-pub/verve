@@ -11,6 +11,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use super::DockerHost;
+
 /// Resolve the docker CLI absolute path, falling back to PATH lookup. On macOS
 /// Docker Desktop installs docker to a handful of well-known locations that
 /// aren't always in the PATH when Verve is launched from Finder / Dock.
@@ -40,9 +42,40 @@ fn docker_binary() -> PathBuf {
     PathBuf::from("docker")
 }
 
+/// Apply Docker host environment variables (DOCKER_HOST, DOCKER_TLS_VERIFY,
+/// DOCKER_CERT_PATH) to a tokio Command when a non-local host is configured.
+fn apply_host_env(cmd: &mut Command, host: Option<&DockerHost>) {
+    if let Some(h) = host {
+        if !h.is_local() && !h.host.is_empty() {
+            cmd.env("DOCKER_HOST", &h.host);
+            if h.tls_verify {
+                cmd.env("DOCKER_TLS_VERIFY", "1");
+            }
+            if let Some(ref cert) = h.cert_path {
+                cmd.env("DOCKER_CERT_PATH", cert);
+            }
+        }
+    }
+}
+
+/// Apply Docker host environment variables to a std (sync) Command.
+fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost>) {
+    if let Some(h) = host {
+        if !h.is_local() && !h.host.is_empty() {
+            cmd.env("DOCKER_HOST", &h.host);
+            if h.tls_verify {
+                cmd.env("DOCKER_TLS_VERIFY", "1");
+            }
+            if let Some(ref cert) = h.cert_path {
+                cmd.env("DOCKER_CERT_PATH", cert);
+            }
+        }
+    }
+}
+
 /// Build a Command targeting the docker binary, extending PATH with common
 /// macOS locations so subcommands can find sibling helpers like `docker-credential-osxkeychain`.
-fn docker_command() -> Command {
+fn docker_command(host: Option<&DockerHost>) -> Command {
     let bin = docker_binary();
     let mut cmd = Command::new(&bin);
     // Ensure Docker Desktop's bin dir and Homebrew are on PATH even when launched
@@ -59,6 +92,7 @@ fn docker_command() -> Command {
         ]
         .join(":"),
     );
+    apply_host_env(&mut cmd, host);
     cmd
 }
 
@@ -129,26 +163,27 @@ pub struct ExecSession {
 }
 
 /// Build a std::process::Command for blocking docker calls with extended PATH.
-fn docker_command_sync() -> std::process::Command {
+fn docker_command_sync(host: Option<&DockerHost>) -> std::process::Command {
     let bin = docker_binary();
     let mut cmd = std::process::Command::new(&bin);
     cmd.env("PATH", extended_path());
+    apply_host_env_sync(&mut cmd, host);
     cmd
 }
 
-fn run_docker(args: &[&str]) -> Result<std::process::Output, DockerError> {
-    docker_command_sync()
+fn run_docker(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
+    docker_command_sync(host)
         .args(args)
         .output()
         .map_err(|e| {
             DockerError(format!(
-                "docker 执行失败: {e}; 请确认 Docker Desktop 正在运行且 docker CLI 已安装 (尝试: /opt/homebrew/bin/docker 或 /usr/local/bin/docker)"
+                "docker 执行失败: {e}; 请确认 Docker daemon 正在运行且 docker CLI 已安装"
             ))
         })
 }
 
-pub async fn run_docker_async(args: &[&str]) -> Result<std::process::Output, DockerError> {
-    docker_command()
+pub async fn run_docker_async(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
+    docker_command(host)
         .args(args)
         .output()
         .await
@@ -177,14 +212,14 @@ fn check_ok(out: std::process::Output) -> Result<(), DockerError> {
     }
 }
 
-pub fn list_containers() -> Result<Vec<Container>, DockerError> {
-    let out = run_docker(&["ps", "-a", "--format", "{{json .}}"])?;
+pub fn list_containers(host: Option<&DockerHost>) -> Result<Vec<Container>, DockerError> {
+    let out = run_docker(host, &["ps", "-a", "--format", "{{json .}}"])?;
     check_ok(out.clone())?;
     parse_json_lines(&String::from_utf8_lossy(&out.stdout))
 }
 
-pub fn list_images() -> Result<Vec<ImageInfo>, DockerError> {
-    let out = run_docker(&["images", "--format", "{{json .}}"])?;
+pub fn list_images(host: Option<&DockerHost>) -> Result<Vec<ImageInfo>, DockerError> {
+    let out = run_docker(host, &["images", "--format", "{{json .}}"])?;
     check_ok(out.clone())?;
     parse_json_lines(&String::from_utf8_lossy(&out.stdout))
 }
@@ -204,27 +239,27 @@ fn parse_json_lines<'a, T: Deserialize<'a>>(text: &'a str) -> Result<Vec<T>, Doc
     Ok(out)
 }
 
-pub fn start(id: &str) -> Result<(), DockerError> {
-    check_ok(run_docker(&["start", id])?)
+pub fn start(host: Option<&DockerHost>, id: &str) -> Result<(), DockerError> {
+    check_ok(run_docker(host, &["start", id])?)
 }
-pub fn stop(id: &str) -> Result<(), DockerError> {
-    check_ok(run_docker(&["stop", id])?)
+pub fn stop(host: Option<&DockerHost>, id: &str) -> Result<(), DockerError> {
+    check_ok(run_docker(host, &["stop", id])?)
 }
-pub fn restart(id: &str) -> Result<(), DockerError> {
-    check_ok(run_docker(&["restart", id])?)
+pub fn restart(host: Option<&DockerHost>, id: &str) -> Result<(), DockerError> {
+    check_ok(run_docker(host, &["restart", id])?)
 }
-pub fn remove(id: &str, force: bool) -> Result<(), DockerError> {
+pub fn remove(host: Option<&DockerHost>, id: &str, force: bool) -> Result<(), DockerError> {
     let mut args = vec!["rm"];
     if force {
         args.push("-f");
     }
     args.push(id);
-    check_ok(run_docker(&args)?)
+    check_ok(run_docker(host, &args)?)
 }
 
 /// Prune dangling + unused images. Returns the number of bytes reclaimed.
-pub async fn prune_images() -> Result<String, DockerError> {
-    let out = run_docker_async(&["image", "prune", "-f"]).await?;
+pub async fn prune_images(host: Option<&DockerHost>) -> Result<String, DockerError> {
+    let out = run_docker_async(host, &["image", "prune", "-f"]).await?;
     if !out.status.success() {
         return Err(DockerError(
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
@@ -235,8 +270,8 @@ pub async fn prune_images() -> Result<String, DockerError> {
 }
 
 /// Spawn `docker logs -f --tail=N <id>` and stream lines back to a channel.
-pub fn stream_logs(id: &str, tail: u32) -> Result<LogStream, DockerError> {
-    let mut cmd = docker_command();
+pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<LogStream, DockerError> {
+    let mut cmd = docker_command(host);
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
@@ -269,9 +304,9 @@ pub fn stream_logs(id: &str, tail: u32) -> Result<LogStream, DockerError> {
 }
 
 /// Spawn `docker exec -it <id> sh` for an interactive session.
-pub fn exec_container(id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
+pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
     let shell = shell.unwrap_or("sh");
-    let mut cmd = docker_command();
+    let mut cmd = docker_command(host);
     cmd.arg("exec")
         .arg("-i")
         .arg("-t")

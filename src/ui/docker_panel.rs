@@ -14,11 +14,13 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Si
 use tokio::io::AsyncWriteExt;
 
 use crate::docker::{
-    exec_container, list_containers, list_images, prune_images, remove as docker_remove,
-    restart as docker_restart, start as docker_start, stop as docker_stop, stream_logs, Container,
-    DockerError, ExecSession, ImageInfo, LogStream,
+    exec_container, find_host, get_active_id, list_containers, list_images, load_hosts,
+    prune_images, remove as docker_remove, remove_host, restart as docker_restart,
+    set_active_id, start as docker_start, stop as docker_stop, stream_logs, upsert_host, Container,
+    DockerError, DockerHost, ExecSession, ImageInfo, LogStream,
 };
 use crate::ssh::terminal::TerminalView;
+use crate::ui::docker_host_dialog;
 
 #[derive(Clone, PartialEq, Eq)]
 enum View {
@@ -26,11 +28,14 @@ enum View {
     Images,
     Logs,
     Exec,
+    Hosts,
 }
 
 pub struct DockerPanel {
     error: Option<String>,
     active_view: View,
+    hosts: Vec<DockerHost>,
+    active_host_id: String,
     containers: Vec<Container>,
     containers_loading: bool,
     images: Vec<ImageInfo>,
@@ -49,6 +54,8 @@ impl DockerPanel {
         Self {
             error: None,
             active_view: View::Containers,
+            hosts: load_hosts(),
+            active_host_id: get_active_id(),
             containers: Vec::new(),
             containers_loading: false,
             images: Vec::new(),
@@ -63,9 +70,42 @@ impl DockerPanel {
         }
     }
 
+    fn active_host(&self) -> Option<DockerHost> {
+        find_host(&self.active_host_id)
+    }
+
+    fn reload_hosts(&mut self) {
+        self.hosts = load_hosts();
+        // Ensure active_host_id is still valid; fall back to "local".
+        if self.hosts.iter().find(|h| h.id == self.active_host_id).is_none() {
+            self.active_host_id = "local".into();
+            set_active_id("local");
+        }
+    }
+
+    fn switch_host(&mut self, id: String, cx: &mut Context<Self>) {
+        self.active_host_id = id.clone();
+        set_active_id(&id);
+        // Kill any running log/exec processes.
+        self.log_stream = None;
+        self.log_lines.clear();
+        self.log_target = None;
+        self.exec_stdin = None;
+        self.exec_terminal = None;
+        self.exec_target = None;
+        if let Some(mut c) = self.exec_child.take() {
+            let _ = c.start_kill();
+        }
+        self.containers.clear();
+        self.images.clear();
+        self.error = None;
+        cx.notify();
+    }
+
     fn set_view(&mut self, v: View, cx: &mut Context<Self>) {
         let leaving_logs = v != View::Logs;
         let leaving_exec = v != View::Exec;
+        let is_hosts = v == View::Hosts;
         self.active_view = v;
         if leaving_logs {
             self.log_stream = None;
@@ -76,6 +116,9 @@ impl DockerPanel {
             if let Some(mut c) = self.exec_child.take() {
                 let _ = c.start_kill();
             }
+        }
+        if is_hosts {
+            self.reload_hosts();
         }
         cx.notify();
     }
@@ -119,7 +162,8 @@ impl DockerPanel {
         self.containers_loading = true;
         self.error = None;
         cx.notify();
-        self.run_blocking(cx, list_containers, |panel, cx, res| {
+        let host = self.active_host();
+        self.run_blocking(cx, move || list_containers(host.as_ref()), |panel, cx, res| {
             panel.containers_loading = false;
             match res {
                 Ok(cs) => panel.containers = cs,
@@ -136,7 +180,8 @@ impl DockerPanel {
         self.images_loading = true;
         self.error = None;
         cx.notify();
-        self.run_blocking(cx, list_images, |panel, cx, res| {
+        let host = self.active_host();
+        self.run_blocking(cx, move || list_images(host.as_ref()), |panel, cx, res| {
             panel.images_loading = false;
             match res {
                 Ok(imgs) => panel.images = imgs,
@@ -147,10 +192,11 @@ impl DockerPanel {
     }
 
     fn do_prune(&mut self, cx: &mut Context<Self>) {
+        let host = self.active_host();
         let (tx, rx) = std::sync::mpsc::channel::<Result<String, DockerError>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(prune_images());
+            let result = rt.block_on(prune_images(host.as_ref()));
             let _ = tx.send(result);
         });
         let ent = cx.entity().downgrade();
@@ -176,9 +222,10 @@ impl DockerPanel {
 
     fn container_action<F>(&mut self, id: String, f: F, cx: &mut Context<Self>)
     where
-        F: 'static + Send + Fn(&str) -> Result<(), DockerError>,
+        F: 'static + Send + Fn(Option<&DockerHost>, &str) -> Result<(), DockerError>,
     {
-        self.run_blocking(cx, move || f(&id), |panel, cx, res| {
+        let host = self.active_host();
+        self.run_blocking(cx, move || f(host.as_ref(), &id), |panel, cx, res| {
             if let Err(e) = res {
                 panel.error = Some(e.to_string());
             }
@@ -194,10 +241,11 @@ impl DockerPanel {
         }
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let id_for_thread = id.clone();
+        let host = self.active_host();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match stream_logs(&id_for_thread, 50) {
+                match stream_logs(host.as_ref(), &id_for_thread, 50) {
                     Ok(mut stream) => {
                         let Some(mut lines_rx) = stream.take_lines() else { return };
                         let _ = tx.send(Ev::Started(id_for_thread));
@@ -259,10 +307,11 @@ impl DockerPanel {
         }
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let id_for_thread = id.clone();
+        let host = self.active_host();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match exec_container(&id_for_thread, None) {
+                match exec_container(host.as_ref(), &id_for_thread, None) {
                     Ok(mut sess) => {
                         let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
                         let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -395,11 +444,20 @@ impl DockerPanel {
 }
 
 impl Render for DockerPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let border = theme.border;
         let active_view = self.active_view.clone();
+
+        // Determine current host name for the indicator.
+        self.reload_hosts();
+        let active_host_name = self
+            .hosts
+            .iter()
+            .find(|h| h.id == self.active_host_id)
+            .map(|h| h.name.clone())
+            .unwrap_or_else(|| "本地 Docker".into());
 
         v_flex()
             .size_full()
@@ -414,6 +472,17 @@ impl Render for DockerPanel {
                     .border_b_1()
                     .border_color(border)
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Docker"))
+                    .child(
+                        // Host selector as a small button showing current connection
+                        Button::new("docker-host-select")
+                            .ghost()
+                            .xsmall()
+                            .label(active_host_name)
+                            .tooltip("点击管理 Docker 主机")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_view(View::Hosts, cx);
+                            })),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("docker-containers")
@@ -442,6 +511,16 @@ impl Render for DockerPanel {
                             })),
                     )
                     .child(
+                        Button::new("docker-hosts")
+                            .ghost()
+                            .small()
+                            .label("主机")
+                            .when(active_view == View::Hosts, |b| b.disabled(true))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_view(View::Hosts, cx);
+                            })),
+                    )
+                    .child(
                         Button::new("docker-reload")
                             .ghost()
                             .small()
@@ -459,6 +538,7 @@ impl Render for DockerPanel {
                 View::Images => self.render_images(&theme, cx).into_any_element(),
                 View::Logs => self.render_logs(&theme).into_any_element(),
                 View::Exec => self.render_exec(&theme).into_any_element(),
+                View::Hosts => self.render_hosts(&theme, window, cx).into_any_element(),
             })
     }
 }
@@ -582,7 +662,7 @@ impl DockerPanel {
                             .ghost()
                             .label("删除")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.container_action(cid_rm.clone(), |id| docker_remove(id, true), cx);
+                                this.container_action(cid_rm.clone(), |h, id| docker_remove(h, id, true), cx);
                             })),
                     )
             }))
@@ -722,6 +802,154 @@ impl DockerPanel {
                     .min_h_0()
                     .bg(theme.muted)
                     .children(self.exec_terminal.clone().map(|t| t.into_any_element())),
+            )
+            .into_any_element()
+    }
+
+    fn render_hosts(
+        &mut self,
+        theme: &gpui_component::Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = theme.muted_foreground;
+        let border = theme.border;
+        let active_id = self.active_host_id.clone();
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .p_4()
+            .gap_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("Docker 主机管理"))
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("docker-add-host")
+                            .small()
+                            .primary()
+                            .icon(IconName::Plus)
+                            .label("添加主机")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                docker_host_dialog::open_dialog(
+                                    None,
+                                    |_host: DockerHost, _window, _cx| {},
+                                    window,
+                                    cx,
+                                );
+                                this.reload_hosts();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .children(self.error.as_ref().map(|e| {
+                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+            }))
+            .child(
+                v_flex()
+                    .id("docker-hosts-scroll")
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_2()
+                    .children(self.hosts.iter().map(|h| {
+                        let is_active = h.id == active_id;
+                        let id = h.id.clone();
+                        let id_connect = h.id.clone();
+                        let id_edit = h.id.clone();
+                        let id_delete = h.id.clone();
+                        let is_local = h.is_local();
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .p_3()
+                            .border_1()
+                            .border_color(border)
+                            .rounded_md()
+                            .bg(if is_active { theme.accent.opacity(0.15) } else { Hsla::transparent_black() })
+                            .child(
+                                v_flex()
+                                    .gap_0p5()
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(h.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(muted)
+                                            .child(if h.host.is_empty() { "(本地 daemon)".to_string() } else { h.host.clone() }),
+                                    ),
+                            )
+                            .when(is_active, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded_sm()
+                                        .bg(theme.primary.opacity(0.2))
+                                        .text_color(theme.primary)
+                                        .child("已连接"),
+                                )
+                            })
+                            .when(!is_active, |d| {
+                                d.child(
+                                    Button::new(format!("docker-host-connect-{}", id_connect))
+                                        .xsmall()
+                                        .primary()
+                                        .ghost()
+                                        .label("连接")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.switch_host(id_connect.clone(), cx);
+                                            this.set_view(View::Containers, cx);
+                                            this.reload_containers(cx);
+                                        })),
+                                )
+                            })
+                            .when(!is_local, |d| {
+                                d.child(
+                                    Button::new(format!("docker-host-edit-{}", id_edit))
+                                        .xsmall()
+                                        .ghost()
+                                        .label("编辑")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            let editing = find_host(&id_edit);
+                                            if let Some(host) = editing {
+                                                let host_clone = host.clone();
+                                                docker_host_dialog::open_dialog(
+                                                    Some(&host_clone),
+                                                    |_h: DockerHost, _window, _cx| {},
+                                                    window,
+                                                    cx,
+                                                );
+                                                this.reload_hosts();
+                                                cx.notify();
+                                            }
+                                        })),
+                                )
+                                .child(
+                                    Button::new(format!("docker-host-delete-{}", id_delete))
+                                        .xsmall()
+                                        .ghost()
+                                        .label("删除")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            remove_host(&id_delete);
+                                            this.reload_hosts();
+                                            if this.active_host_id == id_delete {
+                                                this.switch_host("local".into(), cx);
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                    })),
             )
             .into_any_element()
     }

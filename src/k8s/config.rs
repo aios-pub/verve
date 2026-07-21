@@ -7,9 +7,9 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct KubeConfig {
     #[serde(default)]
     pub clusters: Vec<NamedCluster>,
@@ -21,49 +21,59 @@ pub struct KubeConfig {
     pub current_context: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NamedCluster {
     pub name: String,
     pub cluster: Cluster,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cluster {
     pub server: String,
     #[serde(rename = "insecure-skip-tls-verify", default)]
     pub insecure_skip_tls_verify: bool,
+    #[serde(rename = "certificate-authority-data", default, skip_serializing_if = "Option::is_none")]
+    pub ca_data: Option<String>,
+    #[serde(rename = "certificate-authority", default, skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NamedContext {
     pub name: String,
     pub context: Context,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Context {
     pub cluster: String,
     pub user: Option<String>,
     pub namespace: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NamedUser {
     pub name: String,
     #[serde(default)]
     pub user: UserEntry,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct UserEntry {
-    #[serde(rename = "client-certificate-data", default)]
+    #[serde(rename = "client-certificate-data", default, skip_serializing_if = "Option::is_none")]
     pub cert_data: Option<String>,
-    #[serde(rename = "client-key-data", default)]
+    #[serde(rename = "client-key-data", default, skip_serializing_if = "Option::is_none")]
     pub key_data: Option<String>,
-    #[serde(rename = "token", default)]
+    #[serde(rename = "client-certificate", default, skip_serializing_if = "Option::is_none")]
+    pub cert_file: Option<String>,
+    #[serde(rename = "client-key", default, skip_serializing_if = "Option::is_none")]
+    pub key_file: Option<String>,
+    #[serde(rename = "token", default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    #[serde(rename = "username", default)]
+    #[serde(rename = "username", default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    #[serde(rename = "password", default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 /// Locate the kubeconfig path: $KUBECONFIG if set, else ~/.kube/config.
@@ -88,6 +98,52 @@ pub fn load_default() -> KubeConfig {
         Ok(raw) => serde_yaml::from_str(&raw).unwrap_or_default(),
         Err(_) => KubeConfig::default(),
     }
+}
+
+/// Load and merge kubeconfigs: the system default (~/.kube/config) and the
+/// Verve-managed file (~/.verve/kube_config.yaml). The Verve entries take
+/// priority on name collisions (clusters/contexts/users with the same name
+/// from the Verve file override the system ones).
+pub fn load_merged() -> KubeConfig {
+    use crate::k8s::clusters::verve_kubeconfig_path;
+
+    let mut merged = load_default();
+
+    // Load the Verve-managed kubeconfig if present.
+    let verve_path = verve_kubeconfig_path();
+    if let Ok(raw) = std::fs::read_to_string(&verve_path) {
+        if let Ok(verve_cfg) = serde_yaml::from_str::<KubeConfig>(&raw) {
+            // Merge clusters: verve wins on name collision.
+            for c in verve_cfg.clusters {
+                if let Some(pos) = merged.clusters.iter().position(|x| x.name == c.name) {
+                    merged.clusters[pos] = c;
+                } else {
+                    merged.clusters.push(c);
+                }
+            }
+            // Merge users.
+            for u in verve_cfg.users {
+                if let Some(pos) = merged.users.iter().position(|x| x.name == u.name) {
+                    merged.users[pos] = u;
+                } else {
+                    merged.users.push(u);
+                }
+            }
+            // Merge contexts.
+            for ctx in verve_cfg.contexts {
+                if let Some(pos) = merged.contexts.iter().position(|x| x.name == ctx.name) {
+                    merged.contexts[pos] = ctx;
+                } else {
+                    merged.contexts.push(ctx);
+                }
+            }
+            // Keep the current-context from verve if set, otherwise the default one.
+            if !verve_cfg.current_context.is_empty() {
+                merged.current_context = verve_cfg.current_context;
+            }
+        }
+    }
+    merged
 }
 
 impl KubeConfig {

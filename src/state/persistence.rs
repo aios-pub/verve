@@ -145,7 +145,7 @@ pub fn set_active_workspace(id: &str) {
 
 /// The `.gitignore` content excluding cross-branch / non-data files from git.
 const GITIGNORE: &str =
-    "workspaces.json\nlayout.json\nshares.json\nssh_hosts.json\n.verve-askpass.sh\nexports/\n";
+    "workspaces.json\nlayout.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into
@@ -160,6 +160,8 @@ pub fn ensure_gitignore() {
             !existing.contains("workspaces.json")
                 || !existing.contains("shares.json")
                 || !existing.contains("ssh_hosts.json")
+                || !existing.contains("docker_hosts.json")
+                || !existing.contains("kube_config.yaml")
         }
         Err(_) => true,
     };

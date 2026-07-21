@@ -15,6 +15,10 @@ pub struct NotesPanel {
     store: NotesStore,
     editor: Entity<InputState>,
     search: Entity<InputState>,
+    title_input: Entity<InputState>,
+    /// The note id currently being renamed inline (shown as an Input in the
+    /// header). `None` when no title edit is in progress.
+    editing_title_id: Option<String>,
     pending_delete: Option<String>,
     save_timer: Option<Task<()>>,
     _subs: Vec<Subscription>,
@@ -36,6 +40,12 @@ impl NotesPanel {
             input
         });
 
+        let title_input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx);
+            input.set_value(String::new(), window, cx);
+            input
+        });
+
         let initial_content = store
             .active_note
             .as_ref()
@@ -48,15 +58,18 @@ impl NotesPanel {
 
         let editor_sub = cx.subscribe(&editor, Self::on_editor_event);
         let search_sub = cx.subscribe(&search, Self::on_search_event);
+        let title_sub = cx.subscribe(&title_input, Self::on_title_event);
 
         Self {
             state,
             store,
             editor,
             search,
+            title_input,
+            editing_title_id: None,
             pending_delete: None,
             save_timer: None,
-            _subs: vec![editor_sub, search_sub],
+            _subs: vec![editor_sub, search_sub, title_sub],
         }
     }
 
@@ -77,6 +90,53 @@ impl NotesPanel {
         _event: &InputEvent,
         cx: &mut Context<Self>,
     ) {
+        cx.notify();
+    }
+
+    /// Title-input events: commit on Enter, cancel on Blur.
+    fn on_title_event(
+        &mut self,
+        _: Entity<InputState>,
+        event: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::PressEnter { .. } => {
+                self.commit_title_edit(cx);
+            }
+            InputEvent::Blur => {
+                self.commit_title_edit(cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn commit_title_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.editing_title_id.take() else {
+            return;
+        };
+        let new_title = self.title_input.read(cx).value().to_string();
+        notes::update_note_title(&mut self.store, &id, new_title);
+        let _ = crate::state::persistence::save_notes(&self.store);
+        self.state.update(cx, |s, cx| {
+            s.dirty = true;
+            cx.emit(AppEvent::Persisted);
+        });
+        cx.notify();
+    }
+
+    fn start_title_edit(
+        &mut self,
+        id: &str,
+        current: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editing_title_id = Some(id.to_string());
+        self.title_input.update(cx, |s, cx| {
+            s.set_value(current.to_string(), window, cx);
+            s.focus(window, cx);
+        });
         cx.notify();
     }
 
@@ -105,18 +165,23 @@ impl NotesPanel {
     }
 
     fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        notes::create_note(&mut self.store, String::new());
-        if let Some(note) = self.store.notes.first() {
-            self.store.active_note = Some(note.id.clone());
-            self.editor.update(cx, |e, cx| {
-                e.set_value(note.content.clone(), window, cx);
-            });
-        }
+        let note = notes::create_note(&mut self.store, String::new());
+        let new_id = note.id.clone();
+        self.store.active_note = Some(new_id.clone());
+        self.editor.update(cx, |e, cx| {
+            e.set_value(String::new(), window, cx);
+        });
         let _ = crate::state::persistence::save_notes(&self.store);
-        cx.notify();
+        // Immediately enter title-editing mode for the new note so the user
+        // can type a name without an extra click.
+        self.start_title_edit(&new_id, "", window, cx);
     }
 
     fn select_note(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Commit any in-progress title edit before switching notes.
+        if self.editing_title_id.is_some() {
+            self.commit_title_edit(cx);
+        }
         self.save_current(cx);
         self.store.active_note = Some(id.to_string());
         if let Some(note) = self.store.notes.iter().find(|n| n.id == id) {
@@ -128,6 +193,9 @@ impl NotesPanel {
     }
 
     fn delete_note(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_title_id.is_some() {
+            self.commit_title_edit(cx);
+        }
         notes::delete_note(&mut self.store, id);
         if let Some(note) = self.store.notes.first() {
             self.store.active_note = Some(note.id.clone());
@@ -354,27 +422,20 @@ impl NotesPanel {
             .into_any_element()
     }
 
-    fn render_editor(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let mode = self.store.view_mode.clone();
         let editor_content = self.editor.read(cx).value().to_string();
 
-        let title_text = match &self.store.active_note {
-            Some(id) => self
-                .store
-                .notes
-                .iter()
-                .find(|n| &n.id == id)
-                .map(|n| {
-                    if n.title.is_empty() {
-                        rust_i18n::t!("notes.untitled").to_string()
-                    } else {
-                        n.title.clone()
-                    }
-                })
-                .unwrap_or_default(),
-            None => rust_i18n::t!("notes.empty_editor").to_string(),
-        };
+        let active_id = self.store.active_note.clone();
+        let active_note = active_id.as_deref().and_then(|id| {
+            self.store.notes.iter().find(|n| n.id == id)
+        });
+
+        // If we're actively editing the title of the current note, render an
+        // Input in the header; otherwise render the display title (clickable
+        // to start editing).
+        let editing_active = matches!(&self.editing_title_id, Some(eid) if Some(eid.as_str()) == active_id.as_deref());
 
         let mode_split = mode == "split";
         let mode_edit = mode == "edit";
@@ -420,17 +481,50 @@ impl NotesPanel {
             .flex_1()
             .min_w_0()
             .h_full()
-            .child(
-                div()
+            .child({
+                let header = h_flex()
                     .w_full()
                     .px_3()
                     .py_2()
                     .border_b_1()
-                    .border_color(theme.border)
-                    .text_size(px(13.))
-                    .text_color(theme.muted_foreground)
-                    .child(title_text),
-            )
+                    .border_color(theme.border);
+                if editing_active {
+                    header.child(
+                        Input::new(&self.title_input)
+                            .w_full()
+                            .small()
+                            .appearance(false),
+                    )
+                } else {
+                    let (title_display, current_title) = match &active_note {
+                        Some(n) if !n.title.is_empty() => (n.title.clone(), n.title.clone()),
+                        Some(_) => (
+                            rust_i18n::t!("notes.untitled").to_string(),
+                            String::new(),
+                        ),
+                        None => (rust_i18n::t!("notes.empty_editor").to_string(), String::new()),
+                    };
+                    let can_edit = active_note.is_some();
+                    let nid = active_id.clone().unwrap_or_default();
+                    header
+                        .cursor_pointer()
+                        .when(can_edit, |d| {
+                            d.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.start_title_edit(&nid, &current_title, window, cx);
+                                }),
+                            )
+                        })
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(theme.muted_foreground)
+                                .truncate()
+                                .child(title_display),
+                        )
+                }
+            })
             .child(
                 h_flex()
                     .w_full()
@@ -480,7 +574,7 @@ impl NotesPanel {
 }
 
 impl Render for NotesPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
         let mut root = div()
@@ -493,7 +587,7 @@ impl Render for NotesPanel {
                     .w_full()
                     .h_full()
                     .child(self.render_note_list(cx))
-                    .child(self.render_editor(cx)),
+                    .child(self.render_editor(window, cx)),
             );
 
         if let Some(id) = &self.pending_delete {

@@ -2104,6 +2104,7 @@ impl VerveApp {
     /// If target is None, move to end of list.
     fn apply_rail_drop(&mut self, dragged_name: &str, target_name: Option<&str>, cx: &mut Context<Self>) {
         let mut order = self.rail_order.clone();
+        // Don't drop on top of yourself.
         order.retain(|n| n != dragged_name);
         match target_name {
             Some(target) => {
@@ -2121,6 +2122,16 @@ impl VerveApp {
             s.dirty = true;
             cx.emit(AppEvent::Persisted);
         });
+    }
+
+    /// Track the drop target as the cursor hovers items during a drag — this
+    /// updates the live indicator and guarantees the drop target is in sync
+    /// with what the user sees.
+    fn set_rail_drop_target(&mut self, target: Option<String>, cx: &mut Context<Self>) {
+        if self.rail_drop_target != target {
+            self.rail_drop_target = target;
+            cx.notify();
+        }
     }
 
     /// The far-left vertical activity rail (postman-style icon sidebar).
@@ -2145,6 +2156,7 @@ impl VerveApp {
             })
             .collect();
 
+        let entity_cancel = entity.clone();
         v_flex()
             .w(px(44.))
             .flex_shrink_0()
@@ -2153,6 +2165,16 @@ impl VerveApp {
             .gap_1()
             .items_center()
             .bg(theme.muted)
+            // Catch-all drop: if the user releases over a non-target area
+            // (e.g. the brand mark, settings button, or empty gaps), just
+            // cancel the drag cleanly instead of leaving stale state.
+            .on_drop(move |_drag: &RailDrag, _window, cx: &mut App| {
+                let _ = entity_cancel.update(cx, |this, cx| {
+                    this.dragging_rail = None;
+                    this.rail_drop_target = None;
+                    cx.notify();
+                });
+            })
             // Brand mark "V"
             .child({
                 let p = theme.primary;
@@ -2206,16 +2228,30 @@ impl VerveApp {
                 };
 
                 let drop_name = view_name.clone();
+                let drop_name_hover = view_name.clone();
 
                 let drag_payload = RailDrag(view_name.clone());
                 let entity_drag = entity.clone();
                 let entity_drop = entity.clone();
+                let entity_hover = entity.clone();
 
                 div()
                     .id(format!("rail-{}", view.name()))
-                    .when(is_dragging, |d| d.opacity(0.9))
+                    .relative()
+                    .when(is_dragging, |d| d.opacity(0.4))
+                    // Draw a thick, vivid indicator line above the hovered item
+                    // (insert-before marker).
                     .when(is_drop_target, |d| {
-                        d.border_t_2().border_color(theme.primary)
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_1()
+                                .right_1()
+                                .h(px(3.))
+                                .rounded(px(2.))
+                                .bg(theme.primary),
+                        )
                     })
                     .on_drag(drag_payload, move |drag: &RailDrag, _pos, _window, cx| {
                         let _ = entity_drag.update(cx, |this, cx| {
@@ -2224,12 +2260,24 @@ impl VerveApp {
                         });
                         cx.new(|_| drag.clone())
                     })
+                    // Live hover tracking — update drop target as the cursor
+                    // moves so the indicator re-renders in real time.
+                    .on_hover(move |hovering: &bool, _window, cx: &mut App| {
+                        let target = drop_name_hover.clone();
+                        let _ = entity_hover.update(cx, |this, cx| {
+                            if *hovering && this.dragging_rail.is_some() {
+                                this.set_rail_drop_target(Some(target), cx);
+                            }
+                        });
+                    })
                     .on_drop(move |drag: &RailDrag, _window, cx: &mut App| {
                         let source = drag.0.clone();
                         let target = drop_name.clone();
                         let _ = entity_drop.update(cx, |this, cx| {
-                            let target_opt = if source == target { None } else { Some(target.as_str()) };
-                            this.apply_rail_drop(&source, target_opt, cx);
+                            // Only reorder when dropped onto a *different* item.
+                            if source != target {
+                                this.apply_rail_drop(&source, Some(target.as_str()), cx);
+                            }
                             this.dragging_rail = None;
                             this.rail_drop_target = None;
                             cx.notify();
@@ -2237,7 +2285,48 @@ impl VerveApp {
                     })
                     .child(btn)
             }))
-            .child(div().flex_1())
+            // End-of-list drop zone: fills the remaining space below the icons
+            // so dragging anywhere past the last item places the dragged item
+            // at the very end (fixes the "can't drag to last" bug).
+            .child({
+                let is_end_target = self.rail_drop_target.as_deref() == Some("__rail_end__");
+                let entity_end = entity.clone();
+                let entity_end_drop = entity.clone();
+                div()
+                    .id("rail-end-zone")
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(20.))
+                    .relative()
+                    .when(is_end_target, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_1()
+                                .right_1()
+                                .h(px(3.))
+                                .rounded(px(2.))
+                                .bg(theme.primary),
+                        )
+                    })
+                    .on_hover(move |hovering: &bool, _window, cx: &mut App| {
+                        let _ = entity_end.update(cx, |this, cx| {
+                            if *hovering && this.dragging_rail.is_some() {
+                                this.set_rail_drop_target(Some("__rail_end__".to_string()), cx);
+                            }
+                        });
+                    })
+                    .on_drop(move |drag: &RailDrag, _window, cx: &mut App| {
+                        let source = drag.0.clone();
+                        let _ = entity_end_drop.update(cx, |this, cx| {
+                            this.apply_rail_drop(&source, None, cx);
+                            this.dragging_rail = None;
+                            this.rail_drop_target = None;
+                            cx.notify();
+                        });
+                    })
+            })
             // Separator + Settings + theme picker.
             .child(
                 div()

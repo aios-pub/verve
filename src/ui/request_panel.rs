@@ -946,10 +946,13 @@ impl RequestPanel {
                 .params_rows
                 .iter()
                 .filter(|kv| kv.enabled)
-                .map(|kv| {
+                .filter_map(|kv| {
                     let k = kv.key.read(cx).value().to_string();
+                    if k.trim().is_empty() {
+                        return None;
+                    }
                     let v = kv.value.read(cx).value().to_string();
-                    format!("{}={}", k, v)
+                    Some(format!("{}={}", k, v))
                 })
                 .collect();
             if !query_pairs.is_empty() {

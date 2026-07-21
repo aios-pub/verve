@@ -134,6 +134,14 @@ impl ShareConfig {
             self.title.clone()
         }
     }
+
+    /// Prefix the share id with a tenant namespace for multi-tenant isolation.
+    pub fn with_tenant(mut self, tenant: &str) -> Self {
+        if !self.id.contains('/') {
+            self.id = format!("{tenant}/{}", self.id);
+        }
+        self
+    }
 }
 
 /// What a share covers.

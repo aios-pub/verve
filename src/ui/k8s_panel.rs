@@ -97,6 +97,65 @@ impl K8sPanel {
         cx.notify();
     }
 
+    /// Display name of the active kubectl context, for the title-bar badge.
+    pub fn active_context_display(&self) -> String {
+        self.current_context_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "(未配置)".into())
+    }
+
+    /// Number of configured contexts (clusters), for the title-bar badge.
+    pub fn context_count(&self) -> usize {
+        self.cfg.contexts.len()
+    }
+
+    /// Number of active port-forwards, shown in the Forwards tab label.
+    pub fn forward_count(&self) -> usize {
+        self.forwards.len()
+    }
+
+    /// Which sub-view is currently active (for title-bar tab highlighting).
+    pub fn current_view(&self) -> &'static str {
+        match self.active_view {
+            View::Pods => "pods",
+            View::Contexts => "contexts",
+            View::Forwards => "forwards",
+            View::Logs | View::Exec => "pods",
+        }
+    }
+
+    /// Switch to the pods view and reload if empty.
+    pub fn show_pods(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Pods, cx);
+        if self.pods.is_empty() && !self.pods_loading {
+            self.reload_pods(cx);
+        }
+    }
+
+    /// Switch to the contexts view.
+    pub fn show_contexts(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Contexts, cx);
+    }
+
+    /// Switch to the forwards view.
+    pub fn show_forwards(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Forwards, cx);
+    }
+
+    /// Refresh the current view (contexts/pods).
+    pub fn refresh_current(&mut self, cx: &mut Context<Self>) {
+        match self.active_view {
+            View::Contexts => self.refresh_config(cx),
+            View::Pods => self.reload_pods(cx),
+            _ => cx.notify(),
+        }
+    }
+
+    /// Open the kubeconfig import dialog from the title bar.
+    pub fn open_import_kubeconfig(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.import_kubeconfig_dialog(window, cx);
+    }
+
     /// Return the current context name (passed as --context to kubectl).
     fn current_context_name(&self) -> Option<&str> {
         let name = &self.cfg.current_context;
@@ -503,78 +562,13 @@ impl Render for K8sPanel {
             self.namespace_input = Some(ns);
         }
         let theme = cx.theme().clone();
-        let muted = theme.muted_foreground;
-        let border = theme.border;
-
-        let active_ctx = self.cfg.active_context().cloned();
-        let active_server = active_ctx
-            .as_ref()
-            .and_then(|c| self.cfg.cluster_for(&c.name))
-            .map(|cl| cl.server.clone())
-            .unwrap_or_else(|| "(未配置)".into());
-        let active_name = self.cfg.current_context.clone();
 
         let ns_input = self.namespace_input.as_ref().unwrap().clone();
         let pods_loading = self.pods_loading;
-        let active_view = self.active_view.clone();
-        let _active_server = active_server.clone();
 
         v_flex()
             .size_full()
             .min_h_0()
-            .child(
-                h_flex()
-                    .h(px(44.))
-                    .px_4()
-                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Kubernetes"))
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("k8s-pods")
-                            .ghost()
-                            .small()
-                            .label("Pods")
-                            .disabled(active_view == View::Pods)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_view(View::Pods, cx);
-                                if this.pods.is_empty() && !this.pods_loading {
-                                    this.reload_pods(cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("k8s-ctx")
-                            .ghost()
-                            .small()
-                            .label("Contexts")
-                            .disabled(active_view == View::Contexts)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_view(View::Contexts, cx))),
-                    )
-                    .child(
-                        Button::new("k8s-fwd")
-                            .ghost()
-                            .small()
-                            .label(&format!("转发 ({})", self.forwards.len()))
-                            .disabled(active_view == View::Forwards)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_view(View::Forwards, cx))),
-                    )
-                    .child(
-                        Button::new("k8s-refresh")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Loader)
-                            .label("刷新")
-                            .on_click(cx.listener(|this, _, _, cx| match this.active_view {
-                                View::Contexts => this.refresh_config(cx),
-                                View::Pods => this.reload_pods(cx),
-                                _ => cx.notify(),
-                            })),
-                    ),
-            )
             .child(match self.active_view {
                 View::Contexts => self.render_contexts(&theme, cx).into_any_element(),
                 View::Pods => self.render_pods(&theme, ns_input.clone(), pods_loading, cx).into_any_element(),

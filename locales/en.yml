@@ -36,6 +36,17 @@ settings:
   activity_bar_desc: Choose which modules appear in the left activity rail. Hidden modules are still accessible via the home button.
   show: Show
   hide: Hide
+  sync_interval: Git Auto-sync Interval
+  sync_interval_desc: How often to auto-commit and sync with the remote repository
+  minutes: min
+  remote: Remote Service
+  remote_enable: Enable Remote Access
+  remote_enable_desc: Allow LAN/public access to shared document server
+  remote_host: Bind Address
+  remote_address: Remote Service Address
+  remote_address_desc: Publicly accessible address (domain or IP:port). Leave empty to use bind address.
+  remote_address_ph: "e.g. example.com or 192.168.1.100:3097"
+  remote_restart_hint: Restart the app after changing bind address or port.
 
 update:
   title: Check for Updates

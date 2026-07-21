@@ -193,6 +193,97 @@ pub fn openapi_v3(json: &str) -> anyhow::Result<Project> {
     Ok(project)
 }
 
+/// A minimal slice of a Swagger / OpenAPI 2.0 document — enough to enumerate
+/// operations. Same shape as OpenAPI 3 for paths but with host/basePath/schemes
+/// instead of servers[].
+#[derive(serde::Deserialize)]
+struct SwaggerDoc {
+    info: Option<OpenApiInfo>,
+    #[serde(default)]
+    paths: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    basePath: Option<String>,
+    #[serde(default)]
+    schemes: Vec<String>,
+}
+
+/// Convert a Swagger / OpenAPI 2.0 JSON document into a Verve project.
+pub fn swagger_v2(json: &str) -> anyhow::Result<Project> {
+    let doc: SwaggerDoc = serde_json::from_str(json)?;
+    let name = doc
+        .info
+        .as_ref()
+        .and_then(|i| i.title.clone())
+        .unwrap_or_else(|| "Imported Swagger".to_string());
+    let mut project = Project::new(name);
+    project.description = doc.info.and_then(|i| i.description).unwrap_or_default();
+
+    // Build a baseUrl from host/basePath/schemes.
+    let scheme = doc.schemes.first().map(|s| s.as_str()).unwrap_or("https");
+    let host = doc.host.unwrap_or_default();
+    let base_path = doc.basePath.unwrap_or_default();
+    let base_url = if !host.is_empty() {
+        format!("{scheme}://{host}{base_path}")
+    } else {
+        String::new()
+    };
+    if !base_url.is_empty() {
+        let mut env = Environment::new("Imported");
+        env.variables = vec![KeyValue::new("baseUrl", base_url.clone())];
+        project.environments = vec![env.clone()];
+        project.active_environment = Some(env.id);
+    }
+
+    let mut by_tag: std::collections::BTreeMap<String, Vec<ApiRequest>> =
+        std::collections::BTreeMap::new();
+
+    for (path, value) in &doc.paths {
+        let obj = match value.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        for (method_str, op) in obj {
+            let method = match RequestMethod::parse(method_str) {
+                Some(m) => m,
+                None => continue,
+            };
+            let tag = op
+                .get("tags")
+                .and_then(|t| t.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                .unwrap_or("Default")
+                .to_string();
+            let op_id = op
+                .get("operationId")
+                .and_then(|v| v.as_str())
+                .or_else(|| op.get("summary").and_then(|v| v.as_str()))
+                .unwrap_or(method_str)
+                .to_string();
+            let url = if base_url.is_empty() {
+                path.clone()
+            } else {
+                format!("{{{{baseUrl}}}}{path}")
+            };
+            let req = ApiRequest::new(op_id, method, url);
+            by_tag.entry(tag).or_default().push(req);
+        }
+    }
+
+    project.folders = by_tag
+        .into_iter()
+        .map(|(tag, reqs)| {
+            let mut f = Folder::new(tag);
+            f.requests = reqs;
+            f
+        })
+        .collect();
+
+    Ok(project)
+}
+
 // ===========================================================================
 // postman (postman 7+ export format)
 // ===========================================================================

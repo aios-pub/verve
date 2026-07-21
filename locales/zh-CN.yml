@@ -36,6 +36,17 @@ settings:
   activity_bar_desc: 选择要在左侧活动栏显示的模块。被隐藏的模块仍可通过首页按钮访问。
   show: 显示
   hide: 隐藏
+  sync_interval: Git 自动同步间隔
+  sync_interval_desc: 设置 Git 自动提交和同步到远程仓库的时间间隔
+  minutes: 分钟
+  remote: 远程服务
+  remote_enable: 启用远程访问
+  remote_enable_desc: 允许局域网或公网访问分享的文档服务
+  remote_host: 绑定地址
+  remote_address: 远程服务地址
+  remote_address_desc: 对外展示的访问地址（域名或 IP:端口），留空则使用绑定地址
+  remote_address_ph: 例如：example.com 或 192.168.1.100:3097
+  remote_restart_hint: 修改绑定地址或端口后请重启应用生效。
 
 update:
   title: 检查更新

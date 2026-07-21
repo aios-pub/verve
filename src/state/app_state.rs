@@ -76,9 +76,12 @@ impl AppState {
         let ws_idx = super::persistence::load_workspaces_index();
         let active_workspace_id = ws_idx.active.clone();
         let data = super::persistence::load_or_default();
+        let active_project = data.active_project_id.as_deref()
+            .and_then(|id| data.projects.iter().position(|p| &p.id == id))
+            .unwrap_or(0);
         let entity: Entity<Self> = cx.new(|_| Self {
             data,
-            active_project: 0,
+            active_project,
             active_workspace_id,
             selected_request: None,
             selected_folder: None,
@@ -111,10 +114,11 @@ impl AppState {
     pub fn reload_from_disk(&mut self, active_workspace_id: Option<String>) {
         self.data = super::persistence::load_or_default();
         self.active_workspace_id = active_workspace_id;
-        // Clamp the project index; a different workspace may have fewer projects.
-        if self.active_project >= self.data.projects.len() {
-            self.active_project = self.data.projects.len().saturating_sub(1);
-        }
+        // Resolve the saved active project id to an index; fall back to clamping
+        // if the id isn't found (e.g. project was deleted on another branch).
+        self.active_project = self.data.active_project_id.as_deref()
+            .and_then(|id| self.data.projects.iter().position(|p| &p.id == id))
+            .unwrap_or_else(|| self.data.projects.len().saturating_sub(1));
         self.selected_request = None;
         self.selected_folder = None;
         self.sending = None;

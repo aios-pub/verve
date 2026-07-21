@@ -16,6 +16,8 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
+use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::select::{Select, SelectEvent, SelectState};
 
 use crate::assets::REFRESH_CW;
 use crate::state::persistence;
@@ -39,6 +41,8 @@ pub enum SettingsSection {
     General,
     /// Environment / global variable / cookie managers.
     Environments,
+    /// Remote document-sharing server settings.
+    Remote,
     /// About / version / update check.
     About,
 }
@@ -48,10 +52,17 @@ impl SettingsSection {
         match self {
             SettingsSection::General => rust_i18n::t!("settings.general").to_string(),
             SettingsSection::Environments => rust_i18n::t!("settings.environments").to_string(),
+            SettingsSection::Remote => rust_i18n::t!("settings.remote").to_string(),
             SettingsSection::About => rust_i18n::t!("settings.about").to_string(),
         }
     }
 }
+
+/// Preset sync intervals (minutes) shown in the dropdown.
+const SYNC_INTERVALS: [u32; 6] = [5, 10, 15, 30, 60, 120];
+
+/// Available UI languages: (locale code, display label).
+const LANGUAGES: [(&str, &str); 2] = [("zh-CN", "简体中文"), ("en", "English")];
 
 pub struct SettingsWindow {
     pub state: Entity<AppState>,
@@ -68,6 +79,19 @@ pub struct SettingsWindow {
     pub update_checking: bool,
     /// The result of the last update check (shown in the settings page).
     pub update_check_result: Option<crate::updater::UpdateCheckResult>,
+    /// Currently configured git auto-sync interval in minutes.
+    pub sync_interval_minutes: u32,
+    /// Remote document-sharing server configuration.
+    pub remote: crate::state::persistence::RemoteConfig,
+    /// Dropdown for the home-view (首页指向) selector.
+    pub home_view_select: Entity<SelectState<Vec<String>>>,
+    /// Dropdown for the git auto-sync interval selector.
+    pub sync_interval_select: Entity<SelectState<Vec<String>>>,
+    /// Dropdown for the interface language selector.
+    pub language_select: Entity<SelectState<Vec<String>>>,
+    /// Text input for the publicly-advertised remote service address.
+    pub remote_address_input: Entity<InputState>,
+    _subs: Vec<gpui::Subscription>,
 }
 
 impl SettingsWindow {
@@ -86,6 +110,66 @@ impl SettingsWindow {
             .and_then(|l| l.home_view.as_deref().map(SideView::parse))
             .unwrap_or(SideView::Api);
         let hidden_rails = persistence::load_hidden_rails();
+        let sync_interval_minutes = persistence::load_sync_interval_minutes();
+        let remote = persistence::load_remote_config();
+
+        // Build dropdowns.
+        let home_options: Vec<String> = SideView::ALL.iter().map(|v| v.label()).collect();
+        let home_idx = SideView::ALL.iter().position(|&v| v == home_view).unwrap_or(0);
+        let home_view_select = cx.new(|cx| {
+            SelectState::new(
+                home_options,
+                Some(gpui_component::IndexPath::new(home_idx)),
+                window,
+                cx,
+            )
+        });
+
+        let min_suffix = rust_i18n::t!("settings.minutes").to_string();
+        let sync_options: Vec<String> = SYNC_INTERVALS
+            .iter()
+            .map(|&m| format!("{} {}", m, min_suffix))
+            .collect();
+        let sync_idx = SYNC_INTERVALS
+            .iter()
+            .position(|&m| m == sync_interval_minutes)
+            .unwrap_or(3); // default to 30
+        let sync_interval_select = cx.new(|cx| {
+            SelectState::new(
+                sync_options,
+                Some(gpui_component::IndexPath::new(sync_idx)),
+                window,
+                cx,
+            )
+        });
+
+        let initial_addr = remote.public_host.clone().unwrap_or_default();
+        let remote_address_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(rust_i18n::t!("settings.remote_address_ph").to_string())
+                .default_value(&initial_addr)
+        });
+
+        let cur_locale = rust_i18n::locale().to_string();
+        let lang_options: Vec<String> = LANGUAGES.iter().map(|(_, label)| label.to_string()).collect();
+        let lang_idx = LANGUAGES
+            .iter()
+            .position(|(code, _)| *code == cur_locale || cur_locale.starts_with(code))
+            .unwrap_or(0);
+        let language_select = cx.new(|cx| {
+            SelectState::new(
+                lang_options,
+                Some(gpui_component::IndexPath::new(lang_idx)),
+                window,
+                cx,
+            )
+        });
+
+        let sub_home = cx.subscribe(&home_view_select, Self::on_home_view_change);
+        let sub_sync = cx.subscribe(&sync_interval_select, Self::on_sync_interval_change);
+        let sub_lang = cx.subscribe(&language_select, Self::on_language_change);
+        let sub_addr = cx.subscribe(&remote_address_input, Self::on_remote_address_change);
+
         Self {
             state,
             kind,
@@ -95,6 +179,13 @@ impl SettingsWindow {
             hidden_rails,
             update_checking: false,
             update_check_result: None,
+            sync_interval_minutes,
+            remote,
+            home_view_select,
+            sync_interval_select,
+            language_select,
+            remote_address_input,
+            _subs: vec![sub_home, sub_sync, sub_lang, sub_addr],
         }
     }
 
@@ -121,6 +212,78 @@ impl SettingsWindow {
         let mut layout = persistence::load_layout().unwrap_or_default();
         layout.locale = Some(locale.to_string());
         let _ = persistence::save_layout(&layout);
+    }
+
+    /// React to the home-view dropdown changing selection.
+    fn on_home_view_change(
+        &mut self,
+        src: Entity<SelectState<Vec<String>>>,
+        _ev: &SelectEvent<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(idx) = src.read(cx).selected_index(cx) {
+            if let Some(&view) = SideView::ALL.get(idx.row) {
+                Self::save_home_view(view);
+                self.home_view = view;
+                cx.notify();
+            }
+        }
+    }
+
+    /// React to the sync-interval dropdown changing selection.
+    fn on_sync_interval_change(
+        &mut self,
+        src: Entity<SelectState<Vec<String>>>,
+        _ev: &SelectEvent<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(idx) = src.read(cx).selected_index(cx) {
+            if let Some(&mins) = SYNC_INTERVALS.get(idx.row) {
+                persistence::save_sync_interval_minutes(mins);
+                self.sync_interval_minutes = mins;
+                cx.notify();
+            }
+        }
+    }
+
+    /// React to the language dropdown changing selection.
+    fn on_language_change(
+        &mut self,
+        src: Entity<SelectState<Vec<String>>>,
+        _ev: &SelectEvent<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(idx) = src.read(cx).selected_index(cx) {
+            if let Some(&(code, _)) = LANGUAGES.get(idx.row) {
+                rust_i18n::set_locale(code);
+                Self::save_locale(code);
+                cx.notify();
+            }
+        }
+    }
+
+    /// React to the remote address input changing / losing focus — persist
+    /// the typed value as `public_host`.
+    fn on_remote_address_change(
+        &mut self,
+        src: Entity<InputState>,
+        ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(ev, InputEvent::Change | InputEvent::Blur) {
+            return;
+        }
+        let val = src.read(cx).value().trim().to_string();
+        let mut r = persistence::load_remote_config();
+        if val.is_empty() {
+            r.public_host = None;
+        } else {
+            r.public_host = Some(val);
+        }
+        persistence::save_remote_config(&r);
+        self.remote = r;
+        // No cx.notify() on every keystroke to avoid re-render loops; the
+        // render path already re-reads persisted config if it changed on disk.
     }
 
     /// Trigger a manual update check from the settings page.
@@ -154,7 +317,74 @@ impl Render for SettingsWindow {
         let notification_layer = gpui_component::Root::render_notification_layer(window, cx);
 
         let active = self.active_section;
-        let current_home = self.home_view;
+        // Re-read persisted settings on each render so external changes (or
+        // click handlers that write directly to disk) are reflected instantly.
+        if let Some(layout) = persistence::load_layout() {
+            if let Some(name) = layout.home_view.as_deref() {
+                let parsed = SideView::parse(name);
+                if parsed != self.home_view {
+                    self.home_view = parsed;
+                }
+            }
+        }
+        let new_hidden = persistence::load_hidden_rails();
+        if new_hidden != self.hidden_rails {
+            self.hidden_rails = new_hidden;
+        }
+        let new_sync = persistence::load_sync_interval_minutes();
+        if new_sync != self.sync_interval_minutes {
+            self.sync_interval_minutes = new_sync;
+        }
+        let new_remote = persistence::load_remote_config();
+        if new_remote != self.remote {
+            self.remote = new_remote;
+        }
+
+        // Keep the dropdown selections in sync with persisted state when it
+        // changes from outside this window.
+        let home_idx = SideView::ALL
+            .iter()
+            .position(|&v| v == self.home_view)
+            .unwrap_or(0);
+        self.home_view_select.update(cx, |s, cx| {
+            let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
+            if cur != home_idx {
+                s.set_selected_index(
+                    Some(gpui_component::IndexPath::new(home_idx)),
+                    window,
+                    cx,
+                );
+            }
+        });
+        let sync_idx = SYNC_INTERVALS
+            .iter()
+            .position(|&m| m == self.sync_interval_minutes)
+            .unwrap_or(3);
+        self.sync_interval_select.update(cx, |s, cx| {
+            let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
+            if cur != sync_idx {
+                s.set_selected_index(
+                    Some(gpui_component::IndexPath::new(sync_idx)),
+                    window,
+                    cx,
+                );
+            }
+        });
+        let cur_locale = rust_i18n::locale().to_string();
+        let lang_idx = LANGUAGES
+            .iter()
+            .position(|(code, _)| *code == cur_locale || cur_locale.starts_with(code))
+            .unwrap_or(0);
+        self.language_select.update(cx, |s, cx| {
+            let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
+            if cur != lang_idx {
+                s.set_selected_index(
+                    Some(gpui_component::IndexPath::new(lang_idx)),
+                    window,
+                    cx,
+                );
+            }
+        });
 
         v_flex()
             .size_full()
@@ -266,6 +496,31 @@ impl Render for SettingsWindow {
                                         cx.notify();
                                     }))
                             })
+                            // Remote nav item.
+                            .child({
+                                let is_active = active == SettingsSection::Remote;
+                                let fg = theme.foreground;
+                                let accent = theme.accent;
+                                let mf = muted;
+                                div()
+                                    .id("settings-nav-remote")
+                                    .px_2()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .when(is_active, |d| {
+                                        d.bg(accent.opacity(0.5)).text_color(fg)
+                                    })
+                                    .when(!is_active, |d| {
+                                        d.text_color(mf).hover(|s| s.bg(accent.opacity(0.2)))
+                                    })
+                                    .child(SettingsSection::Remote.label().to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_section = SettingsSection::Remote;
+                                        cx.notify();
+                                    }))
+                            })
                             // About nav item.
                             .child({
                                 let is_active = active == SettingsSection::About;
@@ -302,13 +557,16 @@ impl Render for SettingsWindow {
                             .child(match active {
                                 SettingsSection::General => {
                                     let theme_clone = theme.clone();
+                                    let home_sel = self.home_view_select.clone();
+                                    let sync_sel = self.sync_interval_select.clone();
+                                    let lang_sel = self.language_select.clone();
                                     v_flex()
                                         .size_full()
                                         .id("settings-general-scroll")
                                         .overflow_y_scroll()
                                         .p_6()
                                         .gap_6()
-                                        // Section: 首页指向
+                                        // Section: 首页指向 (dropdown)
                                         .child(
                                             v_flex()
                                                 .gap_2()
@@ -327,56 +585,10 @@ impl Render for SettingsWindow {
                                                         ),
                                                 )
                                                 .child(
-                                                    v_flex()
+                                                    div()
                                                         .mt_2()
-                                                        .gap(px(2.))
                                                         .w(px(340.))
-                                                        .children(SideView::ALL.iter().map(|&view| {
-                                                            let is_current = view == current_home;
-                                                            let tc = theme_clone.clone();
-                                                            let tc2 = theme_clone.clone();
-                                                            div()
-                                                                .id(format!("general-home-{}", view.name()))
-                                                                .px_3()
-                                                                .py_2()
-                                                                .rounded_md()
-                                                                .border_1()
-                                                                .cursor_pointer()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_2()
-                                                                .when(is_current, |d| {
-                                                                    d.border_color(tc.accent)
-                                                                        .bg(tc.accent.opacity(0.1))
-                                                                })
-                                                                .when(!is_current, |d| {
-                                                                    d.border_color(tc.border)
-                                                                        .hover(|s| s.bg(tc.muted))
-                                                                })
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .text_color(if is_current {
-                                                                            tc.foreground
-                                                                        } else {
-                                                                            tc.muted_foreground
-                                                                        })
-                                                                        .child(view.label().to_string()),
-                                                                )
-                                                                .child(div().flex_1())
-                                                                .when(is_current, |d| {
-                                                                    d.child(
-                                                                        div()
-                                                                            .text_xs()
-                                                                            .text_color(tc.accent)
-                                                                            .child(format!("✓ {}", rust_i18n::t!("settings.current"))),
-                                                                    )
-                                                                })
-                                                                .on_click(move |_, _window, _cx: &mut App| {
-                                                                    Self::save_home_view(view);
-                                                                    let _ = tc2;
-                                                                })
-                                                        })),
+                                                        .child(Select::new(&home_sel).small().appearance(true)),
                                                 ),
                                         )
                                         // Section: 界面语言 / Interface Language
@@ -396,104 +608,10 @@ impl Render for SettingsWindow {
                                                         .child(rust_i18n::t!("settings.language_desc").to_string()),
                                                 )
                                                 .child(
-                                                    v_flex()
+                                                    div()
                                                         .mt_2()
-                                                        .gap(px(2.))
                                                         .w(px(340.))
-                                                        .child({
-                                                            let cur = rust_i18n::locale().to_string();
-                                                            let is_zh = cur == "zh-CN" || cur.starts_with("zh");
-                                                            let tc3 = theme_clone.clone();
-                                                            div()
-                                                                .id("lang-zh")
-                                                                .px_3()
-                                                                .py_2()
-                                                                .rounded_md()
-                                                                .border_1()
-                                                                .cursor_pointer()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_2()
-                                                                .when(is_zh, |d| {
-                                                                    d.border_color(tc3.accent)
-                                                                        .bg(tc3.accent.opacity(0.1))
-                                                                })
-                                                                .when(!is_zh, |d| {
-                                                                    d.border_color(tc3.border)
-                                                                        .hover(|s| s.bg(tc3.muted))
-                                                                })
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .text_color(if is_zh {
-                                                                            tc3.foreground
-                                                                        } else {
-                                                                            tc3.muted_foreground
-                                                                        })
-                                                                        .child("简体中文"),
-                                                                )
-                                                                .child(div().flex_1())
-                                                                .when(is_zh, |d| {
-                                                                    d.child(
-                                                                        div()
-                                                                            .text_xs()
-                                                                            .text_color(tc3.accent)
-                                                                            .child(format!("✓ {}", rust_i18n::t!("settings.current"))),
-                                                                    )
-                                                                })
-                                                                .on_click(cx.listener(|_this, _event, _window, cx| {
-                                                                    rust_i18n::set_locale("zh-CN");
-                                                                    Self::save_locale("zh-CN");
-                                                                    cx.notify();
-                                                                }))
-                                                        })
-                                                        .child({
-                                                            let cur = rust_i18n::locale().to_string();
-                                                            let is_en = cur == "en" || cur.starts_with("en");
-                                                            let tc4 = theme_clone.clone();
-                                                            div()
-                                                                .id("lang-en")
-                                                                .px_3()
-                                                                .py_2()
-                                                                .rounded_md()
-                                                                .border_1()
-                                                                .cursor_pointer()
-                                                                .flex()
-                                                                .items_center()
-                                                                .gap_2()
-                                                                .when(is_en, |d| {
-                                                                    d.border_color(tc4.accent)
-                                                                        .bg(tc4.accent.opacity(0.1))
-                                                                })
-                                                                .when(!is_en, |d| {
-                                                                    d.border_color(tc4.border)
-                                                                        .hover(|s| s.bg(tc4.muted))
-                                                                })
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .text_color(if is_en {
-                                                                            tc4.foreground
-                                                                        } else {
-                                                                            tc4.muted_foreground
-                                                                        })
-                                                                        .child("English"),
-                                                                )
-                                                                .child(div().flex_1())
-                                                                .when(is_en, |d| {
-                                                                    d.child(
-                                                                        div()
-                                                                            .text_xs()
-                                                                            .text_color(tc4.accent)
-                                                                            .child(format!("✓ {}", rust_i18n::t!("settings.current"))),
-                                                                    )
-                                                                })
-                                                                .on_click(cx.listener(|_this, _event, _window, cx| {
-                                                                    rust_i18n::set_locale("en");
-                                                                    Self::save_locale("en");
-                                                                    cx.notify();
-                                                                }))
-                                                        }),
+                                                        .child(Select::new(&lang_sel).small().appearance(true)),
                                                 ),
                                         )
                                         // Section: 活动栏显示 / Activity Bar Items
@@ -571,6 +689,29 @@ impl Render for SettingsWindow {
                                                         }),
                                                 )
                                         )
+                                        // Section: Git 自动同步间隔 (dropdown)
+                                        .child({
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_base()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(rust_i18n::t!("settings.sync_interval").to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(muted)
+                                                        .child(rust_i18n::t!("settings.sync_interval_desc").to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .mt_2()
+                                                        .w(px(340.))
+                                                        .child(Select::new(&sync_sel).small().appearance(true)),
+                                                )
+                                        })
                                         .into_any_element()
                                 }
                                 SettingsSection::Environments => {
@@ -579,12 +720,175 @@ impl Render for SettingsWindow {
                                         .child(self.envs_view.clone())
                                         .into_any_element()
                                 }
+                                SettingsSection::Remote => {
+                                    let remote = self.remote.clone();
+                                    let tc = theme.clone();
+                                    let addr_input = self.remote_address_input.clone();
+                                    v_flex()
+                                        .size_full()
+                                        .id("settings-remote-scroll")
+                                        .overflow_y_scroll()
+                                        .p_6()
+                                        .gap_6()
+                                        // Enable toggle
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_base()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(rust_i18n::t!("settings.remote_enable").to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(muted)
+                                                        .child(rust_i18n::t!("settings.remote_enable_desc").to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .mt_2()
+                                                        .w(px(340.))
+                                                        .child(
+                                                            div()
+                                                                .id("remote-enable-toggle")
+                                                                .px_3()
+                                                                .py_2()
+                                                                .rounded_md()
+                                                                .border_1()
+                                                                .cursor_pointer()
+                                                                .flex()
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .when(remote.enabled, |d| {
+                                                                    d.border_color(tc.accent)
+                                                                        .bg(tc.accent.opacity(0.1))
+                                                                })
+                                                                .when(!remote.enabled, |d| {
+                                                                    d.border_color(tc.border)
+                                                                        .hover(|s| s.bg(tc.muted))
+                                                                })
+                                                                .child(
+                                                                    div()
+                                                                        .text_sm()
+                                                                        .text_color(if remote.enabled { tc.foreground } else { tc.muted_foreground })
+                                                                        .child(if remote.enabled { "✓ 已启用" } else { "已禁用" }),
+                                                                )
+                                                                .child(div().flex_1())
+                                                                .on_click(move |_: &gpui::ClickEvent, _window, _cx: &mut App| {
+                                                                    let mut r = persistence::load_remote_config();
+                                                                    r.enabled = !r.enabled;
+                                                                    persistence::save_remote_config(&r);
+                                                                })
+                                                        )
+                                                )
+                                        )
+                                        // Bind address
+                                        .when(remote.enabled, |p| {
+                                            p.child(
+                                                v_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_base()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .child(rust_i18n::t!("settings.remote_host").to_string()),
+                                                    )
+                                                    .child(
+                                                        v_flex()
+                                                            .mt_2()
+                                                            .gap(px(2.))
+                                                            .w(px(340.))
+                                                            .children([
+                                                                ("127.0.0.1", "仅本地 (127.0.0.1)"),
+                                                                ("0.0.0.0", "所有网络接口 (0.0.0.0)"),
+                                                            ].iter().map(|&(addr, label)| {
+                                                                let is_active = remote.host == addr;
+                                                                let tc2 = tc.clone();
+                                                                div()
+                                                                    .id(format!("remote-host-{}", addr))
+                                                                    .px_3()
+                                                                    .py_2()
+                                                                    .rounded_md()
+                                                                    .border_1()
+                                                                    .cursor_pointer()
+                                                                    .flex()
+                                                                    .items_center()
+                                                                    .gap_2()
+                                                                    .when(is_active, |d| {
+                                                                        d.border_color(tc2.accent)
+                                                                            .bg(tc2.accent.opacity(0.1))
+                                                                    })
+                                                                    .when(!is_active, |d| {
+                                                                        d.border_color(tc2.border)
+                                                                            .hover(|s| s.bg(tc2.muted))
+                                                                    })
+                                                                    .child(
+                                                                        div()
+                                                                            .text_sm()
+                                                                            .text_color(if is_active { tc2.foreground } else { tc2.muted_foreground })
+                                                                            .child(label),
+                                                                    )
+                                                                    .child(div().flex_1())
+                                                                    .when(is_active, |d| {
+                                                                        d.child(
+                                                                            div()
+                                                                                .text_xs()
+                                                                                .text_color(tc2.accent)
+                                                                                .child(format!("✓ {}", rust_i18n::t!("settings.current"))),
+                                                                        )
+                                                                    })
+                                                                    .on_click(move |_, _window, _cx: &mut App| {
+                                                                        let mut r = persistence::load_remote_config();
+                                                                        r.host = addr.to_string();
+                                                                        persistence::save_remote_config(&r);
+                                                                    })
+                                                            }))
+                                                    )
+                                            )
+                                        })
+                                        // Remote service address (public host) input
+                                        .when(remote.enabled, |p| {
+                                            p.child(
+                                                v_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .text_base()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .child(rust_i18n::t!("settings.remote_address").to_string()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(muted)
+                                                            .child(rust_i18n::t!("settings.remote_address_desc").to_string()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .mt_2()
+                                                            .w(px(340.))
+                                                            .child(Input::new(&addr_input).small())
+                                                    )
+                                            )
+                                        })
+                                        // Help text
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child(rust_i18n::t!("settings.remote_restart_hint").to_string())
+                                        )
+                                        .into_any_element()
+                                }
                                 SettingsSection::About => {
                                     let theme_clone = theme.clone();
                                     let checking = self.update_checking;
                                     let result = self.update_check_result.clone();
                                     let accent = theme.accent;
                                     let muted_f = muted;
+                                    let repo_url = format!("https://github.com/{}", crate::updater::REPO);
 
                                     v_flex()
                                         .size_full()
@@ -612,13 +916,25 @@ impl Render for SettingsWindow {
                                                         )),
                                                 )
                                                 .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(muted_f)
-                                                        .child(format!(
-                                                            "GitHub: {}",
-                                                            crate::updater::REPO
-                                                        )),
+                                                    h_flex()
+                                                        .gap_2()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .text_color(muted_f)
+                                                                .child("GitHub: "),
+                                                        )
+                                                        .child(
+                                                            Button::new("about-github-link")
+                                                                .ghost()
+                                                                .xsmall()
+                                                                .label(crate::updater::REPO)
+                                                                .icon(IconName::ExternalLink)
+                                                                .on_click(move |_, _window, cx: &mut App| {
+                                                                    cx.open_url(&repo_url);
+                                                                }),
+                                                        ),
                                                 ),
                                         )
                                         // Check for updates.

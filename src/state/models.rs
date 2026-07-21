@@ -1528,6 +1528,10 @@ pub struct WorkspaceData {
     pub projects: Vec<Project>,
     #[serde(default)]
     pub history: Vec<HistoryEntry>,
+    /// Id of the active project the last time this workspace was open. Looked
+    /// up by id (not index) so it survives reorder/deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_project_id: Option<String>,
 }
 
 /// Metadata for one workspace, stored in the cross-branch `workspaces.json`

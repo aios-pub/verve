@@ -50,6 +50,9 @@ pub struct GitState {
     pub busy: Option<String>,
     /// Last operation result message + success flag, for a transient banner.
     pub last_result: Option<(String, bool)>,
+    /// Cancellation flag for the running auto-sync loop; flipped when the
+    /// interval is changed so the old loop exits and a new one starts.
+    auto_sync_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl GitState {
@@ -70,6 +73,7 @@ impl GitState {
                 auth: GitAuth::default(),
                 busy: None,
                 last_result: None,
+                auto_sync_cancel: None,
             };
             if initialized {
                 s.refresh_async(cx);
@@ -103,7 +107,17 @@ impl GitState {
     /// `interval`. Only fires when the repo is initialized and not already
     /// busy (a manual sync in progress takes priority). Detached; runs for
     /// the lifetime of the entity.
+    ///
+    /// Calling this again cancels any previously-running loop (the old
+    /// interval is replaced immediately), so settings changes take effect
+    /// live without an app restart.
     pub fn start_auto_sync(&mut self, cx: &mut Context<Self>, interval: std::time::Duration) {
+        // Cancel any prior loop before starting a new one.
+        if let Some(cancel) = self.auto_sync_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.auto_sync_cancel = Some(cancel.clone());
         log::info!(
             "启动自动同步定时器：每 {} 分钟自动提交+同步",
             interval.as_secs() / 60
@@ -112,6 +126,10 @@ impl GitState {
         cx.spawn(async move |_, cx| {
             loop {
                 cx.background_executor().timer(interval).await;
+                // Check for cancellation between ticks.
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
                 let triggered = weak.update(cx, |this, cx| {
                     if this.initialized && !this.is_busy() {
                         log::info!("自动同步定时器触发 → sync_async");

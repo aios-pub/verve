@@ -6,12 +6,16 @@ use crate::state::models::{
 use serde_json::json;
 
 /// Export format.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Markdown,
     Json,
-    /// postman 7+ export JSON (round-trip compatible with `import::postman`).
-    postman,
+    /// Apipost 7+ export JSON (round-trip compatible with `import::postman`).
+    Apipost,
+    /// Standard Postman Collection v2.1.0 JSON.
+    PostmanV2_1,
+    /// OpenAPI 2.0 (fka Swagger) JSON.
+    Swagger,
     /// OpenAPI 3.0 JSON.
     OpenApi3,
 }
@@ -20,7 +24,7 @@ impl Format {
     pub fn extension(&self) -> &'static str {
         match self {
             Format::Markdown => "md",
-            Format::Json | Format::postman | Format::OpenApi3 => "json",
+            _ => "json",
         }
     }
 
@@ -28,10 +32,22 @@ impl Format {
         match self {
             Format::Markdown => "Markdown",
             Format::Json => "JSON",
-            Format::postman => "postman",
+            Format::Apipost => "Apipost",
+            Format::PostmanV2_1 => "Postman v2.1",
+            Format::Swagger => "Swagger 2.0",
             Format::OpenApi3 => "OpenAPI 3",
         }
     }
+
+    /// All formats in dropdown order.
+    pub const ALL: &'static [Format] = &[
+        Format::Markdown,
+        Format::Json,
+        Format::Apipost,
+        Format::PostmanV2_1,
+        Format::Swagger,
+        Format::OpenApi3,
+    ];
 }
 
 /// Render a project as a Markdown API document (PRD §5.4 offline export).
@@ -156,10 +172,10 @@ pub fn project_to_json(project: &Project) -> serde_json::Result<String> {
 // postman 7+ export format
 // ===========================================================================
 
-/// Render a project as an postman-compatible JSON string. The output is
+/// Render a project as an Apipost-compatible JSON string. The output is
 /// round-trip compatible: importing it back via `import::postman` reproduces
 /// the same folder/request tree, bodies, params, and auth.
-pub fn project_to_postman(project: &Project) -> serde_json::Result<String> {
+pub fn project_to_apipost(project: &Project) -> serde_json::Result<String> {
     let doc = build_postman_doc(project);
     serde_json::to_string_pretty(&doc)
 }
@@ -823,6 +839,472 @@ fn openapi_request_body(req: &ApiRequest) -> Option<serde_json::Value> {
     }
 }
 
+// ===========================================================================
+// Postman Collection v2.1.0 export
+// ===========================================================================
+
+/// Render a project as a standard Postman Collection v2.1.0 JSON document.
+///
+/// Schema: https://schema.getpostman.com/json/collection/v2.1.0/collection.json
+pub fn project_to_postman_v2_1(project: &Project) -> serde_json::Result<String> {
+    let doc = build_postman_v21_doc(project);
+    serde_json::to_string_pretty(&doc)
+}
+
+fn build_postman_v21_doc(project: &Project) -> serde_json::Value {
+    use serde_json::{json, Map};
+
+    // Convert environments to collection variables.
+    let mut variables = Vec::new();
+    for env in &project.environments {
+        for v in &env.variables {
+            variables.push(json!({
+                "key": v.key,
+                "value": v.value,
+                "type": field_type_to_str(v.field_type),
+            }));
+        }
+    }
+
+    // Build item tree: root requests + folders as item groups.
+    let mut items = Vec::new();
+    for req in &project.requests {
+        items.push(postman_v21_request_item(req));
+    }
+    for folder in &project.folders {
+        items.push(postman_v21_folder_item(folder));
+    }
+
+    json!({
+        "info": {
+            "name": project.name,
+            "_postman_id": crate::state::models::new_id(),
+            "description": project.description,
+            "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        "item": items,
+        "variable": variables,
+    })
+}
+
+fn postman_v21_folder_item(folder: &Folder) -> serde_json::Value {
+    let mut items = Vec::new();
+    for req in &folder.requests {
+        items.push(postman_v21_request_item(req));
+    }
+    for sub in &folder.folders {
+        items.push(postman_v21_folder_item(sub));
+    }
+    json!({
+        "name": folder.name,
+        "description": folder.description,
+        "item": items,
+    })
+}
+
+fn postman_v21_request_item(req: &ApiRequest) -> serde_json::Value {
+    use crate::state::models::Protocol;
+
+    // Skip non-HTTP protocols (WebSocket/SSE/gRPC don't map to Postman v2.1 cleanly).
+    if matches!(req.protocol, Protocol::WebSocket | Protocol::Sse | Protocol::SocketIo) {
+        return json!({
+            "name": req.name,
+            "request": { "method": method_label(req.method), "url": req.url }
+        });
+    }
+
+    let header = kvs_to_postman_v21_headers(&req.headers);
+    let query = kvs_to_postman_v21_params(&req.params);
+
+    // Decompose URL into host/path for richer Postman representation.
+    let url_obj = postman_v21_url(&req.url, &req.params);
+
+    let body = postman_v21_body(&req.body);
+
+    json!({
+        "name": req.name,
+        "description": req.description,
+        "request": {
+            "method": method_label(req.method),
+            "header": header,
+            "url": url_obj,
+            "body": body,
+            "auth": postman_v21_auth(&req.auth),
+        },
+        "response": [],
+    })
+}
+
+fn postman_v21_url(url: &str, params: &[KeyValue]) -> serde_json::Value {
+    // Try to decompose into host/path; if it has variables ({{...}}) or is
+    // simple, keep the raw form.
+    let raw = url.to_string();
+    let after_host = if let Some(idx) = raw.find("://") {
+        &raw[idx + 3..]
+    } else {
+        &raw
+    };
+    let (host_part, path_part) = match after_host.find('/') {
+        Some(slash) => (&after_host[..slash], &after_host[slash..]),
+        None => (after_host, "/"),
+    };
+    let host: Vec<&str> = host_part.split('.').collect();
+    let path: Vec<&str> = path_part.split('/').filter(|s| !s.is_empty()).collect();
+
+    let query: Vec<serde_json::Value> = params
+        .iter()
+        .filter(|kv| kv.enabled)
+        .map(|kv| json!({ "key": kv.key, "value": kv.value }))
+        .collect();
+
+    json!({
+        "raw": raw,
+        "host": host,
+        "path": path,
+        "query": query,
+    })
+}
+
+fn kvs_to_postman_v21_headers(kvs: &[KeyValue]) -> Vec<serde_json::Value> {
+    kvs.iter()
+        .filter(|kv| kv.enabled)
+        .map(|kv| {
+            json!({
+                "key": kv.key,
+                "value": kv.value,
+                "description": kv.description,
+                "disabled": !kv.enabled,
+            })
+        })
+        .collect()
+}
+
+fn kvs_to_postman_v21_params(kvs: &[KeyValue]) -> Vec<serde_json::Value> {
+    kvs.iter()
+        .map(|kv| {
+            json!({
+                "key": kv.key,
+                "value": kv.value,
+                "disabled": !kv.enabled,
+            })
+        })
+        .collect()
+}
+
+fn postman_v21_body(body: &crate::state::models::RequestBody) -> serde_json::Value {
+    match body.body_type {
+        BodyType::None => json!({ "mode": "none" }),
+        BodyType::FormData => {
+            let formdata: Vec<serde_json::Value> = body
+                .form_data
+                .iter()
+                .filter(|kv| kv.enabled)
+                .map(|kv| {
+                    json!({
+                        "key": kv.key,
+                        "value": kv.value,
+                        "type": if kv.field_type == crate::state::models::FieldType::File { "file" } else { "text" },
+                        "src": kv.file_path.as_deref().unwrap_or(""),
+                    })
+                })
+                .collect();
+            json!({ "mode": "formdata", "formdata": formdata })
+        }
+        BodyType::Urlencoded => {
+            let urlencoded: Vec<serde_json::Value> = body
+                .urlencoded
+                .iter()
+                .filter(|kv| kv.enabled)
+                .map(|kv| json!({ "key": kv.key, "value": kv.value }))
+                .collect();
+            json!({ "mode": "urlencoded", "urlencoded": urlencoded })
+        }
+        BodyType::Raw => {
+            let language = match body.raw_language {
+                crate::state::models::RawLanguage::Json => "json",
+                crate::state::models::RawLanguage::Xml => "xml",
+                crate::state::models::RawLanguage::Html => "html",
+                crate::state::models::RawLanguage::Javascript => "javascript",
+                crate::state::models::RawLanguage::Text => "text",
+            };
+            json!({
+                "mode": "raw",
+                "raw": body.raw,
+                "options": {
+                    "raw": { "language": language }
+                }
+            })
+        }
+    }
+}
+
+fn postman_v21_auth(auth: &AuthConfig) -> serde_json::Value {
+    match auth.auth_type {
+        AuthType::Bearer => json!({
+            "type": "bearer",
+            "bearer": [{ "key": "token", "value": auth.token, "type": "string" }]
+        }),
+        AuthType::Basic => json!({
+            "type": "basic",
+            "basic": [
+                { "key": "username", "value": auth.username, "type": "string" },
+                { "key": "password", "value": auth.password, "type": "string" }
+            ]
+        }),
+        AuthType::ApiKey => json!({
+            "type": "apikey",
+            "apikey": [
+                { "key": "key", "value": auth.key, "type": "string" },
+                { "key": "value", "value": auth.value, "type": "string" },
+                { "key": "in", "value": if auth.add_to == crate::state::models::AuthTarget::Query { "query" } else { "header" }, "type": "string" }
+            ]
+        }),
+        AuthType::None => json!({ "type": "noauth" }),
+    }
+}
+
+// ===========================================================================
+// Swagger / OpenAPI 2.0 export
+// ===========================================================================
+
+/// Render a project as a Swagger / OpenAPI 2.0 JSON document.
+pub fn project_to_swagger(project: &Project) -> serde_json::Result<String> {
+    let doc = build_swagger_doc(project);
+    serde_json::to_string_pretty(&doc)
+}
+
+fn build_swagger_doc(project: &Project) -> serde_json::Value {
+    use serde_json::{Map, Value};
+
+    // -- servers: extract host/basePath/schemes from baseUrl --
+    let mut host = String::new();
+    let mut base_path = "/".to_string();
+    let mut schemes = vec!["https".to_string()];
+
+    if let Some(env) = project
+        .active_environment
+        .as_ref()
+        .and_then(|id| project.environments.iter().find(|e| &e.id == id))
+    {
+        for v in &env.variables {
+            if v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url") {
+                parse_swagger_url(&v.value, &mut host, &mut base_path, &mut schemes);
+            }
+        }
+    }
+    if host.is_empty() {
+        for env in &project.environments {
+            for v in &env.variables {
+                if (v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url"))
+                    && !v.value.trim().is_empty()
+                {
+                    parse_swagger_url(&v.value, &mut host, &mut base_path, &mut schemes);
+                }
+            }
+        }
+    }
+
+    // -- paths --
+    let mut paths: Map<String, Value> = Map::new();
+    let mut has_bearer = false;
+    let mut has_basic = false;
+    let mut has_apikey = false;
+
+    let mut all_requests: Vec<&ApiRequest> = Vec::new();
+    for r in &project.requests {
+        all_requests.push(r);
+    }
+    for f in &project.folders {
+        collect_folder_requests(f, &mut all_requests);
+    }
+
+    for req in &all_requests {
+        let entry = swagger_for_request(
+            req,
+            &mut has_bearer,
+            &mut has_basic,
+            &mut has_apikey,
+        );
+        let (path_str, method, op) = match entry {
+            Some(v) => v,
+            None => continue,
+        };
+        let clean = openapi_path_from_url(&path_str);
+        let path_item = paths.entry(clean).or_insert_with(|| json!({}));
+        if let Some(obj) = path_item.as_object_mut() {
+            obj.insert(method.to_lowercase(), op);
+        }
+    }
+
+    // -- securityDefinitions --
+    let mut sec_defs: Map<String, Value> = Map::new();
+    if has_bearer {
+        // Swagger 2.0 has no "http/bearer"; emulate via apiKey named Authorization.
+        sec_defs.insert(
+            "bearerAuth".into(),
+            json!({ "type": "apiKey", "name": "Authorization", "in": "header" }),
+        );
+    }
+    if has_basic {
+        sec_defs.insert("basicAuth".into(), json!({ "type": "basic" }));
+    }
+    if has_apikey {
+        sec_defs.insert(
+            "apiKeyHeader".into(),
+            json!({ "type": "apiKey", "name": "X-API-Key", "in": "header" }),
+        );
+    }
+
+    json!({
+        "swagger": "2.0",
+        "info": {
+            "title": project.name,
+            "version": "1.0.0",
+            "description": project.description,
+        },
+        "host": host,
+        "basePath": base_path,
+        "schemes": schemes,
+        "paths": Value::Object(paths),
+        "securityDefinitions": if sec_defs.is_empty() { Value::Null } else { Value::Object(sec_defs) },
+    })
+}
+
+fn parse_swagger_url(url: &str, host: &mut String, base_path: &mut String, schemes: &mut Vec<String>) {
+    let s = url.trim().trim_end_matches('/');
+    let (scheme, rest) = if let Some(idx) = s.find("://") {
+        let sch = s[..idx].to_lowercase();
+        (sch, &s[idx + 3..])
+    } else {
+        ("https".to_string(), s)
+    };
+    *schemes = vec![scheme];
+    match rest.find('/') {
+        Some(slash) => {
+            *host = rest[..slash].to_string();
+            *base_path = rest[slash..].to_string();
+            if base_path.is_empty() {
+                *base_path = "/".to_string();
+            }
+        }
+        None => {
+            *host = rest.to_string();
+        }
+    }
+}
+
+fn swagger_for_request(
+    req: &ApiRequest,
+    has_bearer: &mut bool,
+    has_basic: &mut bool,
+    has_apikey: &mut bool,
+) -> Option<(String, String, serde_json::Value)> {
+    use crate::state::models::Protocol;
+    match req.protocol {
+        Protocol::Http | Protocol::Graphql => {}
+        _ => return None,
+    }
+
+    let mut parameters: Vec<serde_json::Value> = Vec::new();
+
+    for kv in req.params.iter().filter(|kv| kv.enabled) {
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "query",
+            "required": kv.required,
+            "description": kv.description,
+            "type": openapi_field_type(kv.field_type),
+        }));
+    }
+    for kv in req.headers.iter().filter(|kv| kv.enabled) {
+        if kv.key.eq_ignore_ascii_case("content-type")
+            || kv.key.eq_ignore_ascii_case("host")
+            || kv.key.is_empty()
+        {
+            continue;
+        }
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "header",
+            "required": kv.required,
+            "description": kv.description,
+            "type": openapi_field_type(kv.field_type),
+        }));
+    }
+    for kv in req.path.iter().filter(|kv| kv.enabled) {
+        parameters.push(json!({
+            "name": kv.key,
+            "in": "path",
+            "required": true,
+            "description": kv.description,
+            "type": openapi_field_type(kv.field_type),
+        }));
+    }
+
+    // Swagger 2.0 body parameter.
+    let body_param = swagger_body_parameter(req);
+    if let Some(p) = body_param {
+        parameters.push(p);
+    }
+
+    let mut security: Vec<serde_json::Value> = Vec::new();
+    match req.auth.auth_type {
+        AuthType::Bearer => {
+            *has_bearer = true;
+            security.push(json!({ "bearerAuth": [] }));
+        }
+        AuthType::Basic => {
+            *has_basic = true;
+            security.push(json!({ "basicAuth": [] }));
+        }
+        AuthType::ApiKey => {
+            *has_apikey = true;
+            security.push(json!({ "apiKeyHeader": [] }));
+        }
+        AuthType::None => {}
+    }
+
+    let tags: Vec<serde_json::Value> = req.tags.iter().map(|t| json!(t)).collect();
+
+    let mut op = json!({
+        "summary": req.name,
+        "description": req.description,
+        "tags": tags,
+        "responses": {
+            "200": { "description": "Successful response" }
+        },
+    });
+    let obj = op.as_object_mut().unwrap();
+    if !parameters.is_empty() {
+        obj.insert("parameters".into(), json!(parameters));
+    }
+    if !security.is_empty() {
+        obj.insert("security".into(), json!(security));
+    }
+
+    Some((req.url.clone(), method_label(req.method).to_string(), op))
+}
+
+fn swagger_body_parameter(req: &ApiRequest) -> Option<serde_json::Value> {
+    match req.body.body_type {
+        BodyType::None => None,
+        BodyType::Raw => {
+            Some(json!({
+                "name": "body",
+                "in": "body",
+                "required": true,
+                "schema": { "type": "string", "example": req.body.raw }
+            }))
+        }
+        BodyType::Urlencoded => {
+            // Swagger 2.0 uses in: formData for urlencoded params.
+            // Emit one formData parameter per key as a simpler alternative to a body schema.
+            None // Callers can add formData params directly if needed; keep simple.
+        }
+        BodyType::FormData => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,8 +1393,8 @@ mod tests {
         folder.requests.push(req3);
         project.folders.push(folder);
 
-        // --- Export to postman JSON ---
-        let json_str = project_to_postman(&project).unwrap();
+        // --- Export to Apipost JSON ---
+        let json_str = project_to_apipost(&project).unwrap();
         assert!(!json_str.is_empty());
         assert!(json_str.contains("\"project_id\""));
         assert!(json_str.contains("\"target_type\""));

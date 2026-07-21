@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
 };
 
-use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, HISTORY, K8S as K8S_ICON, KANBAN, REFRESH_CW, SHARE};
+use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, EXPORT, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, REFRESH_CW, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -68,6 +68,12 @@ pub struct VerveApp {
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
     pub share_configs: std::sync::Arc<std::sync::RwLock<Vec<ShareConfig>>>,
+    /// Display host for share URLs (from RemoteConfig; falls back to 127.0.0.1).
+    pub share_host: String,
+    /// Port the share server is listening on.
+    pub share_port: u16,
+    /// Active workspace id (used as tenant namespace when multi-tenant is enabled).
+    pub active_workspace_id_cache: Option<String>,
     pub env_select: Entity<SelectState<Vec<String>>>,
     /// Project switcher (one entry per project in the workspace).
     pub project_select: Entity<SelectState<Vec<String>>>,
@@ -90,6 +96,8 @@ pub struct VerveApp {
     pub theme_popover_open: bool,
     /// Whether the language switcher popover is open.
     pub lang_popover_open: bool,
+    /// Whether the export format picker popover is open.
+    pub export_popover_open: bool,
     /// Whether the project (workspace) selector popover is open.
     pub project_popover_open: bool,
     /// Whether the workspace switcher popover is open.
@@ -111,6 +119,9 @@ pub struct VerveApp {
     /// event, which lacks a Window; reconciled in render). Carries the
     /// (scope, target_id, target_name) triple.
     pub pending_share: Option<(ShareScope, Option<String>, Option<String>)>,
+    /// Currently-applied git auto-sync interval (minutes); compared against
+    /// persisted config on each render so settings changes apply live.
+    pub applied_sync_interval: u32,
     /// Resizable state for the main 3-pane horizontal group.
     pub main_resize: Entity<ResizableState>,
     /// Resizable state for the center (request/console) vertical group.
@@ -328,6 +339,7 @@ impl VerveApp {
                 }
             }
             let cfg = crate::state::persistence::load_git_config();
+            let sync_minutes = cfg.sync_interval_minutes.unwrap_or(crate::state::persistence::DEFAULT_SYNC_INTERVAL_MINUTES);
             git.update(cx, |g, cx| {
                 g.load_config(
                     cfg.auto_commit,
@@ -338,10 +350,9 @@ impl VerveApp {
                 );
                 // Trigger an initial refresh now that config is loaded.
                 g.refresh_async(cx);
-                // Auto-sync every 30 minutes: commit dirty changes + push/pull
-                // so work is versioned without manual intervention. Only fires
-                // when the repo is initialized and not already busy.
-                g.start_auto_sync(cx, std::time::Duration::from_secs(30 * 60));
+                // Auto-sync on the configured interval: commit dirty changes +
+                // push/pull so work is versioned without manual intervention.
+                g.start_auto_sync(cx, std::time::Duration::from_secs((sync_minutes as u64) * 60));
             });
         }
         // Reload workspace data from the now-correct branch.
@@ -363,10 +374,24 @@ impl VerveApp {
         // (`workspace.json`) at request time so edits show up live without a
         // restart — the app persists to disk on a debounce, so a fresh read
         // always reflects current edits.
+        let remote_cfg = crate::state::persistence::load_remote_config();
+        let share_host = remote_cfg.public_host.clone().unwrap_or_else(|| {
+            if remote_cfg.host == "0.0.0.0" {
+                "127.0.0.1".to_string()
+            } else {
+                remote_cfg.host.clone()
+            }
+        });
+        let share_port = remote_cfg.port;
+        let active_ws_id = crate::state::persistence::load_workspaces_index().active;
+        let tenant_id = remote_cfg.multi_tenant.then(|| active_ws_id.clone().unwrap_or_default());
         let share_configs = server::config_store(crate::share::persist::load_shares());
-        let share_server = if share_configs.read().map(|c| !c.is_empty()).unwrap_or(false) {
-            Some(server::start_desktop(
-                crate::share::server::DEFAULT_PORT,
+        let share_server = if remote_cfg.enabled || share_configs.read().map(|c| !c.is_empty()).unwrap_or(false) {
+            Some(server::start_desktop_with_config(
+                remote_cfg.host.clone(),
+                remote_cfg.port,
+                remote_cfg.auth_token.clone(),
+                tenant_id,
                 share_configs.clone(),
                 |project_id| {
                     let data = crate::state::persistence::load_or_default();
@@ -394,6 +419,9 @@ impl VerveApp {
             docker,
             share_server,
             share_configs,
+            share_host,
+            share_port,
+            active_workspace_id_cache: active_ws_id,
             env_select,
             project_select,
             show_console: false,
@@ -407,6 +435,7 @@ impl VerveApp {
             hidden_rails: crate::state::persistence::load_hidden_rails(),
             theme_popover_open: false,
             lang_popover_open: false,
+            export_popover_open: false,
             project_popover_open: false,
             workspace_popover_open: false,
             env_popover_open: false,
@@ -416,6 +445,7 @@ impl VerveApp {
             pending_new_env: false,
             pending_dialog: None,
             pending_share: None,
+            applied_sync_interval: crate::state::persistence::DEFAULT_SYNC_INTERVAL_MINUTES,
             main_resize: main_resize.clone(),
             center_resize: center_resize.clone(),
             saved_layout: crate::state::persistence::load_layout(),
@@ -517,6 +547,7 @@ impl VerveApp {
                         if let Some(idx) = s.data.projects.iter().position(|p| p.name == name) {
                             if s.active_project != idx {
                                 s.active_project = idx;
+                                s.data.active_project_id = s.data.projects.get(idx).map(|p| p.id.clone());
                                 s.selected_request = None;
                                 s.selected_folder = None;
                                 cx.emit(AppEvent::WorkspaceChanged);
@@ -561,11 +592,11 @@ impl VerveApp {
                     cx.notify();
                 }
                 ShareEvent::Open(id) => {
-                    let url = format!("http://127.0.0.1:{}/s/{}", server::DEFAULT_PORT, id);
+                    let url = format!("http://{}:{}/s/{}", this.share_host, this.share_port, id);
                     cx.open_url(&url);
                 }
                 ShareEvent::Copy(id) => {
-                    let url = format!("http://127.0.0.1:{}/s/{}", server::DEFAULT_PORT, id);
+                    let url = format!("http://{}:{}/s/{}", this.share_host, this.share_port, id);
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(url));
                 }
                 ShareEvent::Delete(id) => {
@@ -1338,7 +1369,15 @@ impl VerveApp {
                 Ok(s) => s,
                 Err(_) => return,
             },
-            crate::export::Format::postman => match crate::export::project_to_postman(&project) {
+            crate::export::Format::Apipost => match crate::export::project_to_apipost(&project) {
+                Ok(s) => s,
+                Err(_) => return,
+            },
+            crate::export::Format::PostmanV2_1 => match crate::export::project_to_postman_v2_1(&project) {
+                Ok(s) => s,
+                Err(_) => return,
+            },
+            crate::export::Format::Swagger => match crate::export::project_to_swagger(&project) {
                 Ok(s) => s,
                 Err(_) => return,
             },
@@ -1375,7 +1414,10 @@ impl VerveApp {
     ) {
         let state = self.state.clone();
         let configs_store = self.share_configs.clone();
-        let port = server::DEFAULT_PORT;
+        let share_host = self.share_host.clone();
+        let share_port = self.share_port;
+        let active_ws = self.active_workspace_id_cache.clone();
+        let remote_cfg = crate::state::persistence::load_remote_config();
         // The confirm handler needs `this` to start/refresh the server + panel,
         // but `this` isn't movable into `open_dialog`. We close over the pieces
         // we need (the config store) and do the panel refresh via cx.notify.
@@ -1385,6 +1427,16 @@ impl VerveApp {
             target_id,
             target_name,
             move |cfg, window, cx: &mut App| {
+                // Apply tenant namespace when multi-tenant mode is enabled.
+                let cfg = if remote_cfg.multi_tenant {
+                    if let Some(ws) = active_ws.as_deref() {
+                        cfg.with_tenant(ws)
+                    } else {
+                        cfg
+                    }
+                } else {
+                    cfg
+                };
                 log::info!("创建分享: id={} title={}", cfg.id, cfg.display_title());
                 // Persist + update the shared config store.
                 let all = crate::share::persist::upsert_share(cfg.clone());
@@ -1392,7 +1444,7 @@ impl VerveApp {
                     *guard = all;
                 }
 
-                let url = format!("http://127.0.0.1:{port}/s/{}", cfg.id);
+                let url = format!("http://{share_host}:{share_port}/s/{}", cfg.id);
 
                 // Build a result message summarizing what happened, including a
                 // QR code image if the user selected the 二维码 method.
@@ -1565,17 +1617,17 @@ impl VerveApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import collection (postman / Postman v2.1 / OpenAPI 3 JSON)".into()),
+            prompt: Some("Import collection (Apipost / Postman v2.1 / Swagger / OpenAPI 3 JSON)".into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = prompt.await {
                 if let Some(path) = paths.first() {
                     if let Ok(contents) = std::fs::read_to_string(path) {
-                        let project = if contents.contains("\"swagger\"")
-                            || contents.contains("\"openapi\"")
-                        {
+                        let project = if contents.contains("\"openapi\"") {
                             crate::import::openapi_v3(&contents)
+                        } else if contents.contains("\"swagger\"") {
+                            crate::import::swagger_v2(&contents)
                         } else if contents.contains("\"project_id\"")
                             && contents.contains("\"target_type\"")
                         {
@@ -1586,8 +1638,9 @@ impl VerveApp {
                         };
                         if let Ok(project) = project {
                             let _ = state.update(cx, |s, cx| {
+                                s.active_project = s.data.projects.len();
+                                s.data.active_project_id = Some(project.id.clone());
                                 s.data.projects.push(project);
-                                s.active_project = s.data.projects.len() - 1;
                                 s.notify_workspace(cx);
                             });
                         }
@@ -1617,6 +1670,18 @@ impl Render for VerveApp {
             if new_hidden != self.hidden_rails {
                 self.hidden_rails = new_hidden;
             }
+            // Pick up sync-interval changes from settings and restart the timer
+            // live (no app restart needed).
+            let new_interval = crate::state::persistence::load_sync_interval_minutes();
+            if new_interval != self.applied_sync_interval {
+                self.applied_sync_interval = new_interval;
+                let dur = std::time::Duration::from_secs((new_interval as u64) * 60);
+                let git = self.git.clone();
+                cx.spawn(async move |_, cx| {
+                    let _ = git.update(cx, |g, cx| g.start_auto_sync(cx, dur));
+                })
+                .detach();
+            }
         }
         // Safety: if the active view was just hidden, fall back to home.
         if self.active_view != self.home_view && self.hidden_rails.contains(self.active_view.name()) {
@@ -1634,15 +1699,22 @@ impl Render for VerveApp {
                 .unwrap_or(false);
             if has_shares {
                 let configs = self.share_configs.clone();
-                self.share_server = Some(server::start_desktop(
-                    server::DEFAULT_PORT,
+                let remote_cfg = crate::state::persistence::load_remote_config();
+                let tenant_id = remote_cfg.multi_tenant.then(|| {
+                    self.active_workspace_id_cache.clone().unwrap_or_default()
+                });
+                self.share_server = Some(server::start_desktop_with_config(
+                    remote_cfg.host.clone(),
+                    remote_cfg.port,
+                    remote_cfg.auth_token.clone(),
+                    tenant_id,
                     configs,
                     |project_id| {
                         let data = crate::state::persistence::load_or_default();
                         data.projects.iter().find(|p| p.id == project_id).cloned()
                     },
                 ));
-                log::info!("share server started lazily on :{}", server::DEFAULT_PORT);
+                log::info!("share server started lazily on {}:{}", remote_cfg.host, remote_cfg.port);
             }
         }
         if self.pending_switcher_refresh {
@@ -2314,6 +2386,8 @@ impl VerveApp {
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.active_view {
             SideView::Ssh => self.render_ssh_title_bar(cx).into_any_element(),
+            SideView::Docker => self.render_docker_title_bar(cx).into_any_element(),
+            SideView::K8s => self.render_k8s_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
         }
     }
@@ -2556,6 +2630,7 @@ impl VerveApp {
                                                     this.state.update(cx, |s, cx| {
                                                         if s.active_project != idx {
                                                             s.active_project = idx;
+                                                            s.data.active_project_id = s.data.projects.get(idx).map(|p| p.id.clone());
                                                             s.selected_request = None;
                                                             s.selected_folder = None;
                                                             cx.emit(AppEvent::WorkspaceChanged);
@@ -2852,34 +2927,13 @@ impl VerveApp {
                 Button::new("import")
                     .ghost()
                     .small()
-                    .icon(IconName::File)
+                    .icon(vicon(IMPORT))
                     .tooltip("导入集合 (Postman/OpenAPI JSON)")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.import_collection(cx);
                     })),
             )
-            .child(
-                Button::new("export-md")
-                    .ghost()
-                    .small()
-                    .label("MD")
-                    .tooltip("导出为 Markdown")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.export_project(crate::export::Format::Markdown, cx);
-                    })),
-            )
-            .child(
-                Button::new("console-toggle")
-                    .ghost()
-                    .small()
-                    .icon(IconName::SquareTerminal)
-                    .selected(self.show_console)
-                    .tooltip("切换控制台")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_console = !this.show_console;
-                        cx.notify();
-                    })),
-            )
+            .child(self.render_export_picker(cx))
             // Update check button: shows a spinner while checking, a download
             // icon when an update is available, or a refresh icon otherwise.
             .child(self.render_update_button(cx))
@@ -2945,6 +2999,54 @@ impl VerveApp {
                     this.check_updates_manual(window, cx);
                 }
             }))
+    }
+
+    /// Export format picker — a popover dropdown listing all supported export
+    /// formats. Trigger uses the custom export icon; each row exports the
+    /// active project in the chosen format on click.
+    fn render_export_picker(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let open = self.export_popover_open;
+        Popover::new("export-picker")
+            .anchor(gpui::Anchor::BottomRight)
+            .open(open)
+            .on_open_change(cx.listener(|this, open, _, cx| {
+                this.export_popover_open = *open;
+                cx.notify();
+            }))
+            .trigger(
+                Button::new("export-trigger")
+                    .ghost()
+                    .small()
+                    .icon(vicon(EXPORT))
+                    .tooltip("导出项目"),
+            )
+            .p(px(4.))
+            .child(
+                v_flex()
+                    .w(px(200.))
+                    .gap(px(2.))
+                    .children(crate::export::Format::ALL.iter().map(|&f| {
+                        let ent = cx.entity();
+                        div()
+                            .id(format!("export-fmt-{}", f.label()))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.muted))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(format!("{} (.{})", f.label(), f.extension())),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.export_popover_open = false;
+                                this.export_project(f, cx);
+                            }))
+                    })),
+            )
     }
 
     /// Language switcher — shared by every title-bar variant.
@@ -3092,6 +3194,272 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = ssh.update(cx, |panel, cx| {
                             panel.open_new_host(window, cx);
+                        });
+                    })),
+            )
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// The title bar shown while the Docker manager is active. Mirrors the SSH
+    /// title-bar pattern: an icon + title + host-count badge on the left,
+    /// sub-view tabs (Containers/Images/Hosts) and a refresh button in the
+    /// middle, and a primary "add host" action on the right.
+    fn render_docker_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let docker = self.docker.clone();
+        let docker_read = self.docker.read(cx);
+        let host_count = docker_read.host_count();
+        let active_host = docker_read.active_host_name();
+        let cur_view = docker_read.current_view();
+        drop(docker_read);
+
+        let docker_containers = docker.clone();
+        let docker_images = docker.clone();
+        let docker_hosts = docker.clone();
+        let docker_reload = docker.clone();
+        let docker_add = docker.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // Docker context: icon + title + host badge.
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(IconName::LayoutDashboard),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Docker"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.foreground)
+                            .child(active_host),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{host_count} 台主机")),
+                    ),
+            )
+            .child(div().w(px(12.)))
+            // Sub-view tabs: Containers / Images / Hosts.
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new("docker-title-containers")
+                            .ghost()
+                            .small()
+                            .label("Containers")
+                            .when(cur_view == "containers", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                docker_containers.update(cx, |p, cx| p.show_containers(cx));
+                            })),
+                    )
+                    .child(
+                        Button::new("docker-title-images")
+                            .ghost()
+                            .small()
+                            .label("Images")
+                            .when(cur_view == "images", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                docker_images.update(cx, |p, cx| p.show_images(cx));
+                            })),
+                    )
+                    .child(
+                        Button::new("docker-title-hosts")
+                            .ghost()
+                            .small()
+                            .label("主机")
+                            .when(cur_view == "hosts", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                docker_hosts.update(cx, |p, cx| p.show_hosts(cx));
+                            })),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("docker-title-reload")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Loader)
+                    .label("刷新")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        docker_reload.update(cx, |p, cx| p.refresh_current(cx));
+                    })),
+            )
+            .child(
+                Button::new("docker-title-add-host")
+                    .primary()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("添加主机")
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        docker_add.update(cx, |p, cx| p.open_add_host(window, cx));
+                    })),
+            )
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// The title bar shown while the K8s manager is active. Mirrors the SSH
+    /// title-bar pattern: an icon + title + context badge on the left, sub-view
+    /// tabs (Pods/Contexts/Forwards) and a refresh button in the middle, and
+    /// primary actions (import kubeconfig / add cluster) on the right.
+    fn render_k8s_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let k8s = self.k8s.clone();
+        let k8s_read = self.k8s.read(cx);
+        let ctx_name = k8s_read.active_context_display();
+        let ctx_count = k8s_read.context_count();
+        let fwd_count = k8s_read.forward_count();
+        let cur_view = k8s_read.current_view();
+        drop(k8s_read);
+
+        let k8s_pods = k8s.clone();
+        let k8s_ctx = k8s.clone();
+        let k8s_fwd = k8s.clone();
+        let k8s_reload = k8s.clone();
+        let k8s_import = k8s.clone();
+        let k8s_add = k8s.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // K8s context: icon + title + current context badge.
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(IconName::Globe),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Kubernetes"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.foreground)
+                            .child(ctx_name),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{ctx_count} 个 context")),
+                    ),
+            )
+            .child(div().w(px(12.)))
+            // Sub-view tabs: Pods / Contexts / Forwards.
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new("k8s-title-pods")
+                            .ghost()
+                            .small()
+                            .label("Pods")
+                            .when(cur_view == "pods", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                k8s_pods.update(cx, |p, cx| p.show_pods(cx));
+                            })),
+                    )
+                    .child(
+                        Button::new("k8s-title-ctx")
+                            .ghost()
+                            .small()
+                            .label("Contexts")
+                            .when(cur_view == "contexts", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                k8s_ctx.update(cx, |p, cx| p.show_contexts(cx));
+                            })),
+                    )
+                    .child(
+                        Button::new("k8s-title-fwd")
+                            .ghost()
+                            .small()
+                            .label(format!("转发 ({fwd_count})"))
+                            .when(cur_view == "forwards", |b| b.selected(true))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                k8s_fwd.update(cx, |p, cx| p.show_forwards(cx));
+                            })),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("k8s-title-reload")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Loader)
+                    .label("刷新")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        k8s_reload.update(cx, |p, cx| p.refresh_current(cx));
+                    })),
+            )
+            .child(
+                Button::new("k8s-title-import")
+                    .ghost()
+                    .small()
+                    .label("导入 kubeconfig")
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        k8s_import.update(cx, |p, cx| p.open_import_kubeconfig(window, cx));
+                    })),
+            )
+            .child(
+                Button::new("k8s-title-add-cluster")
+                    .primary()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("添加集群")
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let panel = k8s_add.clone();
+                        // k8s_cluster_dialog::open_dialog takes &mut App.
+                        window.defer(cx, move |window, cx| {
+                            crate::ui::k8s_cluster_dialog::open_dialog(window, cx);
+                            let _ = panel.update(cx, |p, cx| p.refresh_config(cx));
                         });
                     })),
             )

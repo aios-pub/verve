@@ -205,6 +205,9 @@ pub struct PanelLayout {
     /// (e.g. "History", "Ssh"). Absent/empty means all items are shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_rails: Option<Vec<String>>,
+    /// Remote document-sharing server configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteConfig>,
 }
 
 /// Persisted Git integration settings.
@@ -220,6 +223,53 @@ pub struct GitConfig {
     pub username: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
+    /// Auto-sync interval in minutes. `None` means "use the default of 30".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_interval_minutes: Option<u32>,
+}
+
+/// Remote document-sharing server configuration.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RemoteConfig {
+    /// Whether the share server accepts connections beyond loopback.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind address: "127.0.0.1" for local-only, "0.0.0.0" for LAN/public.
+    #[serde(default = "default_bind_host")]
+    pub host: String,
+    /// TCP port (default 3097).
+    #[serde(default = "default_remote_port")]
+    pub port: u16,
+    /// Optional bearer token protecting /admin/api/* routes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+    /// When true, shares are namespaced by workspace id (multi-tenant).
+    #[serde(default)]
+    pub multi_tenant: bool,
+    /// Optional public hostname displayed in share URLs (vs the bind host).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_host: Option<String>,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_bind_host(),
+            port: default_remote_port(),
+            auth_token: None,
+            multi_tenant: false,
+            public_host: None,
+        }
+    }
+}
+
+fn default_bind_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_remote_port() -> u16 {
+    crate::share::server::DEFAULT_PORT
 }
 
 impl PanelLayout {
@@ -231,8 +281,26 @@ impl PanelLayout {
             remote: None,
             username: String::new(),
             token: String::new(),
+            sync_interval_minutes: None,
         })
     }
+}
+
+/// Default auto-sync interval: 30 minutes.
+pub const DEFAULT_SYNC_INTERVAL_MINUTES: u32 = 30;
+
+/// Load the configured auto-sync interval in minutes (default 30).
+pub fn load_sync_interval_minutes() -> u32 {
+    load_git_config()
+        .sync_interval_minutes
+        .unwrap_or(DEFAULT_SYNC_INTERVAL_MINUTES)
+}
+
+/// Persist the auto-sync interval (in minutes) into the git config.
+pub fn save_sync_interval_minutes(minutes: u32) {
+    let mut cfg = load_git_config();
+    cfg.sync_interval_minutes = Some(minutes);
+    save_git_config(&cfg);
 }
 
 fn layout_path(dir: &Path) -> PathBuf {
@@ -319,5 +387,17 @@ pub fn load_hidden_rails() -> std::collections::HashSet<String> {
 pub fn save_hidden_rails(hidden: &std::collections::HashSet<String>) {
     let mut layout = load_layout().unwrap_or_default();
     layout.hidden_rails = Some(hidden.iter().cloned().collect());
+    let _ = save_layout(&layout);
+}
+
+/// Load the remote sharing-server configuration (defaults to local-only).
+pub fn load_remote_config() -> RemoteConfig {
+    load_layout().unwrap_or_default().remote.unwrap_or_default()
+}
+
+/// Persist the remote sharing-server configuration.
+pub fn save_remote_config(cfg: &RemoteConfig) {
+    let mut layout = load_layout().unwrap_or_default();
+    layout.remote = Some(cfg.clone());
     let _ = save_layout(&layout);
 }

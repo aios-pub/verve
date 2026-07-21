@@ -125,5 +125,6 @@ pub fn demo_workspace() -> WorkspaceData {
     WorkspaceData {
         projects: vec![project],
         history: Vec::new(),
+        active_project_id: None,
     }
 }

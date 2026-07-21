@@ -41,6 +41,10 @@ pub struct ServerState {
     /// When set (cloud mode), the server also serves the admin UI and accepts
     /// project uploads. `None` in desktop mode (no admin surface).
     pub cloud: Option<Arc<crate::share::cloud::CloudStore>>,
+    /// When set, /admin and /admin/api/* routes require `Authorization: Bearer <token>`.
+    pub auth_token: Option<String>,
+    /// When set, share ids are prefixed with this tenant namespace on lookup.
+    pub tenant_id: Option<String>,
 }
 
 /// Abstracts project resolution so the same router works for desktop (closure
@@ -99,12 +103,31 @@ pub fn start_desktop<F>(
 where
     F: Fn(&str) -> Option<Project> + Send + Sync + 'static,
 {
+    start_desktop_with_config("127.0.0.1".to_string(), port, None, None, configs, project_provider)
+}
+
+/// Start the desktop server with full configuration: custom bind host,
+/// optional bearer-token auth for admin/API routes, and optional tenant ID
+/// for multi-tenant share isolation.
+pub fn start_desktop_with_config<F>(
+    host: String,
+    port: u16,
+    auth_token: Option<String>,
+    tenant_id: Option<String>,
+    configs: Arc<RwLock<Vec<ShareConfig>>>,
+    project_provider: F,
+) -> ShareServer
+where
+    F: Fn(&str) -> Option<Project> + Send + Sync + 'static,
+{
     let state = Arc::new(ServerState {
         configs,
         provider: Box::new(ClosureProvider(project_provider)),
         cloud: None,
+        auth_token,
+        tenant_id,
     });
-    start_with_state("127.0.0.1".to_string(), port, state)
+    start_with_state(host, port, state)
 }
 
 /// Start the server in **cloud** mode: binds the given host (typically
@@ -113,12 +136,15 @@ pub fn start_cloud(
     host: String,
     port: u16,
     store: Arc<crate::share::cloud::CloudStore>,
+    auth_token: Option<String>,
 ) -> ShareServer {
     let configs = Arc::new(RwLock::new(store.shares()));
     let state = Arc::new(ServerState {
         configs,
         provider: Box::new(crate::share::cloud::CloudStore::clone(&store)),
         cloud: Some(store),
+        auth_token,
+        tenant_id: None,
     });
     start_with_state(host, port, state)
 }
@@ -207,9 +233,18 @@ fn parse_request(raw: &str) -> Result<ParsedRequest, &'static str> {
 fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
     let path = req.path.split('?').next().unwrap_or(&req.path);
 
-    // ---- Admin UI (cloud mode only) --------------------------------------
-    if path == "/admin" || path.starts_with("/admin/") {
-        return route_admin(req, state);
+    // ---- Bearer-token auth for admin/API routes (when configured) --------
+    if path == "/admin" || path.starts_with("/admin/") || path.starts_with("/api/") {
+        if let Some(expected) = &state.auth_token {
+            let authz = req.headers.get("authorization").cloned().unwrap_or_default();
+            let provided = authz.strip_prefix("Bearer ").unwrap_or("").trim();
+            if provided != expected {
+                return response(401, "application/json", b"{\"error\":\"unauthorized\"}");
+            }
+        }
+        if path.starts_with("/admin/") || path == "/admin" {
+            return route_admin(req, state);
+        }
     }
 
     // ---- Static / health --------------------------------------------------
@@ -236,12 +271,24 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
         None => (rest, None),
     };
 
+    // In multi-tenant mode, accept both prefixed and unprefixed ids; the
+    // prefixed form is what we generate when creating shares.
+    let lookup_id = if let Some(tid) = &state.tenant_id {
+        if id.contains('/') {
+            id.to_string()
+        } else {
+            format!("{tid}/{id}")
+        }
+    } else {
+        id.to_string()
+    };
+
     // Look up the share config (clone out to release the lock early).
     let cfg = state
         .configs
         .read()
         .ok()
-        .and_then(|guard| guard.iter().find(|c| c.id == id).cloned());
+        .and_then(|guard| guard.iter().find(|c| c.id == lookup_id || c.id == id).cloned());
 
     let Some(cfg) = cfg else {
         return response(404, "text/html; charset=utf-8", NOT_FOUND_HTML.as_bytes());

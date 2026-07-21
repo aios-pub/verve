@@ -74,6 +74,77 @@ impl DockerPanel {
         find_host(&self.active_host_id)
     }
 
+    /// Number of configured Docker hosts (including local). Shown as a badge
+    /// in the app's Docker title bar.
+    pub fn host_count(&self) -> usize {
+        self.hosts.len()
+    }
+
+    /// Name of the currently active host, for the title-bar badge.
+    pub fn active_host_name(&self) -> String {
+        self.hosts
+            .iter()
+            .find(|h| h.id == self.active_host_id)
+            .map(|h| h.name.clone())
+            .unwrap_or_else(|| "本地 Docker".into())
+    }
+
+    /// Which sub-view is currently active (for title-bar tab highlighting).
+    pub fn current_view(&self) -> &'static str {
+        match self.active_view {
+            View::Containers => "containers",
+            View::Images => "images",
+            View::Hosts => "hosts",
+            View::Logs | View::Exec => "containers",
+        }
+    }
+
+    /// Switch to the containers view and reload if empty.
+    pub fn show_containers(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Containers, cx);
+        if self.containers.is_empty() && !self.containers_loading {
+            self.reload_containers(cx);
+        }
+    }
+
+    /// Switch to the images view and reload if empty.
+    pub fn show_images(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Images, cx);
+        if self.images.is_empty() && !self.images_loading {
+            self.reload_images(cx);
+        }
+    }
+
+    /// Switch to the hosts view.
+    pub fn show_hosts(&mut self, cx: &mut Context<Self>) {
+        self.set_view(View::Hosts, cx);
+    }
+
+    /// Refresh the current view (containers/images).
+    pub fn refresh_current(&mut self, cx: &mut Context<Self>) {
+        match self.active_view {
+            View::Containers => self.reload_containers(cx),
+            View::Images => self.reload_images(cx),
+            _ => cx.notify(),
+        }
+    }
+
+    /// Open the "add host" dialog from the app title bar's primary action.
+    pub fn open_add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = cx.entity();
+        docker_host_dialog::open_dialog(
+            None,
+            move |_host: DockerHost, _window, cx: &mut App| {
+                let _ = panel.update(cx, |this, cx| {
+                    this.reload_hosts();
+                    cx.notify();
+                });
+            },
+            window,
+            cx,
+        );
+    }
+
     fn reload_hosts(&mut self) {
         self.hosts = load_hosts();
         // Ensure active_host_id is still valid; fall back to "local".
@@ -446,93 +517,13 @@ impl DockerPanel {
 impl Render for DockerPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let muted = theme.muted_foreground;
-        let border = theme.border;
-        let active_view = self.active_view.clone();
 
-        // Determine current host name for the indicator.
+        // Ensure host list is fresh on each render.
         self.reload_hosts();
-        let active_host_name = self
-            .hosts
-            .iter()
-            .find(|h| h.id == self.active_host_id)
-            .map(|h| h.name.clone())
-            .unwrap_or_else(|| "本地 Docker".into());
 
         v_flex()
             .size_full()
             .min_h_0()
-            .child(
-                h_flex()
-                    .h(px(44.))
-                    .px_4()
-                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(border)
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Docker"))
-                    .child(
-                        // Host selector as a small button showing current connection
-                        Button::new("docker-host-select")
-                            .ghost()
-                            .xsmall()
-                            .label(active_host_name)
-                            .tooltip("点击管理 Docker 主机")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_view(View::Hosts, cx);
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("docker-containers")
-                            .ghost()
-                            .small()
-                            .label("Containers")
-                            .when(active_view == View::Containers, |b| b.disabled(true))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_view(View::Containers, cx);
-                                if this.containers.is_empty() && !this.containers_loading {
-                                    this.reload_containers(cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("docker-images")
-                            .ghost()
-                            .small()
-                            .label("Images")
-                            .when(active_view == View::Images, |b| b.disabled(true))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_view(View::Images, cx);
-                                if this.images.is_empty() && !this.images_loading {
-                                    this.reload_images(cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("docker-hosts")
-                            .ghost()
-                            .small()
-                            .label("主机")
-                            .when(active_view == View::Hosts, |b| b.disabled(true))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_view(View::Hosts, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("docker-reload")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Loader)
-                            .label("刷新")
-                            .on_click(cx.listener(|this, _, _, cx| match this.active_view {
-                                View::Containers => this.reload_containers(cx),
-                                View::Images => this.reload_images(cx),
-                                _ => cx.notify(),
-                            })),
-                    ),
-            )
             .child(match self.active_view {
                 View::Containers => self.render_containers(&theme, cx).into_any_element(),
                 View::Images => self.render_images(&theme, cx).into_any_element(),

@@ -20,10 +20,16 @@ use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, WindowExt as _,
+    h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
 };
 
+use crate::assets::{EXPORT, IMPORT};
 use crate::git::state::{GitEvent, GitState};
+
+/// Build an icon from a Verve-custom Lucide SVG path.
+fn vicon(path: &'static str) -> Icon {
+    Icon::from(IconName::Redo).path(path)
+}
 use crate::state::models::{ApiToken, MergeRequest, RequestMethod, StatusCodeEntry};
 use crate::state::persistence::{self, GitConfig};
 use crate::state::{AppEvent, AppState};
@@ -229,6 +235,7 @@ impl ProjectManagePanel {
             remote: g.remote.clone(),
             username: g.auth.username.clone(),
             token: g.auth.token.clone(),
+            sync_interval_minutes: persistence::load_sync_interval_minutes().into(),
         };
         persistence::save_git_config(&cfg);
         let _ = cx;
@@ -1257,7 +1264,9 @@ impl ProjectManagePanel {
         let ent_import = cx.entity();
         let ent_md = cx.entity();
         let ent_json = cx.entity();
-        let ent_postman = cx.entity();
+        let ent_apipost = cx.entity();
+        let ent_pm21 = cx.entity();
+        let ent_swagger = cx.entity();
         let ent_openapi = cx.entity();
         v_flex()
             .size_full()
@@ -1278,13 +1287,13 @@ impl ProjectManagePanel {
                         div()
                             .text_size(px(12.))
                             .text_color(theme.muted_foreground)
-                            .child("导入 Postman v2.1 / OpenAPI 3 集合，或将当前工作空间导出为 Markdown / JSON / postman / OpenAPI 3。"),
+                            .child("导入 Postman v2.1 / Swagger / OpenAPI 3 集合，或将当前工作空间导出为 Markdown / JSON / Apipost / Postman v2.1 / Swagger / OpenAPI 3。"),
                     )
                     .child(
                         Button::new("io-import")
                             .primary()
                             .small()
-                            .icon(IconName::File)
+                            .icon(vicon(IMPORT))
                             .label("导入集合")
                             .on_click(move |_, _w, cx: &mut App| {
                                 let _ = ent_import.update(cx, |_, cx| cx.emit(ManageEvent::Import));
@@ -1298,7 +1307,7 @@ impl ProjectManagePanel {
                                 Button::new("io-export-md")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::File)
+                                    .icon(vicon(EXPORT))
                                     .label("导出 Markdown")
                                     .on_click(move |_, _w, cx: &mut App| {
                                         let _ = ent_md.update(cx, |_, cx| {
@@ -1310,7 +1319,7 @@ impl ProjectManagePanel {
                                 Button::new("io-export-json")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::File)
+                                    .icon(vicon(EXPORT))
                                     .label("导出 JSON")
                                     .on_click(move |_, _w, cx: &mut App| {
                                         let _ = ent_json.update(cx, |_, cx| {
@@ -1319,14 +1328,38 @@ impl ProjectManagePanel {
                                     }),
                             )
                             .child(
-                                Button::new("io-export-postman")
+                                Button::new("io-export-apipost")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::File)
-                                    .label("导出 postman")
+                                    .icon(vicon(EXPORT))
+                                    .label("导出 Apipost")
                                     .on_click(move |_, _w, cx: &mut App| {
-                                        let _ = ent_postman.update(cx, |_, cx| {
-                                            cx.emit(ManageEvent::Export(crate::export::Format::postman))
+                                        let _ = ent_apipost.update(cx, |_, cx| {
+                                            cx.emit(ManageEvent::Export(crate::export::Format::Apipost))
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("io-export-pm21")
+                                    .ghost()
+                                    .small()
+                                    .icon(vicon(EXPORT))
+                                    .label("导出 Postman v2.1")
+                                    .on_click(move |_, _w, cx: &mut App| {
+                                        let _ = ent_pm21.update(cx, |_, cx| {
+                                            cx.emit(ManageEvent::Export(crate::export::Format::PostmanV2_1))
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new("io-export-swagger")
+                                    .ghost()
+                                    .small()
+                                    .icon(vicon(EXPORT))
+                                    .label("导出 Swagger 2.0")
+                                    .on_click(move |_, _w, cx: &mut App| {
+                                        let _ = ent_swagger.update(cx, |_, cx| {
+                                            cx.emit(ManageEvent::Export(crate::export::Format::Swagger))
                                         });
                                     }),
                             )
@@ -1334,7 +1367,7 @@ impl ProjectManagePanel {
                                 Button::new("io-export-openapi")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::File)
+                                    .icon(vicon(EXPORT))
                                     .label("导出 OpenAPI 3")
                                     .on_click(move |_, _w, cx: &mut App| {
                                         let _ = ent_openapi.update(cx, |_, cx| {

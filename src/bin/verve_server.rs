@@ -51,6 +51,7 @@ fn main() {
     let mut host = "0.0.0.0".to_string();
     let mut port = server::DEFAULT_PORT;
     let mut data_dir: Option<String> = None;
+    let mut auth_token: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -66,6 +67,9 @@ fn main() {
             }
             "--data-dir" | "-d" => {
                 data_dir = args.next();
+            }
+            "--auth-token" | "-t" => {
+                auth_token = args.next();
             }
             "--help" => {
                 print_help();
@@ -117,7 +121,7 @@ fn main() {
     }
 
     // Start the server in cloud mode (binds the host, serves /admin).
-    let _server = server::start_cloud(host.clone(), port, store);
+    let _server = server::start_cloud(host.clone(), port, store, auth_token);
 
     log::info!("verve-server listening on http://{host}:{port}");
     log::info!("admin UI:  http://{host}:{port}/admin");
@@ -141,6 +145,7 @@ fn print_help() {
     eprintln!("    --host <HOST>        Bind address (default: 0.0.0.0)");
     eprintln!("    --port <PORT>        Bind port (default: 3097)");
     eprintln!("    --data-dir <DIR>     Data root containing .verve/ (default: $HOME)");
+    eprintln!("    --auth-token <TOK>   Bearer token required for /admin routes");
     eprintln!("    --help               Show this help");
     eprintln!();
     eprintln!("EXAMPLES:");

@@ -474,16 +474,19 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
                 .iter()
                 .map(|(k, v)| KeyValue::new(k.clone(), v.as_str().unwrap_or("").to_string()))
                 .collect();
-            // Add server URIs as variables
+            // Add server URIs as variables. We add every server from the
+            // server_list regardless of whether its URI is empty, so that
+            // `{{server_<id>}}` placeholders in URLs always resolve (to an
+            // empty string when no URI is configured) instead of leaking the
+            // raw placeholder text into the URL field.
             for srv in &env.server_list {
-                if let (Some(sid), Some(uri)) = (&srv.server_id, &srv.uri) {
-                    if !uri.trim().is_empty() {
-                        let var_name = server_var_names
-                            .get(sid)
-                            .cloned()
-                            .unwrap_or_else(|| format!("server_{}", sid));
-                        e.variables.push(KeyValue::new(var_name, uri.clone()));
-                    }
+                if let Some(sid) = &srv.server_id {
+                    let uri = srv.uri.clone().unwrap_or_default();
+                    let var_name = server_var_names
+                        .get(sid)
+                        .cloned()
+                        .unwrap_or_else(|| format!("server_{}", sid));
+                    e.variables.push(KeyValue::new(var_name, uri));
                 }
             }
             e
@@ -991,9 +994,10 @@ mod tests {
         // 3 environments, each with server URIs as variables.
         assert_eq!(project.environments.len(), 3);
 
-        // 默认环境: empty URI → no baseUrl var
+        // 默认环境: empty URI → baseUrl var exists but is empty (placeholder resolves to "")
         assert_eq!(project.environments[0].name, "默认环境");
-        assert!(project.environments[0].variables.iter().find(|v| v.key == "baseUrl").is_none());
+        let default_base = project.environments[0].variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        assert_eq!(default_base.value, "");
 
         // Mock环境: has baseUrl = mock server URI
         assert_eq!(project.environments[1].name, "Mock环境");
@@ -1015,5 +1019,75 @@ mod tests {
 
         // Child API URL remains relative (will be prefixed at send time).
         assert_eq!(sys_folder.requests[0].url, "/api/auth/login");
+    }
+
+    #[test]
+    fn postman_import_multi_servers_empty_uri() {
+        // Regression test: servers beyond the default (id != "1") that have
+        // empty URIs in some environments must still get an env var so that
+        // {{server_<id>}} placeholders in URLs resolve (to "") instead of
+        // leaking raw placeholder text.
+        let json = r#"{
+            "project_id": "1fe64e",
+            "name": "研发中心",
+            "global": {
+                "servers": [
+                    {"server_id": "1", "name": "默认服务", "sort": 1000},
+                    {"server_id": "7c9fc", "name": "user-center", "sort": 2000}
+                ],
+                "envs": [
+                    {
+                        "env_id": "1",
+                        "name": "默认环境",
+                        "server_list": [
+                            {"server_id": "1", "name": "默认服务", "uri": ""},
+                            {"server_id": "7c9fc", "name": "user-center", "uri": ""}
+                        ],
+                        "env_var_list": {}
+                    },
+                    {
+                        "env_id": "2",
+                        "name": "压测环境",
+                        "server_list": [
+                            {"server_id": "1", "name": "默认服务", "uri": ""},
+                            {"server_id": "7c9fc", "name": "user-center", "uri": "http://account-yace.xk12.cn"}
+                        ],
+                        "env_var_list": {}
+                    }
+                ],
+                "global_param": {"header": {"parameter": []}, "query": {"parameter": []}}
+            },
+            "apis": [
+                {
+                    "target_id": "f1", "parent_id": "0", "target_type": "folder",
+                    "name": "用户中心", "server_id": "7c9fc"
+                },
+                {
+                    "target_id": "a1", "parent_id": "f1", "target_type": "api",
+                    "name": "学生加校", "method": "POST", "url": "/api/user/v3/common/executeSql",
+                    "request": {"body": {"mode": "none"}, "header": {"parameter": []}, "query": {"parameter": []}, "cookie": {"parameter": []}, "restful": {"parameter": []}, "auth": {"type": "noauth"}}
+                }
+            ]
+        }"#;
+
+        let project = postman(json).unwrap();
+
+        // 默认环境: both baseUrl and server_7c9fc exist with empty values.
+        let default_env = &project.environments[0];
+        assert_eq!(default_env.name, "默认环境");
+        let base = default_env.variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        assert_eq!(base.value, "");
+        let srv = default_env.variables.iter().find(|v| v.key == "server_7c9fc").unwrap();
+        assert_eq!(srv.value, "");
+
+        // 压测环境: server_7c9fc resolves to the stress-test URI.
+        let stress_env = &project.environments[1];
+        let srv = stress_env.variables.iter().find(|v| v.key == "server_7c9fc").unwrap();
+        assert_eq!(srv.value, "http://account-yace.xk12.cn");
+
+        // Folder references {{server_7c9fc}}.
+        let folder = project.folders.iter().find(|f| f.name == "用户中心").unwrap();
+        assert_eq!(folder.base_url, Some("{{server_7c9fc}}".to_string()));
+        assert_eq!(folder.requests[0].url, "/api/user/v3/common/executeSql");
     }
 }

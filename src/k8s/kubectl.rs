@@ -250,53 +250,94 @@ fn parse_forwarding_port(line: &str) -> Option<u16> {
     line[colon + 1..space].parse().ok()
 }
 
-/// Handle for an interactive `kubectl exec` session. After creation the caller
-/// takes stdin/stdout/stderr via the Option fields; the child is kept alive so
-/// Drop kills kubectl.
+/// Handle for an interactive `kubectl exec` session running under a PTY.
 pub struct ExecSession {
-    pub child: Child,
-    pub stdin: Option<ChildStdin>,
-    pub stdout: Option<ChildStdout>,
-    pub stderr: Option<ChildStderr>,
+    pub stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pub output_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
-/// Spawn `kubectl exec -it pod [-n ns] -- shell` with stdin/stdout piped so the
-/// caller can drive an interactive terminal. The shell defaults to `/bin/sh`.
+/// Spawn `kubectl exec -it pod [-n ns] -- shell` attached to a PTY so that
+/// Tab completion, arrow keys, and other terminal features work. The shell
+/// defaults to `/bin/bash` for readline support.
 pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context: Option<&str>) -> Result<ExecSession, PodError> {
-    let shell = shell.unwrap_or("/bin/sh");
-    let mut cmd = kubectl_command();
-    cmd.arg("exec")
-        .arg("-i")
-        .arg("-t")
-        .arg(pod)
-        .arg("--")
-        .arg(shell);
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use std::io::{Read, Write};
+
+    let shell = shell.unwrap_or("/bin/bash");
+    let mut cmd = CommandBuilder::new("kubectl");
+    cmd.arg("exec");
+    cmd.arg("-it");
+    cmd.arg(pod);
+    cmd.arg("--");
+    cmd.arg(shell);
     if let Some(ctx) = context {
         if !ctx.is_empty() {
-            cmd.args(["--context", ctx]);
+            cmd.arg("--context");
+            cmd.arg(ctx);
         }
     }
     if let Some(ns) = namespace {
         if !ns.is_empty() {
-            cmd.args(["-n", ns]);
+            cmd.arg("-n");
+            cmd.arg(ns);
         }
     }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
+
+    let pty_system = native_pty_system();
+    let mut pair = pty_system
+        .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| PodError(format!("分配 PTY 失败: {e}")))?;
+    let mut _child = pair
+        .slave
+        .spawn_command(cmd)
         .map_err(|e| PodError(format!("启动 kubectl exec 失败: {e}")))?;
-    let stdin = child.stdin.take().ok_or_else(|| PodError("kubectl 未提供 stdin".into()))?;
-    let stdout = child.stdout.take().ok_or_else(|| PodError("kubectl 未提供 stdout".into()))?;
-    let stderr = child.stderr.take().ok_or_else(|| PodError("kubectl 未提供 stderr".into()))?;
-    Ok(ExecSession {
-        child,
-        stdin: Some(stdin),
-        stdout: Some(stdout),
-        stderr: Some(stderr),
-    })
+    drop(pair.slave);
+
+    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (output_tx, output_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| PodError(format!("PTY reader 获取失败: {e}")))?;
+    let mut writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| PodError(format!("PTY writer 获取失败: {e}")))?;
+    drop(pair.master);
+
+    // Writer thread: UI keystrokes → PTY master.
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        rt.block_on(async move {
+            while let Some(bytes) = stdin_rx.recv().await {
+                if writer.write_all(&bytes).is_err() {
+                    break;
+                }
+                let _ = writer.flush();
+            }
+        });
+    });
+    // Reader thread: PTY master → UI TerminalView.
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if output_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(ExecSession { stdin_tx, output_rx })
 }
 
 #[cfg(test)]

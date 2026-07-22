@@ -20,7 +20,7 @@ use tokio::io::AsyncWriteExt;
 use crate::k8s::clusters::{
     import_kubeconfig as import_kubeconfig_file, load_manual_clusters, ClusterAuth, ManualCluster,
 };
-use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, LogStream, Pod};
+use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod};
 use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
 use crate::ssh::terminal::TerminalView;
 use gpui_component::text::TextView;
@@ -196,148 +196,67 @@ impl K8sPanel {
     }
 
     fn start_exec(&mut self, pod: String, _window: &mut Window, cx: &mut Context<Self>) {
-        enum Ev {
-            Ready {
-                stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-                data_rx: std::sync::mpsc::Receiver<Vec<u8>>,
-            },
-            Err(String),
-        }
         let ns = self
             .namespace_input
             .as_ref()
             .map(|i| i.read(cx).value().to_string());
         let ctx = self.current_context_name().map(String::from);
-        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<ExecSession, String>>();
         let pod_for_thread = pod.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                match exec_pod(&pod_for_thread, ns.as_deref(), None, ctx.as_deref()) {
-                    Ok(mut sess) => {
-                        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-                        let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                        if let Some(mut cs) = sess.stdin.take() {
-                            tokio::spawn(async move {
-                                while let Some(bytes) = stdin_rx.recv().await {
-                                    if cs.write_all(&bytes).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            });
-                        }
-                        if let Some(stream) = sess.stdout.take() {
-                            let data_tx = data_tx.clone();
-                            tokio::spawn(async move {
-                                use tokio::io::AsyncReadExt;
-                                let mut s = stream;
-                                let mut buf = [0u8; 4096];
-                                loop {
-                                    match s.read(&mut buf).await {
-                                        Ok(0) | Err(_) => break,
-                                        Ok(n) => {
-                                            if data_tx.send(buf[..n].to_vec()).is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        if let Some(stream) = sess.stderr.take() {
-                            let data_tx = data_tx.clone();
-                            tokio::spawn(async move {
-                                use tokio::io::AsyncReadExt;
-                                let mut s = stream;
-                                let mut buf = [0u8; 4096];
-                                loop {
-                                    match s.read(&mut buf).await {
-                                        Ok(0) | Err(_) => break,
-                                        Ok(n) => {
-                                            if data_tx.send(buf[..n].to_vec()).is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        // Keep child alive; drop happens when exec view is left.
-                        std::mem::forget(sess.child);
-                        let _ = tx.send(Ev::Ready { stdin_tx, data_rx });
-                        // Keep the runtime alive until streams end.
-                        std::future::pending::<()>().await;
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Ev::Err(e.to_string()));
-                    }
-                }
-            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                exec_pod(&pod_for_thread, ns.as_deref(), Some("/bin/bash"), ctx.as_deref())
+            }));
+            let msg = match result {
+                Ok(Ok(s)) => Ok(s),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("kubectl exec 启动异常".into()),
+            };
+            let _ = ready_tx.send(msg);
         });
 
-        // Poll for the Ready event, then wire up the terminal.
         let ent = cx.entity().downgrade();
         let term_pod = pod.clone();
         cx.spawn(async move |_this, cx| {
-            loop {
-                match rx.try_recv() {
-                    Ok(Ev::Ready { stdin_tx, data_rx }) => {
-                        let term_opt: Option<Entity<TerminalView>> = ent
-                            .update(cx, |p, cx| {
-                                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
-                                p.exec_stdin = Some(stdin_tx.clone());
-                                p.exec_terminal = Some(terminal.clone());
-                                p.exec_target = Some(term_pod.clone());
-                                p.active_view = View::Exec;
-                                p.error = None;
-                                cx.notify();
-                                let tx = stdin_tx.clone();
-                                _ = terminal.update(cx, |tv, _cx| {
-                                    if let Ok(mut slot) = tv.input_tx.lock() {
-                                        *slot = Some(tx);
-                                    }
-                                });
-                                Some(terminal)
-                            })
-                            .ok()
-                            .flatten();
-                        if let Some(term) = term_opt {
-                            let term_weak = term.downgrade();
-                            cx.spawn(async move |cx| {
-                                loop {
-                                    match data_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                                        Ok(chunk) => {
-                                            let _ = term_weak.update(cx, |tv, cx| {
-                                                tv.feed(&chunk);
-                                                cx.notify();
-                                            });
-                                        }
-                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                            smol::Timer::after(std::time::Duration::from_millis(30)).await;
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            })
-                            .detach();
-                        }
-                        break;
-                    }
-                    Ok(Ev::Err(e)) => {
-                        let _ = ent.update(cx, |p, cx| {
-                            p.error = Some(e);
-                            cx.notify();
-                        });
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                    }
-                    Err(_) => break,
+            let sess = match ready_rx.await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    let _ = ent.update(cx, |p, cx| { p.error = Some(e); cx.notify(); });
+                    return;
                 }
+                Err(_) => {
+                    let _ = ent.update(cx, |p, cx| { p.error = Some("启动 shell 失败".into()); cx.notify(); });
+                    return;
+                }
+            };
+            let ExecSession { stdin_tx, output_rx } = sess;
+            let stdin_tx_term = stdin_tx.clone();
+            let stdin_tx_panel = stdin_tx;
+            let mut output_rx = output_rx;
+            let (term_tx, term_rx) = tokio::sync::oneshot::channel::<Entity<TerminalView>>();
+
+            let _ = ent.update(cx, |p, cx| {
+                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
+                p.exec_terminal = Some(terminal.clone());
+                p.exec_stdin = Some(stdin_tx_panel);
+                _ = terminal.update(cx, |tv, _cx| {
+                    if let Ok(mut slot) = tv.input_tx.lock() {
+                        *slot = Some(stdin_tx_term);
+                    }
+                });
+                p.exec_target = Some(term_pod.clone());
+                p.active_view = View::Exec;
+                p.error = None;
+                cx.notify();
+                let _ = term_tx.send(terminal);
+            });
+
+            let terminal = match term_rx.await { Ok(t) => t, Err(_) => return };
+            let term_weak = terminal.downgrade();
+            while let Some(chunk) = output_rx.recv().await {
+                let _ = term_weak.update(cx, |tv, cx| { tv.feed(&chunk); cx.notify(); });
             }
-        })
-        .detach();
+        }).detach();
     }
 
     fn reload_pods(&mut self, cx: &mut Context<Self>) {

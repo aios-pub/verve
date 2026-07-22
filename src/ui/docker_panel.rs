@@ -47,11 +47,14 @@ pub struct DockerPanel {
     exec_terminal: Option<Entity<TerminalView>>,
     exec_stdin: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     exec_child: Option<tokio::process::Child>,
+    /// Owns the PTY-backed docker exec session — keeps its IO thread and PTY
+    /// master alive for the duration of the exec view.
+    exec_session: Option<ExecSession>,
 }
 
 impl DockerPanel {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut panel = Self {
             error: None,
             active_view: View::Containers,
             hosts: load_hosts(),
@@ -67,7 +70,12 @@ impl DockerPanel {
             exec_terminal: None,
             exec_stdin: None,
             exec_child: None,
-        }
+            exec_session: None,
+        };
+        // Auto-load containers when the Docker panel is first opened so the
+        // user doesn't have to click "刷新" or switch tabs to see data.
+        panel.reload_containers(cx);
+        panel
     }
 
     fn active_host(&self) -> Option<DockerHost> {
@@ -177,6 +185,7 @@ impl DockerPanel {
         self.exec_stdin = None;
         self.exec_terminal = None;
         self.exec_target = None;
+        self.exec_session = None;
         if let Some(mut c) = self.exec_child.take() {
             let _ = c.start_kill();
         }
@@ -197,6 +206,7 @@ impl DockerPanel {
         if leaving_exec {
             self.exec_stdin = None;
             self.exec_terminal = None;
+            self.exec_session = None;
             if let Some(mut c) = self.exec_child.take() {
                 let _ = c.start_kill();
             }
@@ -450,145 +460,96 @@ impl DockerPanel {
     }
 
     fn start_exec(&mut self, id: String, _window: &mut Window, cx: &mut Context<Self>) {
-        enum Ev {
-            Ready {
-                stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-                data_rx: std::sync::mpsc::Receiver<Vec<u8>>,
-            },
-            Err(String),
-        }
-        let (tx, rx) = std::sync::mpsc::channel::<Ev>();
-        let id_for_thread = id.clone();
+        // exec_container is synchronous (allocates PTY, spawns IO threads, returns
+        // channels). We run it on a std thread, then wire channels to TerminalView.
         let host = self.active_host();
+        let term_id = id.clone();
+        let ent = cx.entity().downgrade();
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<ExecSession, String>>();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                match exec_container(host.as_ref(), &id_for_thread, None) {
-                    Ok(mut sess) => {
-                        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-                        let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                        if let Some(mut cs) = sess.stdin.take() {
-                            tokio::spawn(async move {
-                                while let Some(bytes) = stdin_rx.recv().await {
-                                    if cs.write_all(&bytes).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            });
-                        }
-                        if let Some(stream) = sess.stdout.take() {
-                            let data_tx = data_tx.clone();
-                            tokio::spawn(async move {
-                                use tokio::io::AsyncReadExt;
-                                let mut s = stream;
-                                let mut buf = [0u8; 4096];
-                                loop {
-                                    match s.read(&mut buf).await {
-                                        Ok(0) | Err(_) => break,
-                                        Ok(n) => {
-                                            if data_tx.send(buf[..n].to_vec()).is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        if let Some(stream) = sess.stderr.take() {
-                            let data_tx = data_tx.clone();
-                            tokio::spawn(async move {
-                                use tokio::io::AsyncReadExt;
-                                let mut s = stream;
-                                let mut buf = [0u8; 4096];
-                                loop {
-                                    match s.read(&mut buf).await {
-                                        Ok(0) | Err(_) => break,
-                                        Ok(n) => {
-                                            if data_tx.send(buf[..n].to_vec()).is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        // Keep sess.child alive by leaking it into this runtime;
-                        // drop happens when exec is closed via set_view.
-                        std::mem::forget(sess.child);
-                        let _ = tx.send(Ev::Ready { stdin_tx, data_rx });
-                        // Keep runtime alive until streams end (spawned tasks above exit).
-                        std::future::pending::<()>().await;
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Ev::Err(e.to_string()));
-                    }
-                }
-            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                exec_container(host.as_ref(), &id, None)
+            }));
+            let msg = match result {
+                Ok(Ok(s)) => Ok(s),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("docker exec 启动异常".into()),
+            };
+            let _ = ready_tx.send(msg);
         });
 
-        // Poll for the Ready event, then wire up the terminal.
-        let ent = cx.entity().downgrade();
-        let term_id = id.clone();
         cx.spawn(async move |_this, cx| {
-            loop {
-                match rx.try_recv() {
-                    Ok(Ev::Ready { stdin_tx, data_rx }) => {
-                        // Create the terminal and wire stdin.
-                        let term_opt: Option<Entity<TerminalView>> = ent
-                            .update(cx, |p, cx| {
-                                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
-                                p.exec_stdin = Some(stdin_tx.clone());
-                                p.exec_terminal = Some(terminal.clone());
-                                p.exec_target = Some(term_id.clone());
-                                p.active_view = View::Exec;
-                                p.error = None;
-                                cx.notify();
-                                // Wire the terminal's input_tx to our stdin sender.
-                                let tx = stdin_tx.clone();
-                                _ = terminal.update(cx, |tv, _cx| {
-                                    if let Ok(mut slot) = tv.input_tx.lock() {
-                                        *slot = Some(tx);
-                                    }
-                                });
-                                Some(terminal)
-                            })
-                            .ok()
-                            .flatten();
-                        if let Some(term) = term_opt {
-                            // Pump data to the terminal via an inner spawn on the term entity.
-                            let term_weak = term.downgrade();
-                            cx.spawn(async move |cx| {
-                                loop {
-                                    match data_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                                        Ok(chunk) => {
-                                            let _ = term_weak.update(cx, |tv, cx| {
-                                                tv.feed(&chunk);
-                                                cx.notify();
-                                            });
-                                        }
-                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                            smol::Timer::after(std::time::Duration::from_millis(30)).await;
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            })
-                            .detach();
-                        }
-                        break;
-                    }
-                    Ok(Ev::Err(e)) => {
-                        let _ = ent.update(cx, |p, cx| {
-                            p.error = Some(e);
-                            cx.notify();
-                        });
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                    }
-                    Err(_) => break,
+            let sess = match ready_rx.await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    let _ = ent.update(cx, |p, cx| {
+                        p.error = Some(e);
+                        cx.notify();
+                    });
+                    return;
                 }
+                Err(_) => {
+                    let _ = ent.update(cx, |p, cx| {
+                        p.error = Some("启动 exec 失败".into());
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+
+            // Destructure the session. We need two copies of stdin_tx (one for
+            // the panel struct, one to wire into TerminalView's input_tx) and
+            // the output_rx to drive pumping. We can't easily rebuild an
+            // ExecSession to store on the panel without losing output_rx, so
+            // we wrap stdin_tx in an Option and let the panel keep its own clone.
+            let ExecSession { stdin_tx, output_rx } = sess;
+            let stdin_tx_for_term = stdin_tx.clone();
+            let stdin_tx_for_panel = stdin_tx;
+            let mut output_rx = output_rx;
+            let term_id_for_update = term_id;
+
+            // Terminal is created inside the update() closure; we receive it
+            // back on a oneshot so the outer async loop can pump data into it.
+            let (term_setup_tx, term_setup_rx) = tokio::sync::oneshot::channel::<Entity<TerminalView>>();
+
+            // Synchronously set up the terminal via update(). We hand the
+            // terminal back out via a oneshot so this async task can keep pumping
+            // output into it without needing a nested `cx.spawn`.
+            let _ = ent.update(cx, |p, cx| {
+                let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
+                p.exec_stdin = Some(stdin_tx_for_panel);
+                p.exec_terminal = Some(terminal.clone());
+                // exec_session is only needed to keep the PTY/IO threads alive;
+                // the real IO paths are already running in std threads via the
+                // channels we hold (stdin_tx lives on until exec view closes).
+                // We don't store the session struct here — the IO threads
+                // themselves keep the channels alive until the streams close.
+                p.exec_session = None;
+                p.exec_target = Some(term_id_for_update);
+                p.active_view = View::Exec;
+                p.error = None;
+                // Route TerminalView keystrokes into the PTY.
+                _ = terminal.update(cx, |tv, _cx| {
+                    if let Ok(mut slot) = tv.input_tx.lock() {
+                        *slot = Some(stdin_tx_for_term);
+                    }
+                });
+                cx.notify();
+                let _ = term_setup_tx.send(terminal);
+            });
+
+            // Receive the terminal entity back from the closure.
+            let terminal = match term_setup_rx.await {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            let term_weak = terminal.downgrade();
+            while let Some(chunk) = output_rx.recv().await {
+                let _ = term_weak.update(cx, |tv, cx| {
+                    tv.feed(&chunk);
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -856,24 +817,34 @@ impl DockerPanel {
         v_flex()
             .flex_1()
             .min_h_0()
-            .gap_2()
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
                     .px_4()
-                    .pt_2()
+                    .py_2()
                     .child(div().text_size(px(12.)).text_color(muted).child("Container"))
                     .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(target)),
             )
             .child(div().h(px(1.)).w_full().bg(border))
             .child(
-                div()
-                    .id("docker-exec-term")
-                    .flex_1()
-                    .min_h_0()
-                    .bg(theme.muted)
-                    .children(self.exec_terminal.clone().map(|t| t.into_any_element())),
+                // Terminal fills the remaining space; its own internal canvas
+                // renders with the terminal background color (black/dark).
+                match &self.exec_terminal {
+                    Some(term) => div()
+                        .id("docker-exec-term")
+                        .flex_1()
+                        .min_h_0()
+                        .size_full()
+                        .child(term.clone())
+                        .into_any_element(),
+                    None => div()
+                        .flex_1()
+                        .min_h_0()
+                        .bg(theme.background)
+                        .child("正在启动 Shell…")
+                        .into_any_element(),
+                }
             )
             .into_any_element()
     }

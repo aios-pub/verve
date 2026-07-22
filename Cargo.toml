@@ -128,6 +128,8 @@ gix = { version = "0.69", default-features = false, features = [
 # SSH client: russh (pure-Rust, no C deps) + terminal model + secure storage.
 russh = "0.60"
 russh-sftp = "2.3"
+# PTY allocation for docker exec so the CLI sees a real TTY (needed for -t flag).
+portable-pty = "0.8"
 zmodem2 = "0.7"
 alacritty_terminal = "0.24"
 aes-gcm = "0.10"

@@ -234,12 +234,16 @@ impl LogStream {
     }
 }
 
-/// Handle for an interactive `docker exec -it` session.
+/// Handle for an interactive `docker exec -it` session. The docker CLI runs
+/// attached to a real local PTY (via `portable-pty`), so stdin is a TTY —
+/// this lets us pass `-t` and get proper shell prompts/readline/color output
+/// inside the container.
 pub struct ExecSession {
-    pub child: Child,
-    pub stdin: Option<tokio::process::ChildStdin>,
-    pub stdout: Option<tokio::process::ChildStdout>,
-    pub stderr: Option<tokio::process::ChildStderr>,
+    /// Send bytes (keystrokes) to write to the PTY master → into docker exec.
+    pub stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
+    /// Raw output bytes from the PTY master (ANSI-escaped container output)
+    /// to feed into TerminalView.
+    pub output_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
 /// Timeout for docker CLI calls. If the docker CLI doesn't respond within this
@@ -427,40 +431,127 @@ pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<Log
     })
 }
 
-/// Spawn `docker exec -it <id> sh` for an interactive session.
+/// Spawn `docker exec -it <id> <shell>` for an interactive session.
+///
+/// The docker CLI runs with its stdio attached to a real local pseudo-terminal
+/// (PTY) allocated via `portable-pty`, so we can safely pass `-t` — the CLI
+/// sees a genuine TTY, allocates one inside the container, and we get proper
+/// shell prompts, line editing, color output, and signals. Output bytes are
+/// forwarded over a tokio channel to TerminalView for ANSI rendering; input
+/// bytes come back via stdin_tx and are written to the PTY master.
+///
+/// PTY IO runs on a dedicated std thread (not tokio) because `portable-pty`'s
+/// MasterPty is a trait object without async support; we do blocking reads/
+/// writes and hand bytes across a channel boundary.
 pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use std::io::{Read, Write};
+
     let shell = shell.unwrap_or("sh");
-    let mut cmd = docker_command(host)?;
-    cmd.arg("exec")
-        .arg("-i")
-        .arg("-t")
-        .arg(id)
-        .arg(shell);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
+    let bin = docker_binary();
+
+    // Build a CommandBuilder pointing at the docker binary, forwarding host env.
+    let mut cmd = CommandBuilder::new(&bin);
+    cmd.env("PATH", extended_path());
+    if let Some(h) = host {
+        if let Some(ref ssh_id) = h.ssh_host_id {
+            let url = resolve_ssh_tunnel(h)?;
+            cmd.env("DOCKER_HOST", url);
+        } else if !h.is_local() && !h.host.is_empty() {
+            cmd.env("DOCKER_HOST", &h.host);
+            if h.tls_verify {
+                cmd.env("DOCKER_TLS_VERIFY", "1");
+            }
+            if let Some(ref cert) = h.cert_path {
+                cmd.env("DOCKER_CERT_PATH", cert);
+            }
+        }
+    }
+    cmd.arg("exec");
+    cmd.arg("-it");
+    cmd.arg(id);
+    cmd.arg(shell);
+
+    // Allocate a PTY at a default size; terminal resizes happen via PTY resize API
+    // but wiring that up is a later improvement — 120x32 is a sane default.
+    let pty_system = native_pty_system();
+    let mut pair = pty_system
+        .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .map_err(|e| DockerError(format!("分配 PTY 失败: {e}")))?;
+
+    // Spawn docker exec as a child of the PTY slave.
+    let mut _child = pair
+        .slave
+        .spawn_command(cmd)
         .map_err(|e| DockerError(format!("启动 docker exec 失败: {e}")))?;
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| DockerError("docker 未提供 stdin".into()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| DockerError("docker 未提供 stdout".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| DockerError("docker 未提供 stderr".into()))?;
-    Ok(ExecSession {
-        child,
-        stdin: Some(stdin),
-        stdout: Some(stdout),
-        stderr: Some(stderr),
-    })
+    drop(pair.slave);
+
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+    // portable-pty exposes separate reader/writer handles via dedicated methods:
+    // `try_clone_reader()` → independent boxed Read impl (own fd)
+    // `take_writer()`      → boxed Write impl that consumes write-side ownership
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| DockerError(format!("PTY reader 获取失败: {e}")))?;
+    let mut writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| DockerError(format!("PTY writer 获取失败: {e}")))?;
+    drop(pair.master);
+
+    // Writer thread: UI keystrokes → PTY master.
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        rt.block_on(async move {
+            while let Some(bytes) = stdin_rx.recv().await {
+                if writer.write_all(&bytes).is_err() {
+                    break;
+                }
+                let _ = writer.flush();
+            }
+        });
+    });
+    // Reader thread: PTY master → UI TerminalView.
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        // Wrap reader in an Arc<Mutex> so it can be safely passed to spawn_blocking
+        // without borrowing across an await point.
+        let reader = std::sync::Arc::new(std::sync::Mutex::new(reader));
+        rt.block_on(async move {
+            loop {
+                let reader = reader.clone();
+                // Blocking read on the PTY reader, off the async runtime.
+                let read_res = tokio::task::spawn_blocking(move || {
+                    let mut buf = [0u8; 8192];
+                    let mut guard = reader.lock().unwrap();
+                    let n = (*guard).read(&mut buf)?;
+                    Ok::<(usize, Vec<u8>), std::io::Error>((n, buf[..n].to_vec()))
+                })
+                .await;
+                match read_res {
+                    Ok(Ok((0, _))) | Err(_) => break,
+                    Ok(Ok((_n, data))) => {
+                        if output_tx.send(data).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                }
+            }
+            let _ = _child.wait();
+        });
+    });
+
+    Ok(ExecSession { stdin_tx, output_rx })
 }
 
 #[cfg(test)]

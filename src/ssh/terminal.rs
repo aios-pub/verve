@@ -528,7 +528,7 @@ impl Render for TerminalView {
             .id("terminal-view")
             .track_focus(&focus_handle)
             .tab_stop(false)
-            .w_full()
+            .size_full()
             .bg(bg)
             .text_color(default_fg)
             .px_2()

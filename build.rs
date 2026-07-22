@@ -50,13 +50,48 @@ fn main() {
     // The library is in lib/ subdirectory inside the archive
     let lib_dir = pdfium_out.join("lib");
 
-    // Tell cargo where to find the library and link against it
+    // On macOS: fix the dylib's install name BEFORE linking so the binary
+    // records `@rpath/libpdfium.dylib` (instead of the archive's default
+    // `./libpdfium.dylib`, which resolves relative to CWD and breaks when the
+    // binary is launched from a .app bundle or any other working directory).
+    // Also strip quarantine and ad-hoc sign here so the dylib that gets linked
+    // (and later copied into the bundle) is already prepared.
+    #[cfg(target_os = "macos")]
+    {
+        let lib_file = lib_dir.join("libpdfium.dylib");
+        if lib_file.exists() {
+            // Rewrite the dylib's LC_ID_DYLIB to @rpath/libpdfium.dylib so the
+            // linker embeds an @rpath reference in the binary.
+            let _ = Command::new("install_name_tool")
+                .arg("-id")
+                .arg("@rpath/libpdfium.dylib")
+                .arg(&lib_file)
+                .status();
+            // Remove quarantine attribute if present.
+            let _ = Command::new("xattr")
+                .arg("-d")
+                .arg("com.apple.quarantine")
+                .arg(&lib_file)
+                .output();
+            // Ad-hoc sign the library to satisfy Gatekeeper.
+            let _ = Command::new("codesign")
+                .arg("--force")
+                .arg("--sign")
+                .arg("-")
+                .arg(&lib_file)
+                .output();
+        }
+    }
+
+    // Tell cargo where to find the library and link against it.
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
 
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=dylib=pdfium");
-        // Also set rpath so it finds the dylib at runtime
+        // LC_RPATH = @loader_path so the dylib is found next to the binary
+        // both in a plain `target/release/` layout and inside a .app bundle's
+        // Contents/MacOS/.
         println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path/");
     }
     #[cfg(target_os = "windows")]
@@ -69,55 +104,39 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
     }
 
-    // Copy library to output directory for linking
+    // Copy library to OUT_DIR for linking.
     copy_libs(&lib_dir, &out_dir);
 
-    // On macOS: ad-hoc sign the extracted dylib and remove quarantine attribute
-    // so Gatekeeper doesn't block loading it at runtime.
-    #[cfg(target_os = "macos")]
-    {
-        let lib_file = lib_dir.join("libpdfium.dylib");
-        if lib_file.exists() {
-            // Remove quarantine attribute if present
-            let _ = std::process::Command::new("xattr")
-                .arg("-d")
-                .arg("com.apple.quarantine")
-                .arg(&lib_file)
-                .output();
-            // Ad-hoc sign the library to satisfy Gatekeeper
-            let _ = std::process::Command::new("codesign")
-                .arg("--force")
-                .arg("--sign")
-                .arg("-")
-                .arg(&lib_file)
-                .output();
-        }
-    }
+    // Copy the (already re-id'd and signed) dylib next to the binary in the
+    // actual target profile directory so `cargo run` and direct binary
+    // execution work. Honor CARGO_TARGET_DIR if set (custom target dir such as
+    // /xdfapp/rust-target); fall back to the project-local target/.
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+            manifest_dir.join("target")
+        })
+        .join(&profile);
+    if target_dir.exists() {
+        copy_libs(&lib_dir, &target_dir);
 
-    // For development: copy the lib to target/debug/ and target/release/
-    // so it's adjacent to the binary. Also apply signing there.
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    for profile in ["debug", "release"] {
-        let target_dir = manifest_dir.join("target").join(profile);
-        if target_dir.exists() {
-            copy_libs(&lib_dir, &target_dir);
-
-            #[cfg(target_os = "macos")]
-            {
-                let lib_file = target_dir.join("libpdfium.dylib");
-                if lib_file.exists() {
-                    let _ = std::process::Command::new("xattr")
-                        .arg("-d")
-                        .arg("com.apple.quarantine")
-                        .arg(&lib_file)
-                        .output();
-                    let _ = std::process::Command::new("codesign")
-                        .arg("--force")
-                        .arg("--sign")
-                        .arg("-")
-                        .arg(&lib_file)
-                        .output();
-                }
+        #[cfg(target_os = "macos")]
+        {
+            let lib_file = target_dir.join("libpdfium.dylib");
+            if lib_file.exists() {
+                let _ = Command::new("xattr")
+                    .arg("-d")
+                    .arg("com.apple.quarantine")
+                    .arg(&lib_file)
+                    .output();
+                let _ = Command::new("codesign")
+                    .arg("--force")
+                    .arg("--sign")
+                    .arg("-")
+                    .arg(&lib_file)
+                    .output();
             }
         }
     }
@@ -131,11 +150,11 @@ fn copy_libs(src: &PathBuf, dst: &PathBuf) {
             let path = entry.path();
             if path.is_file() {
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                if matches!(ext, "dylib" | "so" | "dll" | "dll") {
+                // Fix duplicate "dll" | "dll" pattern from original.
+                if matches!(ext, "dylib" | "so" | "dll") {
                     let dest = dst.join(path.file_name().unwrap());
-                    if !dest.exists() {
-                        let _ = fs::copy(&path, &dest);
-                    }
+                    // Always overwrite so install-name/signature changes propagate.
+                    let _ = fs::copy(&path, &dest);
                 }
             }
         }

@@ -205,7 +205,7 @@ impl K8sPanel {
         let pod_for_thread = pod.clone();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                exec_pod(&pod_for_thread, ns.as_deref(), Some("/bin/bash"), ctx.as_deref())
+                exec_pod(&pod_for_thread, ns.as_deref(), None, ctx.as_deref())
             }));
             let msg = match result {
                 Ok(Ok(s)) => Ok(s),

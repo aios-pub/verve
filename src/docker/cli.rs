@@ -443,11 +443,79 @@ pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<Log
 /// PTY IO runs on a dedicated std thread (not tokio) because `portable-pty`'s
 /// MasterPty is a trait object without async support; we do blocking reads/
 /// writes and hand bytes across a channel boundary.
+/// Probe whether `shell` exists inside the container by running a non-interactive
+/// `<shell> -c exit` and checking for a successful exit. Returns false on any
+/// spawn/wait error or if the probe doesn't finish within 5 seconds.
+fn shell_available(host: Option<&DockerHost>, id: &str, shell: &str) -> bool {
+    use std::process::Command as StdCommand;
+
+    let bin = docker_binary();
+    let mut cmd = StdCommand::new(&bin);
+    cmd.env("PATH", extended_path());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    cmd.stdin(Stdio::null());
+    if let Some(h) = host {
+        if let Some(ref ssh_id) = h.ssh_host_id {
+            match resolve_ssh_tunnel(h) {
+                Ok(url) => {
+                    cmd.env("DOCKER_HOST", url);
+                }
+                Err(_) => return false,
+            }
+        } else if !h.is_local() && !h.host.is_empty() {
+            cmd.env("DOCKER_HOST", &h.host);
+            if h.tls_verify {
+                cmd.env("DOCKER_TLS_VERIFY", "1");
+            }
+            if let Some(ref cert) = h.cert_path {
+                cmd.env("DOCKER_CERT_PATH", cert);
+            }
+        }
+    }
+    cmd.arg("exec");
+    cmd.arg(id);
+    cmd.arg(shell);
+    cmd.arg("-c");
+    cmd.arg("exit");
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
 pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::io::{Read, Write};
 
-    let shell = shell.unwrap_or("sh");
+    // Caller-requested shell wins; otherwise auto-detect: prefer bash, fall back to sh.
+    let resolved_shell = match shell {
+        Some(s) => s.to_string(),
+        None => {
+            if shell_available(host, id, "bash") {
+                "bash".to_string()
+            } else {
+                "sh".to_string()
+            }
+        }
+    };
+    let shell = resolved_shell.as_str();
     let bin = docker_binary();
 
     // Build a CommandBuilder pointing at the docker binary, forwarding host env.

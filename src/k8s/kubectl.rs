@@ -256,20 +256,83 @@ pub struct ExecSession {
     pub output_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
-/// Spawn `kubectl exec -it pod [-n ns] -- shell` attached to a PTY so that
-/// Tab completion, arrow keys, and other terminal features work. The shell
-/// defaults to `/bin/bash` for readline support.
+/// Probe whether `shell` exists in the pod by running a non-interactive
+/// `<shell> -c exit` and checking for a successful exit. Flags (`-n`, `--context`)
+/// are placed BEFORE `--` so kubectl interprets them; the shell command comes after.
+/// Returns false on any spawn/wait error or if the probe doesn't finish within 5s.
+fn shell_available(pod: &str, namespace: Option<&str>, context: Option<&str>, shell: &str) -> bool {
+    use std::process::{Command as StdCommand, Stdio as StdStdio};
+
+    let kubeconfig = crate::k8s::clusters::merged_kubeconfig_env();
+    let mut cmd = StdCommand::new("kubectl");
+    cmd.env("KUBECONFIG", &kubeconfig);
+    cmd.stdout(StdStdio::null());
+    cmd.stderr(StdStdio::null());
+    cmd.stdin(StdStdio::null());
+    cmd.arg("exec");
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
+    if let Some(ns) = namespace {
+        if !ns.is_empty() {
+            cmd.args(["-n", ns]);
+        }
+    }
+    cmd.arg(pod);
+    cmd.arg("--");
+    cmd.arg(shell);
+    cmd.arg("-c");
+    cmd.arg("exit");
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Spawn `kubectl exec -it pod [-n ns] [--context ctx] -- shell` attached to a PTY
+/// so that Tab completion, arrow keys, and other terminal features work. When no
+/// shell is requested, bash is tried first and sh is used as a fallback for pods
+/// that don't ship bash (Alpine, distroless, minimal images).
 pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context: Option<&str>) -> Result<ExecSession, PodError> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::io::{Read, Write};
 
-    let shell = shell.unwrap_or("/bin/bash");
+    // Caller-requested shell wins; otherwise auto-detect: prefer bash, fall back to sh.
+    let resolved_shell = match shell {
+        Some(s) => s.to_string(),
+        None => {
+            if shell_available(pod, namespace, context, "bash") {
+                "bash".to_string()
+            } else {
+                "sh".to_string()
+            }
+        }
+    };
+    let shell = resolved_shell.as_str();
+
+    let kubeconfig = crate::k8s::clusters::merged_kubeconfig_env();
     let mut cmd = CommandBuilder::new("kubectl");
+    cmd.env("KUBECONFIG", &kubeconfig);
     cmd.arg("exec");
     cmd.arg("-it");
-    cmd.arg(pod);
-    cmd.arg("--");
-    cmd.arg(shell);
     if let Some(ctx) = context {
         if !ctx.is_empty() {
             cmd.arg("--context");
@@ -282,6 +345,9 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
             cmd.arg(ns);
         }
     }
+    cmd.arg(pod);
+    cmd.arg("--");
+    cmd.arg(shell);
 
     let pty_system = native_pty_system();
     let mut pair = pty_system

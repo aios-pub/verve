@@ -529,7 +529,7 @@ impl DockerPanel {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<ExecSession, String>>();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                exec_container(host.as_ref(), &cid, Some("bash"))
+                exec_container(host.as_ref(), &cid, None)
             }));
             let msg = match result {
                 Ok(Ok(s)) => Ok(s),

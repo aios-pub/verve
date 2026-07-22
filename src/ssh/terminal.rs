@@ -1,14 +1,22 @@
 //! Terminal rendering bridge: `alacritty_terminal` ↔ GPUI.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
-use gpui::*;
+use gpui::{StatefulInteractiveElement as _, *};
 use gpui_component::{h_flex, ActiveTheme};
+
+/// Invisible entity used as a drag-preview for terminal text selection.
+struct EmptyDrag;
+impl Render for EmptyDrag {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().w(px(0.)).h(px(0.))
+    }
+}
 
 /// A null event listener for the alacritty terminal.
 #[derive(Clone, Default)]
@@ -192,6 +200,12 @@ pub struct TerminalView {
     last_visible_rows: usize,
     /// Line height (px) used on last render — for mouse→row mapping.
     last_line_height: f32,
+    /// Latest bounds (window-absolute rect) of the outer terminal div,
+    /// captured during canvas paint. Mouse event coords are window-absolute
+    /// so we subtract bounds.origin to get local coords.
+    bounds: Arc<StdMutex<Bounds<Pixels>>>,
+    /// Whether we've installed the global mouse handlers (done once).
+    mouse_handlers_registered: bool,
 }
 
 impl TerminalView {
@@ -211,14 +225,14 @@ impl TerminalView {
             >,
         > = Arc::new(std::sync::Mutex::new(None));
 
-        // Register a GLOBAL keystroke interceptor that catches ALL keystrokes
-        // — including Tab, which GPUI's dispatch_keystroke routes to the text
-        // input handler BEFORE on_key_down fires. The interceptor runs first.
+        // Bounds (window-absolute rect) of the terminal div, written by the canvas
+        // paint hook each frame and read by mouse handlers. Initialized to zero.
+        let bounds: Arc<StdMutex<Bounds<Pixels>>> = Arc::new(StdMutex::new(Bounds::default()));
+
         let term_for_intercept = term_arc.clone();
         let tx_for_intercept = input_tx.clone();
         let sub = cx.intercept_keystrokes(move |event, _window, _cx| {
             let ks = &event.keystroke;
-            // Only intercept Tab — everything else goes through normal dispatch.
             if ks.key == "tab" {
                 let bytes = b"\t".to_vec();
                 log::info!("INTERCEPT Tab → sending \\t");
@@ -247,6 +261,8 @@ impl TerminalView {
             last_trim_top: 0,
             last_visible_rows: 0,
             last_line_height: 13.0,
+            bounds,
+            mouse_handlers_registered: false,
         }
     }
 
@@ -588,13 +604,59 @@ impl Render for TerminalView {
                 if (a.row, a.col) <= (h.row, h.col) { (a, h) } else { (h, a) }
             });
 
-        // Selection highlight color (subtle blue overlay).
-        let sel_bg = theme.accent.opacity(0.3);
+        // Selection highlight color (bright blue overlay for visibility).
+        let sel_bg = gpui::hsla(0.60, 0.70, 0.50, 0.45);
 
-        // The input handler must be registered during paint (not render).
-        // We use a canvas element as a paint-phase hook.
+        // Build the rendered row elements up-front so we can use them in both
+        // the content area and move mouse handlers into the overlay.
+        let lines_rendered: Vec<AnyElement> = lines
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(row_idx, text)| {
+                let lh = line_height;
+                let fs = font_size;
+                let row_el = div()
+                    .h(px(lh))
+                    .line_height(px(lh))
+                    .text_size(px(fs))
+                    .whitespace_nowrap();
+
+                let Some((start, end)) = sel else {
+                    return row_el.text_color(default_fg).child(text).into_any_element();
+                };
+
+                if row_idx < start.row || row_idx > end.row {
+                    return row_el.text_color(default_fg).child(text).into_any_element();
+                }
+
+                let len = text.len();
+                let from = if row_idx == start.row { start.col } else { 0 };
+                let to = if row_idx == end.row { end.col.min(len) } else { len };
+                let from = from.min(len);
+                let to = to.max(from);
+
+                let before = text[..from].to_string();
+                let selected = text[from..to].to_string();
+                let after = text[to..].to_string();
+
+                h_flex()
+                    .h(px(lh))
+                    .line_height(px(lh))
+                    .text_size(px(fs))
+                    .whitespace_nowrap()
+                    .gap_0()
+                    .text_color(default_fg)
+                    .child(before)
+                    .child(div().bg(sel_bg).text_color(default_fg).child(selected))
+                    .child(after)
+                    .into_any_element()
+            })
+            .collect();
+
         let entity = cx.entity();
         let fh = focus_handle.clone();
+        let bounds_for_paint: Arc<StdMutex<Bounds<Pixels>>> = self.bounds.clone();
 
         div()
             .id("terminal-view")
@@ -603,77 +665,19 @@ impl Render for TerminalView {
             .size_full()
             .bg(bg)
             .text_color(default_fg)
-            .px_2()
-            .pt_1()
-            // Click to focus the terminal for keyboard input.
-            .on_click(cx.listener(|this, _ev, window, cx| {
-                window.focus(&cx.focus_handle(), cx);
-                cx.notify();
-            }))
-            // Mouse down — start a new selection.
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, ev: &MouseDownEvent, _window, cx| {
-                    let pos = ev.position;
-                    let px_x: f32 = pos.x.into();
-                    let px_y: f32 = pos.y.into();
-                    let char_w = approximate_char_width(this.font_size);
-                    let col = ((px_x - 8.0) / char_w).floor().max(0.0) as usize;
-                    let row = (px_y / this.last_line_height).floor().max(0.0) as usize;
-                    let point = SelectionPoint {
-                        row: row.min(this.last_visible_rows.saturating_sub(1)),
-                        col,
-                    };
-                    this.selection_anchor = Some(point);
-                    this.selection_head = Some(point);
-                    this.selecting = true;
-                    cx.notify();
-                }),
+            .relative()
+            // Content rows (inside padding).
+            .child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .size_full()
+                    .items_start()
+                    .children(lines_rendered),
             )
-            // Mouse drag — extend the selection.
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
-                if !this.selecting {
-                    return;
-                }
-                if this.selection_anchor.is_none() {
-                    return;
-                }
-                let pos = ev.position;
-                let px_x: f32 = pos.x.into();
-                let px_y: f32 = pos.y.into();
-                let char_w = approximate_char_width(this.font_size);
-                let col = ((px_x - 8.0) / char_w).floor().max(0.0) as usize;
-                let row = (px_y / this.last_line_height).floor().max(0.0) as usize;
-                this.selection_head = Some(SelectionPoint {
-                    row: row.min(this.last_visible_rows.saturating_sub(1)),
-                    col,
-                });
-                cx.notify();
-            }))
-            // Mouse up — finalize selection (head stays at release point).
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _ev: &MouseUpEvent, _window, cx| {
-                    this.selecting = false;
-                    // If anchor == head it was just a click with no drag — clear
-                    // the selection so Cmd+C doesn't copy empty text.
-                    if let (Some(a), Some(h)) = (this.selection_anchor, this.selection_head) {
-                        if a == h {
-                            this.selection_anchor = None;
-                            this.selection_head = None;
-                        }
-                    }
-                    cx.notify();
-                }),
-            )
-            // Content anchored to the top (no vertical centering).
-            .items_start()
             .on_key_down({
                 let lines_for_copy = lines.clone();
                 cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                // Cmd+C / Ctrl+C WITH a selection present → copy selected text.
-                // Without a selection, fall through to send the byte (Ctrl+C is
-                // SIGINT in terminals, so we must not block that).
                 let is_copy = (event.keystroke.modifiers.platform
                     && event.keystroke.key == "c")
                     || (event.keystroke.modifiers.control && event.keystroke.key == "insert");
@@ -686,8 +690,6 @@ impl Render for TerminalView {
                         }
                     }
                 }
-
-                // Cmd+V / Ctrl+V → paste from clipboard.
                 if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
                     if let Some(item) = cx.read_from_clipboard() {
                         let text = item.text().unwrap_or_default();
@@ -699,92 +701,105 @@ impl Render for TerminalView {
                         }
                     }
                 }
-
                 let bytes = keystroke_to_bytes(&event.keystroke);
                 if !bytes.is_empty() {
                     this.send_input(&bytes);
                     cx.notify();
-                    // MUST stop propagation before GPUI's dispatch_keystroke
-                    // checks key_char fallback (Tab has key_char=Some("\t")).
                     cx.stop_propagation();
                     window.refresh();
                 }
             })})
-            // Each terminal row: split into selected/unselected spans.
-            // Clone lines into an owned vec so the map closure doesn't hold a
-            // borrow of the local `lines` binding past its scope.
-            .children(
-                lines
-                    .clone()
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(row_idx, text)| {
-                        let lh = line_height;
-                        let fs = font_size;
-                        let row_el = div()
-                            .h(px(lh))
-                            .line_height(px(lh))
-                            .text_size(px(fs))
-                            .whitespace_nowrap();
-
-                        let Some((start, end)) = sel else {
-                            return row_el.text_color(default_fg).child(text.clone()).into_any_element();
-                        };
-
-                        // No overlap with this row.
-                        if row_idx < start.row || row_idx > end.row {
-                            return row_el.text_color(default_fg).child(text.clone()).into_any_element();
+            // Absolutely-positioned canvas that covers the entire area so its
+            // paint hook fires reliably. Only job: record bounds (for mouse coord
+            // conversion) and register the keyboard input handler.
+            .child(
+                canvas(
+                    |_bounds, _window, _cx| {},
+                    move |bounds, _state, window, cx: &mut App| {
+                        if let Ok(mut b) = bounds_for_paint.lock() {
+                            *b = bounds.clone();
                         }
-
-                        // Compute column range within this row.
-                        let len = text.len();
-                        let from = if row_idx == start.row { start.col } else { 0 };
-                        let to = if row_idx == end.row {
-                            end.col.min(len)
-                        } else {
-                            len
-                        };
-                        let from = from.min(len);
-                        let to = to.max(from);
-
-                        // Build three segments: before / selected / after.
-                        // We use h_flex with nowrap so the three segments sit on one line.
-                        let before = text[..from].to_string();
-                        let selected = text[from..to].to_string();
-                        let after = text[to..].to_string();
-
-                        h_flex()
-                            .h(px(lh))
-                            .line_height(px(lh))
-                            .text_size(px(fs))
-                            .whitespace_nowrap()
-                            .gap_0()
-                            .text_color(default_fg)
-                            .child(before)
-                            .child(div().bg(sel_bg).text_color(default_fg).child(selected))
-                            .child(after)
-                            .into_any_element()
-                    }),
+                        window.handle_input(&fh, ElementInputHandler::new(bounds, entity.clone()), cx);
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
             )
-            // Canvas child: registers the input handler during paint phase.
-            // This is REQUIRED because window.handle_input() can only be called
-            // during paint, not during render.
-            .child(canvas(
-                |_bounds, _window, _cx| {},
-                move |_bounds, _state, window, cx: &mut App| {
-                    let bounds = window.bounds();
-                    window.handle_input(&fh, ElementInputHandler::new(bounds, entity.clone()), cx);
-                },
-            ))
+            // Mouse handlers live on the outer div (not canvas) so GPUI dispatches
+            // them reliably. ev.position is window-absolute; we subtract bounds.origin.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    window.focus(&cx.focus_handle(), cx);
+                    let px: f32 = ev.position.x.into();
+                    let py: f32 = ev.position.y.into();
+                    let bounds = match this.bounds.lock() { Ok(g) => *g, Err(_) => return };
+                    let ox: f32 = bounds.origin.x.into();
+                    let oy: f32 = bounds.origin.y.into();
+                    let (cw, ch) = char_cell_metrics(this.font_size, this.last_line_height);
+                    let lx = (px - ox - 8.0).max(0.0);
+                    let ly = (py - oy - 4.0).max(0.0);
+                    let col = (lx / cw).floor() as usize;
+                    let row = (ly / ch).floor() as usize;
+                    let pt = SelectionPoint {
+                        row: row.min(this.last_visible_rows.saturating_sub(1)),
+                        col,
+                    };
+                    this.selection_anchor = Some(pt);
+                    this.selection_head = Some(pt);
+                    this.selecting = true;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
+                if !this.selecting { return; }
+                if ev.pressed_button != Some(MouseButton::Left) { return; }
+                let px: f32 = ev.position.x.into();
+                let py: f32 = ev.position.y.into();
+                let bounds = match this.bounds.lock() { Ok(g) => *g, Err(_) => return };
+                let ox: f32 = bounds.origin.x.into();
+                let oy: f32 = bounds.origin.y.into();
+                let bw: f32 = bounds.size.width.into();
+                let bh: f32 = bounds.size.height.into();
+                let pxc = px.clamp(ox + 8.0, ox + bw - 1.0);
+                let pyc = py.clamp(oy + 4.0, oy + bh - 1.0);
+                let (cw, ch) = char_cell_metrics(this.font_size, this.last_line_height);
+                let lx = (pxc - ox - 8.0).max(0.0);
+                let ly = (pyc - oy - 4.0).max(0.0);
+                let col = (lx / cw).floor() as usize;
+                let row = (ly / ch).floor() as usize;
+                this.selection_head = Some(SelectionPoint {
+                    row: row.min(this.last_visible_rows.saturating_sub(1)),
+                    col,
+                });
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseUpEvent, _window, cx| {
+                    this.selecting = false;
+                    if let (Some(a), Some(h)) = (this.selection_anchor, this.selection_head) {
+                        if a == h {
+                            this.selection_anchor = None;
+                            this.selection_head = None;
+                        }
+                    }
+                    cx.notify();
+                }),
+            )
             .into_any_element()
     }
 }
 
-/// Approximate character width in pixels for a monospace font at `font_size`.
-/// Monospace glyphs are ~0.6 × font_size for typical fonts at 13px ≈ 7.8px; we
-/// use 0.6 as a reasonable default — exact pixel-perfect mapping requires
-/// measuring glyphs which is overkill for selection hit-testing.
-fn approximate_char_width(font_size: f32) -> f32 {
-    // `font_size` is the em-height; monospace char advance is ~0.6em.
-    font_size * 0.6
+/// Given font size and line height (both px), returns the monospace character
+/// cell width in pixels. Hardcoded aspect ratio calibrated for Menlo/JetBrains
+/// Mono at common UI sizes. If selection drifts, tune this value.
+fn char_cell_metrics(font_size: f32, line_height: f32) -> (f32, f32) {
+    // Monospace fonts typically render at ~0.55-0.60 × font_size per cell.
+    // Line height is the vertical advance per rendered row.
+    let w = font_size * 0.58;
+    (w, line_height)
 }

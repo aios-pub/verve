@@ -5,6 +5,8 @@
 //!   - `host`          → DOCKER_HOST        (e.g. "tcp://1.2.3.4:2376", "ssh://user@host")
 //!   - `tls_verify`    → DOCKER_TLS_VERIFY
 //!   - `cert_path`     → DOCKER_CERT_PATH
+//!   - `ssh_host_id`   → when set, tunnel through a Verve-managed SSH host
+//!                       (credentials come from Verve's keychain/vault)
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +19,7 @@ pub struct DockerHost {
     /// Display name, e.g. "生产环境 Docker".
     pub name: String,
     /// DOCKER_HOST value, e.g. "tcp://1.2.3.4:2376", "ssh://user@host", "unix:///var/run/docker.sock".
+    /// Empty when `ssh_host_id` is set (tunnel provides the unix:// endpoint dynamically).
     pub host: String,
     /// Whether to enable TLS verification (DOCKER_TLS_VERIFY=1).
     #[serde(default)]
@@ -24,6 +27,11 @@ pub struct DockerHost {
     /// Directory containing ca.pem/cert.pem/key.pem (DOCKER_CERT_PATH).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cert_path: Option<String>,
+    /// If set, references a Verve SSH host id — docker calls will be tunneled
+    /// through an SSH unix-socket forward to the remote `/var/run/docker.sock`,
+    /// using Verve's stored credentials (no system `ssh` needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host_id: Option<String>,
     /// Creation timestamp (Unix seconds).
     pub created_at: i64,
 }
@@ -40,8 +48,21 @@ impl DockerHost {
             host: host.into(),
             tls_verify: false,
             cert_path: None,
+            ssh_host_id: None,
             created_at: now,
         }
+    }
+
+    /// Create a Docker host that tunnels through an existing Verve SSH host.
+    pub fn via_ssh(name: impl Into<String>, ssh_host_id: impl Into<String>) -> Self {
+        let mut s = Self::new(name, "");
+        s.ssh_host_id = Some(ssh_host_id.into());
+        s
+    }
+
+    /// Whether this host connects via Verve's SSH tunnel.
+    pub fn uses_ssh_tunnel(&self) -> bool {
+        self.ssh_host_id.is_some()
     }
 
     /// Synthetic "local" entry — represents the default local Docker daemon
@@ -53,6 +74,7 @@ impl DockerHost {
             host: String::new(),
             tls_verify: false,
             cert_path: None,
+            ssh_host_id: None,
             created_at: 0,
         }
     }

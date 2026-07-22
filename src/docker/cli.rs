@@ -5,13 +5,26 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
-use super::DockerHost;
+use super::{models::DockerHost, socket_tunnel::SocketTunnel};
+
+/// Global cache of open SSH tunnels keyed by Verve SSH host id. A tunnel is
+/// opened on first use for a given host and kept alive until the app exits
+/// (docker CLI opens short-lived connections; re-establishing the SSH
+/// transport per call would be too slow). Closing the tunnel on host-switch
+/// is handled by the panel explicitly.
+static TUNNELS: OnceLock<StdMutex<std::collections::HashMap<String, Arc<SocketTunnel>>>> =
+    OnceLock::new();
+
+fn tunnels() -> &'static StdMutex<std::collections::HashMap<String, Arc<SocketTunnel>>> {
+    TUNNELS.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
+}
 
 /// Resolve the docker CLI absolute path, falling back to PATH lookup. Checks
 /// platform-specific well-known install locations that aren't always on PATH.
@@ -58,25 +71,58 @@ fn docker_binary() -> PathBuf {
     PathBuf::from(if cfg!(windows) { "docker.exe" } else { "docker" })
 }
 
-/// Apply Docker host environment variables (DOCKER_HOST, DOCKER_TLS_VERIFY,
-/// DOCKER_CERT_PATH) to a tokio Command when a non-local host is configured.
-fn apply_host_env(cmd: &mut Command, host: Option<&DockerHost>) {
-    if let Some(h) = host {
-        if !h.is_local() && !h.host.is_empty() {
-            cmd.env("DOCKER_HOST", &h.host);
-            if h.tls_verify {
-                cmd.env("DOCKER_TLS_VERIFY", "1");
-            }
-            if let Some(ref cert) = h.cert_path {
-                cmd.env("DOCKER_CERT_PATH", cert);
-            }
+/// Resolve (opening if necessary) the SSH tunnel for a Verve-SSH-backed
+/// Docker host. Returns the `DOCKER_HOST=unix://...` URL pointing at the local
+/// tunnel endpoint. Tunnels are cached globally for the app lifetime.
+fn resolve_ssh_tunnel(h: &DockerHost) -> Result<String, DockerError> {
+    let Some(ssh_id) = h.ssh_host_id.as_ref() else {
+        return Err(DockerError("Docker host 缺少 ssh_host_id".into()));
+    };
+
+    // Fast path: tunnel already open.
+    {
+        let guard = tunnels().lock().unwrap();
+        if let Some(tun) = guard.get(ssh_id) {
+            return Ok(tun.docker_host_env());
         }
+    }
+
+    // Slow path: open a new tunnel. SocketTunnel::open is synchronous — it
+    // builds its own dedicated tokio runtime that lives as long as the tunnel,
+    // so the accept loop keeps running after this call returns.
+    let tunnel = {
+        let ssh_host = super::socket_tunnel::find_ssh_host(ssh_id)
+            .ok_or_else(|| DockerError(format!("找不到关联的 SSH 主机: {ssh_id}")))?;
+        SocketTunnel::open(&ssh_host)
+            .map_err(|e| DockerError(format!("建立 SSH 隧道失败: {e}")))?
+    };
+
+    let url = tunnel.docker_host_env();
+    let arc = Arc::new(tunnel);
+    tunnels().lock().unwrap().insert(ssh_id.clone(), arc);
+    Ok(url)
+}
+
+/// Close any open SSH tunnel for the given Verve SSH host id. Called by the
+/// panel when the user switches away from an SSH-backed host so we don't
+/// leave dangling connections.
+pub fn close_ssh_tunnel(ssh_host_id: &str) {
+    let mut guard = tunnels().lock().unwrap();
+    if guard.remove(ssh_host_id).is_some() {
+        log::info!("docker tunnel: closed for ssh host {ssh_host_id}");
     }
 }
 
-/// Apply Docker host environment variables to a std (sync) Command.
-fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost>) {
+/// Apply Docker host environment variables (DOCKER_HOST, DOCKER_TLS_VERIFY,
+/// DOCKER_CERT_PATH) to a tokio Command when a non-local host is configured.
+/// For Verve SSH-tunnel hosts, the local unix socket URL is resolved first.
+fn apply_host_env(cmd: &mut Command, host: Option<&DockerHost>) -> Result<(), DockerError> {
     if let Some(h) = host {
+        if let Some(ref ssh_id) = h.ssh_host_id {
+            let url = resolve_ssh_tunnel(h)?;
+            cmd.env("DOCKER_HOST", url);
+            return Ok(());
+        }
         if !h.is_local() && !h.host.is_empty() {
             cmd.env("DOCKER_HOST", &h.host);
             if h.tls_verify {
@@ -87,16 +133,47 @@ fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost
             }
         }
     }
+    Ok(())
+}
+
+/// Apply Docker host environment variables to a std (sync) Command.
+fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost>) -> Result<(), DockerError> {
+    if let Some(h) = host {
+        if let Some(ref ssh_id) = h.ssh_host_id {
+            let url = resolve_ssh_tunnel(h)?;
+            cmd.env("DOCKER_HOST", url);
+            return Ok(());
+        }
+        if !h.is_local() && !h.host.is_empty() {
+            cmd.env("DOCKER_HOST", &h.host);
+            if h.tls_verify {
+                cmd.env("DOCKER_TLS_VERIFY", "1");
+            }
+            if let Some(ref cert) = h.cert_path {
+                cmd.env("DOCKER_CERT_PATH", cert);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Build a Command targeting the docker binary, extending PATH with common
 /// macOS locations so subcommands can find sibling helpers like `docker-credential-osxkeychain`.
-fn docker_command(host: Option<&DockerHost>) -> Command {
+fn docker_command(host: Option<&DockerHost>) -> Result<Command, DockerError> {
     let bin = docker_binary();
     let mut cmd = Command::new(&bin);
     cmd.env("PATH", extended_path());
-    apply_host_env(&mut cmd, host);
-    cmd
+    apply_host_env(&mut cmd, host)?;
+    Ok(cmd)
+}
+
+/// Build a std::process::Command for blocking docker calls with extended PATH.
+fn docker_command_sync(host: Option<&DockerHost>) -> Result<std::process::Command, DockerError> {
+    let bin = docker_binary();
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.env("PATH", extended_path());
+    apply_host_env_sync(&mut cmd, host)?;
+    Ok(cmd)
 }
 
 #[derive(Debug, Clone)]
@@ -165,32 +242,50 @@ pub struct ExecSession {
     pub stderr: Option<tokio::process::ChildStderr>,
 }
 
-/// Build a std::process::Command for blocking docker calls with extended PATH.
-fn docker_command_sync(host: Option<&DockerHost>) -> std::process::Command {
-    let bin = docker_binary();
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.env("PATH", extended_path());
-    apply_host_env_sync(&mut cmd, host);
-    cmd
-}
+/// Timeout for docker CLI calls. If the docker CLI doesn't respond within this
+/// duration (e.g. daemon is hung/unreachable), we kill the child and return an
+/// error so the UI never gets stuck on "loading…".
+const DOCKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn run_docker(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
-    docker_command_sync(host)
-        .args(args)
-        .output()
-        .map_err(|e| {
-            DockerError(format!(
-                "docker 执行失败: {e}; 请确认 Docker daemon 正在运行且 docker CLI 已安装"
-            ))
-        })
+    // std's `.output()` internally spawns reader threads for both stdout and
+    // stderr before waiting on the child — it correctly handles large output
+    // and can never deadlock on pipe buffers. We run it on a helper thread and
+    // apply a timeout via recv_timeout so a hung Docker daemon can't freeze
+    // the UI forever. The helper thread may be leaked on timeout (the docker
+    // CLI process will still exit on its own or be reaped by init), which is
+    // acceptable for a desktop app.
+    let mut cmd = docker_command_sync(host)?;
+    cmd.args(args);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(cmd.output());
+    });
+    match rx.recv_timeout(DOCKER_TIMEOUT) {
+        Ok(Ok(out)) => Ok(out),
+        Ok(Err(e)) => Err(DockerError(format!(
+            "docker 执行失败: {e}; 请确认 Docker daemon 正在运行且 docker CLI 已安装"
+        ))),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DockerError(
+            "docker 命令超时（30秒），请确认 Docker daemon 正在运行".into(),
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(DockerError(
+            "docker 命令执行异常终止，请重试".into(),
+        )),
+    }
 }
 
 pub async fn run_docker_async(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
-    docker_command(host)
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| DockerError(format!("docker 执行失败: {e}")))
+    use tokio::time::timeout;
+    let mut cmd = docker_command(host)?;
+    cmd.args(args);
+    match timeout(DOCKER_TIMEOUT, cmd.output()).await {
+        Ok(Ok(out)) => Ok(out),
+        Ok(Err(e)) => Err(DockerError(format!("docker 执行失败: {e}"))),
+        Err(_) => Err(DockerError(
+            "docker 命令超时（30秒），请确认 Docker daemon 正在运行".into(),
+        )),
+    }
 }
 
 fn extended_path() -> String {
@@ -300,7 +395,7 @@ pub async fn prune_images(host: Option<&DockerHost>) -> Result<String, DockerErr
 
 /// Spawn `docker logs -f --tail=N <id>` and stream lines back to a channel.
 pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<LogStream, DockerError> {
-    let mut cmd = docker_command(host);
+    let mut cmd = docker_command(host)?;
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
@@ -335,7 +430,7 @@ pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<Log
 /// Spawn `docker exec -it <id> sh` for an interactive session.
 pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
     let shell = shell.unwrap_or("sh");
-    let mut cmd = docker_command(host);
+    let mut cmd = docker_command(host)?;
     cmd.arg("exec")
         .arg("-i")
         .arg("-t")

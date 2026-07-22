@@ -14,8 +14,8 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Si
 use tokio::io::AsyncWriteExt;
 
 use crate::docker::{
-    exec_container, find_host, get_active_id, list_containers, list_images, load_hosts,
-    prune_images, remove as docker_remove, remove_host, restart as docker_restart,
+    close_ssh_tunnel, exec_container, find_host, get_active_id, list_containers, list_images,
+    load_hosts, prune_images, remove as docker_remove, remove_host, restart as docker_restart,
     set_active_id, start as docker_start, stop as docker_stop, stream_logs, upsert_host, Container,
     DockerError, DockerHost, ExecSession, ImageInfo, LogStream,
 };
@@ -102,15 +102,21 @@ impl DockerPanel {
     /// Switch to the containers view and reload if empty.
     pub fn show_containers(&mut self, cx: &mut Context<Self>) {
         self.set_view(View::Containers, cx);
-        if self.containers.is_empty() && !self.containers_loading {
+        if self.containers.is_empty() || self.containers_loading {
+            self.containers_loading = false;
             self.reload_containers(cx);
         }
     }
 
-    /// Switch to the images view and reload if empty.
+    /// Switch to the images view and reload if empty. Always reload if we
+    /// somehow got stuck with images_loading==true but nothing in flight (e.g.
+    /// leftover from a bug before the deadlock fix).
     pub fn show_images(&mut self, cx: &mut Context<Self>) {
         self.set_view(View::Images, cx);
-        if self.images.is_empty() && !self.images_loading {
+        if self.images.is_empty() || self.images_loading {
+            // Force-reset loading flag so we never get stuck refusing to
+            // reload because a previous call left the flag raised.
+            self.images_loading = false;
             self.reload_images(cx);
         }
     }
@@ -155,6 +161,13 @@ impl DockerPanel {
     }
 
     fn switch_host(&mut self, id: String, cx: &mut Context<Self>) {
+        // Close any open SSH tunnel for the *previously* active host before
+        // switching — tunnels are cached in cli::TUNNELS and outlive the panel.
+        if let Some(prev) = find_host(&self.active_host_id) {
+            if let Some(ssh_id) = &prev.ssh_host_id {
+                close_ssh_tunnel(ssh_id);
+            }
+        }
         self.active_host_id = id.clone();
         set_active_id(&id);
         // Kill any running log/exec processes.
@@ -194,32 +207,69 @@ impl DockerPanel {
         cx.notify();
     }
 
-    /// Run blocking work on a std::thread and return results via a std channel,
-    /// then apply them on the UI thread inside cx.spawn. Uses std::sync::mpsc
-    /// (not tokio) so no runtime is required.
-    fn run_blocking<F, T>(&mut self, cx: &mut Context<Self>, f: F, on_done: impl 'static + Send + FnOnce(&mut Self, &mut Context<Self>, T))
-    where
+    /// Run blocking work on a dedicated tokio runtime thread, await the result
+    /// directly in the GPUI future (no polling), then apply it on the UI
+    /// thread. Using a tokio oneshot channel + direct await removes the race
+    /// conditions in the old try_recv loop that could leave the UI stuck on
+    /// "加载中…" when switching tabs.
+    fn run_blocking<F, T>(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: F,
+        on_done: impl 'static + Send + FnOnce(&mut Self, &mut Context<Self>, T),
+        on_err: impl 'static + Send + FnOnce(&mut Self, &mut Context<Self>, String),
+    ) where
         F: 'static + Send + FnOnce() -> T,
         T: 'static + Send,
     {
-        let (tx, rx) = std::sync::mpsc::channel::<T>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<T>();
         std::thread::spawn(move || {
-            let result = f();
-            let _ = tx.send(result);
+            // Build a fresh tokio runtime per call (same pattern as do_prune,
+            // logs, exec already use in this file).
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(_) => {
+                    // Can't even build a runtime; just drop tx and let the
+                    // error side fire.
+                    return;
+                }
+            };
+            // Catch panics so a crash inside docker CLI parsing (or any other
+            // unexpected error) doesn't leave the channel hanging.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            match result {
+                Ok(v) => {
+                    let _ = tx.send(v);
+                }
+                Err(panic) => {
+                    let msg = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "后台线程异常终止".into());
+                    log::error!("docker worker thread panicked: {msg}");
+                    // Drop tx without sending — rx.await will return Err, and
+                    // we'll fire on_err.
+                    drop(tx);
+                }
+            }
+            drop(rt);
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            // Poll the std receiver on the smol executor without blocking.
-            loop {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                    }
-                    Err(_) => break,
+            // Direct await — no polling loop. If the worker sends the result
+            // while the view is being reconstructed, update() will still apply
+            // it once the entity is alive.
+            match rx.await {
+                Ok(result) => {
+                    let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
+                }
+                Err(_) => {
+                    // Channel closed without sending (worker panicked or rt
+                    // failed to build).
+                    let _ = ent.update(cx, move |panel, cx| {
+                        on_err(panel, cx, "docker 操作异常终止，请重试".into())
+                    });
                 }
             }
         })
@@ -234,14 +284,23 @@ impl DockerPanel {
         self.error = None;
         cx.notify();
         let host = self.active_host();
-        self.run_blocking(cx, move || list_containers(host.as_ref()), |panel, cx, res| {
-            panel.containers_loading = false;
-            match res {
-                Ok(cs) => panel.containers = cs,
-                Err(e) => panel.error = Some(e.to_string()),
-            }
-            cx.notify();
-        });
+        self.run_blocking(
+            cx,
+            move || list_containers(host.as_ref()),
+            |panel, cx, res| {
+                panel.containers_loading = false;
+                match res {
+                    Ok(cs) => panel.containers = cs,
+                    Err(e) => panel.error = Some(e.to_string()),
+                }
+                cx.notify();
+            },
+            |panel, cx, msg| {
+                panel.containers_loading = false;
+                panel.error = Some(msg);
+                cx.notify();
+            },
+        );
     }
 
     fn reload_images(&mut self, cx: &mut Context<Self>) {
@@ -252,39 +311,53 @@ impl DockerPanel {
         self.error = None;
         cx.notify();
         let host = self.active_host();
-        self.run_blocking(cx, move || list_images(host.as_ref()), |panel, cx, res| {
-            panel.images_loading = false;
-            match res {
-                Ok(imgs) => panel.images = imgs,
-                Err(e) => panel.error = Some(e.to_string()),
-            }
-            cx.notify();
-        });
+        self.run_blocking(
+            cx,
+            move || list_images(host.as_ref()),
+            |panel, cx, res| {
+                panel.images_loading = false;
+                match res {
+                    Ok(imgs) => panel.images = imgs,
+                    Err(e) => panel.error = Some(e.to_string()),
+                }
+                cx.notify();
+            },
+            |panel, cx, msg| {
+                panel.images_loading = false;
+                panel.error = Some(msg);
+                cx.notify();
+            },
+        );
     }
 
     fn do_prune(&mut self, cx: &mut Context<Self>) {
         let host = self.active_host();
-        let (tx, rx) = std::sync::mpsc::channel::<Result<String, DockerError>>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, DockerError>>();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(prune_images(host.as_ref()));
-            let _ = tx.send(result);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(_) => return Err(DockerError("无法创建 tokio runtime".into())),
+                };
+                rt.block_on(prune_images(host.as_ref()))
+            }));
+            let _ = tx.send(result.unwrap_or_else(|_| Err(DockerError("清理操作异常终止".into()))));
         });
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            loop {
-                match rx.try_recv() {
-                    Ok(result) => {
-                        let _ = ent.update(cx, |panel, cx| {
-                            panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
-                            panel.reload_images(cx);
-                        });
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                    }
-                    Err(_) => break,
+            match rx.await {
+                Ok(result) => {
+                    let _ = ent.update(cx, |panel, cx| {
+                        panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
+                        panel.reload_images(cx);
+                    });
+                }
+                Err(_) => {
+                    let _ = ent.update(cx, |panel, cx| {
+                        panel.error = Some("清理操作异常终止，请重试".into());
+                        panel.images_loading = false;
+                        cx.notify();
+                    });
                 }
             }
         })
@@ -296,12 +369,20 @@ impl DockerPanel {
         F: 'static + Send + Fn(Option<&DockerHost>, &str) -> Result<(), DockerError>,
     {
         let host = self.active_host();
-        self.run_blocking(cx, move || f(host.as_ref(), &id), |panel, cx, res| {
-            if let Err(e) = res {
-                panel.error = Some(e.to_string());
-            }
-            panel.reload_containers(cx);
-        });
+        self.run_blocking(
+            cx,
+            move || f(host.as_ref(), &id),
+            |panel, cx, res| {
+                if let Err(e) = res {
+                    panel.error = Some(e.to_string());
+                }
+                panel.reload_containers(cx);
+            },
+            |panel, cx, msg| {
+                panel.error = Some(msg);
+                cx.notify();
+            },
+        );
     }
 
     fn start_logs(&mut self, id: String, cx: &mut Context<Self>) {
@@ -853,6 +934,7 @@ impl DockerPanel {
                         let id_edit = h.id.clone();
                         let id_delete = h.id.clone();
                         let is_local = h.is_local();
+                        let is_ssh = h.ssh_host_id.is_some();
                         h_flex()
                             .gap_2()
                             .items_center()
@@ -875,9 +957,30 @@ impl DockerPanel {
                                         div()
                                             .text_size(px(11.))
                                             .text_color(muted)
-                                            .child(if h.host.is_empty() { "(本地 daemon)".to_string() } else { h.host.clone() }),
+                                            .child(if let Some(ssh_id) = &h.ssh_host_id {
+                                                // Show the SSH host's address instead of empty host field.
+                                                crate::ssh::host_store::find_host(ssh_id)
+                                                    .map(|s| format!("SSH 隧道 — {}@{}:{}", s.username, s.host, s.port))
+                                                    .unwrap_or_else(|| "SSH 隧道 (关联主机已删除)".into())
+                                            } else if h.host.is_empty() {
+                                                "(本地 daemon)".to_string()
+                                            } else {
+                                                h.host.clone()
+                                            }),
                                     ),
                             )
+                            .when(is_ssh, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded_sm()
+                                        .bg(theme.accent.opacity(0.2))
+                                        .text_color(theme.accent)
+                                        .child("SSH"),
+                                )
+                            })
                             .when(is_active, |d| {
                                 d.child(
                                     div()

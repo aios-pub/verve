@@ -11434,6 +11434,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "http_client",
+ "image",
  "keyring",
  "libc",
  "log",

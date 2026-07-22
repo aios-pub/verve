@@ -47,8 +47,14 @@ fn main() {
         panic!("Failed to extract pdfium archive");
     }
 
-    // The library is in lib/ subdirectory inside the archive
+    // The library is in lib/ subdirectory inside the archive. Note: the
+    // prebuilt Windows pdfium archive (bblanchon/pdfium-binaries) ships the
+    // runtime .dll in bin/ and the import library (.dll.lib) in lib/. We link
+    // against the .lib from lib/ but the .dll in bin/ must be shipped next to
+    // the executable.
     let lib_dir = pdfium_out.join("lib");
+    #[cfg(target_os = "windows")]
+    let bin_dir = pdfium_out.join("bin");
 
     // On macOS: fix the dylib's install name BEFORE linking so the binary
     // records `@rpath/libpdfium.dylib` (instead of the archive's default
@@ -96,21 +102,33 @@ fn main() {
     }
     #[cfg(target_os = "windows")]
     {
+        // The prebuilt pdfium archive ships the import library pdfium.dll.lib
+        // in lib/ and the runtime pdfium.dll in bin/. Link against the .lib.
         println!("cargo:rustc-link-lib=dylib=pdfium");
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
     }
     #[cfg(target_os = "linux")]
     {
         println!("cargo:rustc-link-lib=dylib=pdfium");
+        // $ORIGIN        → find libpdfium.so next to the binary (tarball / dev runs).
+        // /usr/lib/verve → install location used by the .deb package.
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/verve");
     }
 
     // Copy library to OUT_DIR for linking.
     copy_libs(&lib_dir, &out_dir);
+    // On Windows, also copy the runtime .dll from bin/.
+    #[cfg(target_os = "windows")]
+    {
+        if bin_dir.exists() {
+            copy_libs(&bin_dir, &out_dir);
+        }
+    }
 
-    // Copy the (already re-id'd and signed) dylib next to the binary in the
-    // actual target profile directory so `cargo run` and direct binary
-    // execution work. Honor CARGO_TARGET_DIR if set (custom target dir such as
-    // /xdfapp/rust-target); fall back to the project-local target/.
+    // Copy the native library next to the binary in the actual target profile
+    // directory so `cargo run` and direct binary execution work. Honor
+    // CARGO_TARGET_DIR if set (custom target dir); fall back to project-local target/.
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string());
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -121,6 +139,12 @@ fn main() {
         .join(&profile);
     if target_dir.exists() {
         copy_libs(&lib_dir, &target_dir);
+        #[cfg(target_os = "windows")]
+        {
+            if bin_dir.exists() {
+                copy_libs(&bin_dir, &target_dir);
+            }
+        }
 
         #[cfg(target_os = "macos")]
         {

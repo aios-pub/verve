@@ -200,67 +200,149 @@ EOF
 build_linux() {
     echo "🐧 Building Linux packages..."
 
+    TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_DIR/target}"
+
     build_release ""
 
+    # Make sure libpdfium.so sits next to the binary in the target dir.
+    # (build.rs copies it, but verify for safety.)
+    if [ ! -f "$TARGET_DIR/release/libpdfium.so" ]; then
+        echo "⚠️  libpdfium.so not found in $TARGET_DIR/release/"
+    fi
+
     # Build .deb
-    if cargo install --list | grep -q cargo-deb; then
+    if cargo install --list 2>/dev/null | grep -q cargo-deb; then
         echo "📦 Creating .deb package..."
-        cargo deb --output target/release/verve-$VERSION-amd64.deb 2>/dev/null || {
-            echo "⚠️  cargo-deb not available, skipping .deb"
+        (cd "$PROJECT_DIR" && cargo deb --output "$TARGET_DIR/release/verve-$VERSION-amd64.deb") 2>/dev/null || {
+            echo "⚠️  cargo-deb failed, skipping .deb"
         }
-        [ -f "target/release/verve-$VERSION-amd64.deb" ] && echo "✅ .deb created"
+        [ -f "$TARGET_DIR/release/verve-$VERSION-amd64.deb" ] && echo "✅ .deb created"
     else
         echo "⚠️  cargo-deb not installed. Install with: cargo install cargo-deb"
     fi
 
-    # Copy binary + icon + desktop entry for manual install
-    mkdir -p target/release/dist
-    cp target/release/verve target/release/dist/
-    cp assets/icons/verve.png target/release/dist/
-    cp assets/verve.desktop target/release/dist/
+    # Copy binary + libpdfium + icon + desktop entry for a portable tarball / manual install.
+    mkdir -p "$TARGET_DIR/release/dist"
+    cp "$TARGET_DIR/release/verve" "$TARGET_DIR/release/dist/"
+    cp "$TARGET_DIR/release/libpdfium.so" "$TARGET_DIR/release/dist/" 2>/dev/null || true
+    cp "$PROJECT_DIR/assets/icons/verve.png" "$TARGET_DIR/release/dist/"
+    cp "$PROJECT_DIR/assets/verve.desktop" "$TARGET_DIR/release/dist/"
+    # Include install script for convenience.
+    cat > "$TARGET_DIR/release/dist/install.sh" <<'EOF'
+#!/bin/sh
+set -e
+cd "$(dirname "$0")"
+sudo install -m 755 verve /usr/bin/verve
+sudo install -m 644 libpdfium.so /usr/lib/verve/libpdfium.so 2>/dev/null || {
+    sudo mkdir -p /usr/lib/verve
+    sudo install -m 644 libpdfium.so /usr/lib/verve/libpdfium.so
+}
+sudo install -m 644 verve.png /usr/share/icons/hicolor/512x512/apps/verve.png
+sudo install -m 644 verve.desktop /usr/share/applications/verve.desktop
+echo "✅ Verve installed to /usr/bin/verve"
+EOF
+    chmod +x "$TARGET_DIR/release/dist/install.sh"
+
+    # Portable tar.gz
+    tar -C "$TARGET_DIR/release/dist" -czf "$TARGET_DIR/release/Verve-$VERSION-linux-x86_64.tar.gz" \
+        verve libpdfium.so verve.png verve.desktop install.sh 2>/dev/null || \
+        echo "⚠️  tarball creation failed"
+
+    # Mirror dist/ into project-local target/ if using custom target dir.
+    if [ "$TARGET_DIR" != "$PROJECT_DIR/target" ]; then
+        mkdir -p "$PROJECT_DIR/target/release"
+        cp -R "$TARGET_DIR/release/dist" "$PROJECT_DIR/target/release/"
+        [ -f "$TARGET_DIR/release/Verve-$VERSION-linux-x86_64.tar.gz" ] && \
+            cp "$TARGET_DIR/release/Verve-$VERSION-linux-x86_64.tar.gz" "$PROJECT_DIR/target/release/"
+        [ -f "$TARGET_DIR/release/verve-$VERSION-amd64.deb" ] && \
+            cp "$TARGET_DIR/release/verve-$VERSION-amd64.deb" "$PROJECT_DIR/target/release/"
+    fi
 
     # Build verve-server
     cargo build --release --bin verve-server
+    if [ "$TARGET_DIR" != "$PROJECT_DIR/target" ] && [ -f "$TARGET_DIR/release/verve-server" ]; then
+        cp "$TARGET_DIR/release/verve-server" "$PROJECT_DIR/target/release/verve-server"
+    fi
 
-    echo "✅ Linux build complete (target/release/dist/)"
-    echo "   Manual install: sudo cp dist/verve /usr/bin/"
-    echo "                   sudo cp dist/verve.png /usr/share/icons/hicolor/512x512/apps/"
-    echo "                   sudo cp dist/verve.desktop /usr/share/applications/"
+    echo "✅ Linux build complete (target/release/dist/ + .deb + .tar.gz)"
+    echo "   Install with: sudo bash target/release/dist/install.sh"
 }
 
 # ─── Windows ────────────────────────────────────────────────────────────────
 build_windows() {
     echo "🪟 Building Windows packages..."
 
-    # Check if we're on Windows or cross-compiling
+    TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_DIR/target}"
+
+    # Pick the right target triple for native vs. cross-compile.
+    # On non-Windows hosts we cross-compile with the GNU toolchain (MSVC
+    # requires the Microsoft linker / Visual Studio build tools which are not
+    # present on macOS/Linux).
     if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]]; then
-        build_release ""
+        TRIPLE=""
+        BINDIR="$TARGET_DIR/release"
     else
-        echo "📦 Cross-compiling for Windows (x86_64-pc-windows-msvc)..."
-        rustup target add x86_64-pc-windows-msvc 2>/dev/null || true
-        build_release "x86_64-pc-windows-msvc"
+        echo "📦 Cross-compiling for Windows (x86_64-pc-windows-gnu)..."
+        TRIPLE="x86_64-pc-windows-gnu"
+        rustup target add x86_64-pc-windows-gnu 2>/dev/null || true
+        # mingw-w64 is needed for linking; on macOS install with `brew install mingw-w64`.
+        if ! command -v x86_64-w64-mingw32-gcc &>/dev/null; then
+            echo "⚠️  x86_64-w64-mingw32-gcc not found."
+            echo "   On macOS:  brew install mingw-w64"
+            echo "   On Linux:  apt install gcc-mingw-w64-x86-64"
+        fi
+        BINDIR="$TARGET_DIR/x86_64-pc-windows-gnu/release"
     fi
 
-    # Build .msi with cargo-wix
-    if cargo install --list | grep -q cargo-wix; then
-        echo "📦 Creating .msi installer..."
-        cargo wix --no-build -o target/release/verve-$VERSION.msi 2>/dev/null || {
-            echo "⚠️  cargo-wix not available, skipping .msi"
-        }
+    build_release "$TRIPLE"
+
+    # Build .msi with cargo-wix (only when building natively on Windows with
+    # the WiX toolchain installed; skip on cross-compile).
+    if [ -z "$TRIPLE" ]; then
+        if cargo install --list 2>/dev/null | grep -q cargo-wix; then
+            echo "📦 Creating .msi installer..."
+            (cd "$PROJECT_DIR" && cargo wix --no-build -o "$TARGET_DIR/release/verve-$VERSION.msi") 2>/dev/null || {
+                echo "⚠️  cargo-wix failed, skipping .msi"
+            }
+        else
+            echo "⚠️  cargo-wix not installed. Install with: cargo install cargo-wix"
+        fi
     else
-        echo "⚠️  cargo-wix not installed. Install with: cargo install cargo-wix"
+        echo "ℹ️  Skipping .msi (requires native Windows + WiX toolchain)."
     fi
 
-    # Copy binary + icon
-    mkdir -p target/release/dist
-    if [ -f "target/x86_64-pc-windows-msvc/release/verve.exe" ]; then
-        cp target/x86_64-pc-windows-msvc/release/verve.exe target/release/dist/
-    elif [ -f "target/release/verve.exe" ]; then
-        cp target/release/verve.exe target/release/dist/
+    # Collect binary + pdfium.dll + icon into dist/ for a portable zip.
+    mkdir -p "$TARGET_DIR/release/dist"
+    if [ -f "$BINDIR/verve.exe" ]; then
+        cp "$BINDIR/verve.exe" "$TARGET_DIR/release/dist/"
+    else
+        echo "❌ verve.exe not found at $BINDIR/verve.exe"
     fi
-    cp assets/icons/verve.ico target/release/dist/
+    # The runtime dll is extracted by build.rs into the same target dir.
+    if [ -f "$BINDIR/pdfium.dll" ]; then
+        cp "$BINDIR/pdfium.dll" "$TARGET_DIR/release/dist/"
+    else
+        echo "⚠️  pdfium.dll not found (PDF rendering will be unavailable)"
+    fi
+    cp "$PROJECT_DIR/assets/icons/verve.ico" "$TARGET_DIR/release/dist/"
 
-    echo "✅ Windows build complete (target/release/dist/)"
+    # Portable zip.
+    (cd "$TARGET_DIR/release/dist" && zip -q "../Verve-$VERSION-windows-x86_64.zip" verve.exe pdfium.dll verve.ico 2>/dev/null) || \
+        echo "⚠️  zip creation failed (install zip to enable)"
+
+    # Mirror back to project-local target/ if using a custom target dir.
+    if [ "$TARGET_DIR" != "$PROJECT_DIR/target" ]; then
+        mkdir -p "$PROJECT_DIR/target/release"
+        rm -rf "$PROJECT_DIR/target/release/dist"
+        cp -R "$TARGET_DIR/release/dist" "$PROJECT_DIR/target/release/"
+        [ -f "$TARGET_DIR/release/Verve-$VERSION-windows-x86_64.zip" ] && \
+            cp "$TARGET_DIR/release/Verve-$VERSION-windows-x86_64.zip" "$PROJECT_DIR/target/release/"
+        [ -f "$TARGET_DIR/release/verve-$VERSION.msi" ] && \
+            cp "$TARGET_DIR/release/verve-$VERSION.msi" "$PROJECT_DIR/target/release/"
+    fi
+
+    echo "✅ Windows build complete (target/release/dist/ + .zip)"
+    echo "   Portable build: target/release/dist/ — copy verve.exe + pdfium.dll together"
 }
 
 # ─── Install: copy built .app to /Applications (macOS) ─────────────────────

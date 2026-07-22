@@ -13,23 +13,40 @@ use tokio::sync::mpsc;
 
 use super::DockerHost;
 
-/// Resolve the docker CLI absolute path, falling back to PATH lookup. On macOS
-/// Docker Desktop installs docker to a handful of well-known locations that
-/// aren't always in the PATH when Verve is launched from Finder / Dock.
+/// Resolve the docker CLI absolute path, falling back to PATH lookup. Checks
+/// platform-specific well-known install locations that aren't always on PATH.
 fn docker_binary() -> PathBuf {
-    let mut candidates = vec![
-        // Apple Silicon Homebrew
-        PathBuf::from("/opt/homebrew/bin/docker"),
-        // Intel Homebrew
-        PathBuf::from("/usr/local/bin/docker"),
-        // Docker Desktop bundled CLI
-        PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"),
-        // Rancher Desktop
-        PathBuf::from("/opt/homebrew/bin/nerdctl"),
-        PathBuf::from("/usr/local/bin/nerdctl"),
-    ];
-    // ~/.docker/bin (user-installed, rare)
-    if let Some(home) = std::env::var_os("HOME") {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(PathBuf::from("/opt/homebrew/bin/docker"));
+        candidates.push(PathBuf::from("/usr/local/bin/docker"));
+        candidates.push(PathBuf::from(
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+        ));
+        candidates.push(PathBuf::from("/opt/homebrew/bin/nerdctl"));
+        candidates.push(PathBuf::from("/usr/local/bin/nerdctl"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push(PathBuf::from("/usr/bin/docker"));
+        candidates.push(PathBuf::from("/usr/local/bin/docker"));
+        candidates.push(PathBuf::from("/snap/bin/docker"));
+        candidates.push(PathBuf::from("/usr/bin/podman"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let program_files = std::env::var_os("ProgramFiles")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
+        candidates.push(program_files.join("Docker").join("Docker").join("resources").join("bin").join("docker.exe"));
+        candidates.push(program_files.join("Docker").join("Docker").join("resources").join("bin").join("docker"));
+        candidates.push(PathBuf::from(r"C:\ProgramData\DockerDesktop\version-bin\docker.exe"));
+    }
+
+    // ~/.docker/bin (user-installed, all platforms)
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         candidates.push(PathBuf::from(home).join(".docker/bin/docker"));
     }
     for p in &candidates {
@@ -37,9 +54,8 @@ fn docker_binary() -> PathBuf {
             return p.clone();
         }
     }
-    // Fall back to PATH resolution (returns "docker" if not found — let the
-    // OS surface the "not found" error when spawn runs).
-    PathBuf::from("docker")
+    // Fall back to PATH resolution.
+    PathBuf::from(if cfg!(windows) { "docker.exe" } else { "docker" })
 }
 
 /// Apply Docker host environment variables (DOCKER_HOST, DOCKER_TLS_VERIFY,
@@ -78,20 +94,7 @@ fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost
 fn docker_command(host: Option<&DockerHost>) -> Command {
     let bin = docker_binary();
     let mut cmd = Command::new(&bin);
-    // Ensure Docker Desktop's bin dir and Homebrew are on PATH even when launched
-    // from a GUI context without a shell profile.
-    cmd.env(
-        "PATH",
-        [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/Applications/Docker.app/Contents/Resources/bin",
-            "/usr/bin",
-            "/bin",
-            std::env::var("PATH").unwrap_or_default().as_str(),
-        ]
-        .join(":"),
-    );
+    cmd.env("PATH", extended_path());
     apply_host_env(&mut cmd, host);
     cmd
 }
@@ -191,15 +194,41 @@ pub async fn run_docker_async(host: Option<&DockerHost>, args: &[&str]) -> Resul
 }
 
 fn extended_path() -> String {
-    [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/Applications/Docker.app/Contents/Resources/bin",
-        "/usr/bin",
-        "/bin",
-        std::env::var("PATH").unwrap_or_default().as_str(),
-    ]
-    .join(":")
+    let mut dirs: Vec<String> = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push("/opt/homebrew/bin".into());
+        dirs.push("/usr/local/bin".into());
+        dirs.push("/Applications/Docker.app/Contents/Resources/bin".into());
+        dirs.push("/usr/bin".into());
+        dirs.push("/bin".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push("/usr/bin".into());
+        dirs.push("/usr/local/bin".into());
+        dirs.push("/snap/bin".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Docker Desktop's bin dir on Windows; let PATH handle the rest.
+        if let Some(pf) = std::env::var_os("ProgramFiles") {
+            let docker_bin = PathBuf::from(&pf).join("Docker").join("Docker").join("resources").join("bin");
+            if docker_bin.exists() {
+                if let Some(s) = docker_bin.to_str() {
+                    dirs.push(s.to_string());
+                }
+            }
+        }
+    }
+
+    if let Ok(existing) = std::env::var("PATH") {
+        dirs.push(existing);
+    }
+    // Use the platform-native PATH separator.
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    dirs.join(sep)
 }
 
 fn check_ok(out: std::process::Output) -> Result<(), DockerError> {

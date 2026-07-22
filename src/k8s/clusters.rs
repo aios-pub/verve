@@ -107,7 +107,9 @@ pub fn merged_kubeconfig_env() -> String {
         // Fall back to the default path so kubectl shows a clear error.
         default.to_string_lossy().to_string()
     } else {
-        paths.join(":")
+        // KUBECONFIG uses the platform's PATH separator: ":" on Unix, ";" on Windows.
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        paths.join(sep)
     }
 }
 

@@ -14,7 +14,7 @@ use gpui_component::{
     v_flex, ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     WindowExt as _,
 };
-
+use gpui_component::Size::Medium;
 use crate::assets::{BRACES, BRACES_JSON, DOCS, DOCKER as DOCKER_ICON, EXPORT, FILE_PDF, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, NOTEBOOK, REFRESH_CW, SERVER, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
@@ -2194,11 +2194,11 @@ impl VerveApp {
 
         let entity_cancel = entity.clone();
         v_flex()
-            .w(px(48.))
+            .w(px(44.))
             .flex_shrink_0()
             .h_full()
             .py_2()
-            .gap_2()
+            .gap_1()
             .items_center()
             .bg(theme.muted)
             // Catch-all drop: if the user releases over a non-target area
@@ -2243,7 +2243,7 @@ impl VerveApp {
 
                 let btn = Button::new(format!("rail-btn-{}", view.name()))
                     .ghost()
-                    .large()
+                    .with_size(Medium)
                     .icon(Self::rail_icon_for(view))
                     .selected(is_active)
                     .tooltip(view.label())
@@ -2367,7 +2367,7 @@ impl VerveApp {
             .child(
                 Button::new("rail-settings")
                     .ghost()
-                    .large()
+                    .with_size(Medium)
                     .icon(IconName::Settings)
                     .tooltip(rust_i18n::t!("settings.title").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2388,7 +2388,7 @@ impl VerveApp {
                     .trigger(
                         Button::new("rail-theme")
                             .ghost()
-                            .large()
+                            .with_size(Medium)
                             .icon(IconName::Palette)
                             .tooltip(format!("主题：{}", theme_name)),
                     )

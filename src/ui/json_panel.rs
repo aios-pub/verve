@@ -1,4 +1,4 @@
-//! JSON Formatter panel — left pane raw input, right pane formatted collapsible tree.
+//! JSON Formatter panel — left pane raw input, right pane formatted collapsible code view.
 //! Supports expand/collapse per node, all expand/collapse, copy result.
 
 use gpui::prelude::FluentBuilder as _;
@@ -59,8 +59,8 @@ impl JsonPanel {
     pub fn expand_all(&mut self, cx: &mut Context<Self>) {
         if let Some(ref json_str) = self.formatted_json {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let items = value_to_tree_items(&value, true);
-                let items = set_all_expanded(items, true);
+                // Rebuild tree with all nodes expanded
+                let items = value_to_tree_items_expanded(&value, true);
                 self.tree.update(cx, |t, cx| t.set_items(items, cx));
             }
         }
@@ -69,9 +69,8 @@ impl JsonPanel {
     pub fn collapse_all(&mut self, cx: &mut Context<Self>) {
         if let Some(ref json_str) = self.formatted_json {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                // When collapsing all, top-level items remain expanded but their children collapse
-                let items = value_to_tree_items(&value, false);
-                let items = set_all_expanded(items, false);
+                // Rebuild tree with only root expanded
+                let items = value_to_tree_items_expanded(&value, false);
                 self.tree.update(cx, |t, cx| t.set_items(items, cx));
             }
         }
@@ -100,7 +99,7 @@ impl JsonPanel {
                 self.formatted_json = Some(pretty);
                 self.error = None;
 
-                // Convert JSON value to TreeItems, top-level keys expanded
+                // Convert JSON value to TreeItems
                 let items = value_to_tree_items(&value, false);
                 self.tree.update(cx, |t, cx| {
                     t.set_items(items, cx);
@@ -117,75 +116,135 @@ impl JsonPanel {
     }
 }
 
-/// Recursively convert a serde_json::Value into TreeItems.
-/// For the root object/array, we directly return its children instead of wrapping
-/// them in a "{ Object }" label, so keys render at top level like FeHelper.
+/// Recursively convert a serde_json::Value into TreeItems, with root always expanded.
+/// We create a virtual root node so the outer braces are visible and collapsible.
 fn value_to_tree_items(value: &serde_json::Value, expanded_all: bool) -> Vec<TreeItem> {
+    value_to_tree_items_expanded(value, expanded_all)
+}
+
+/// Build tree with specified expanded state for all nodes
+fn value_to_tree_items_expanded(value: &serde_json::Value, expand_all: bool) -> Vec<TreeItem> {
     match value {
         serde_json::Value::Object(map) => {
-            map.iter().map(|(k, v)| {
-                json_to_tree_item(v, k.clone(), 0, expanded_all)
-            }).collect()
+            let label = format!("{}|{}", "{", map.len());
+            let mut children = Vec::new();
+            let child_count = map.len();
+            let mut i = 0;
+            for (k, v) in map {
+                i += 1;
+                let trailing_comma = i < child_count;
+                let mut child = json_to_tree_item_expanded(v, k.clone(), 1, expand_all);
+                if trailing_comma {
+                    child.label = SharedString::from(format!("{},", child.label));
+                }
+                children.push(child);
+            }
+            // Add closing brace as last child
+            children.push(TreeItem::new("root-close".to_string(), "}"));
+            vec![
+                TreeItem::new("root".to_string(), label)
+                    .children(children)
+                    .expanded(true)  // root always expanded
+            ]
         }
         serde_json::Value::Array(arr) => {
-            arr.iter().enumerate().map(|(i, v)| {
-                json_to_tree_item(v, i.to_string(), 0, expanded_all)
-            }).collect()
+            let label = format!("{}|{}", "[", arr.len());
+            let mut children = Vec::new();
+            let child_count = arr.len();
+            for (i, v) in arr.iter().enumerate() {
+                let trailing_comma = i < child_count - 1;
+                let mut child = json_to_tree_item_expanded(v, i.to_string(), 1, expand_all);
+                if trailing_comma {
+                    child.label = SharedString::from(format!("{},", child.label));
+                }
+                children.push(child);
+            }
+            // Add closing bracket as last child
+            children.push(TreeItem::new("root-close".to_string(), "]"));
+            vec![
+                TreeItem::new("root".to_string(), label)
+                    .children(children)
+                    .expanded(true)  // root always expanded
+            ]
         }
         // Primitive root value - single item
-        _ => vec![json_to_tree_item(value, "root".to_string(), 0, expanded_all)],
+        _ => vec![json_to_tree_item_expanded(value, String::new(), 0, expand_all)],
     }
 }
 
 /// Recursively convert a serde_json::Value into a TreeItem.
+/// For containers we encode count in label as "prefix{|count" or "prefix[|count".
 fn json_to_tree_item(value: &serde_json::Value, key: String, depth: usize, expanded_all: bool) -> TreeItem {
+    json_to_tree_item_expanded(value, key, depth, expanded_all)
+}
+
+/// Build tree item with specified expand_all state
+fn json_to_tree_item_expanded(value: &serde_json::Value, key: String, depth: usize, expand_all: bool) -> TreeItem {
     let id = format!("{}-{}", depth, key);
+    let key_prefix = if key.is_empty() {
+        String::new()
+    } else {
+        format!("\"{}\": ", key)
+    };
+
     match value {
         serde_json::Value::Object(map) => {
-            let label = format!("\"{}\": {{ {} }}", key, map.len());
+            let label = format!("{}{}|{}", key_prefix, "{", map.len());
             let mut children = Vec::new();
+            let child_count = map.len();
+            let mut i = 0;
             for (k, v) in map {
-                children.push(json_to_tree_item(v, k.clone(), depth + 1, expanded_all));
+                i += 1;
+                let trailing_comma = i < child_count;
+                let mut child = json_to_tree_item_expanded(v, k.clone(), depth + 1, expand_all);
+                if trailing_comma {
+                    child.label = SharedString::from(format!("{},", child.label));
+                }
+                children.push(child);
             }
+            // Add closing brace as last child
+            let close_id = format!("{}-{}-close", depth, key);
+            children.push(TreeItem::new(close_id, "}"));
             TreeItem::new(id, label)
                 .children(children)
-                .expanded(expanded_all || depth == 0)
+                .expanded(expand_all || depth == 0)
         }
         serde_json::Value::Array(arr) => {
-            let label = format!("\"{}\": [ {} ]", key, arr.len());
+            let label = format!("{}[|{}", key_prefix, arr.len());
             let mut children = Vec::new();
+            let child_count = arr.len();
             for (i, v) in arr.iter().enumerate() {
-                children.push(json_to_tree_item(v, i.to_string(), depth + 1, expanded_all));
+                let trailing_comma = i < child_count - 1;
+                let mut child = json_to_tree_item_expanded(v, i.to_string(), depth + 1, expand_all);
+                if trailing_comma {
+                    child.label = SharedString::from(format!("{},", child.label));
+                }
+                children.push(child);
             }
+            // Add closing bracket as last child
+            let close_id = format!("{}-{}-close", depth, key);
+            children.push(TreeItem::new(close_id, "]"));
             TreeItem::new(id, label)
                 .children(children)
-                .expanded(expanded_all || depth == 0)
+                .expanded(expand_all || depth == 0)
         }
         serde_json::Value::String(s) => {
-            let label = format!("\"{}\": \"{}\"", key, s);
+            let label = format!("{}\"{}\"", key_prefix, s);
             TreeItem::new(id, label)
         }
         serde_json::Value::Number(n) => {
-            let label = format!("\"{}\": {}", key, n);
+            let label = format!("{}{}", key_prefix, n);
             TreeItem::new(id, label)
         }
         serde_json::Value::Bool(b) => {
-            let label = format!("\"{}\": {}", key, b);
+            let label = format!("{}{}", key_prefix, b);
             TreeItem::new(id, label)
         }
         serde_json::Value::Null => {
-            let label = format!("\"{}\": null", key);
+            let label = format!("{}null", key_prefix);
             TreeItem::new(id, label)
         }
     }
-}
-
-/// Recursively set expanded state on all tree items.
-fn set_all_expanded(items: Vec<TreeItem>, expanded: bool) -> Vec<TreeItem> {
-    items.into_iter().map(|item| {
-        let children = item.children.clone();
-        item.children(set_all_expanded(children, expanded)).expanded(expanded)
-    }).collect()
 }
 
 impl Render for JsonPanel {
@@ -234,6 +293,7 @@ impl Render for JsonPanel {
         let success = theme.success;
         let info = theme.info;
         let tree_entity = self.tree.clone();
+        let tree_row = self.tree.clone();
 
         let output_el = v_flex()
             .size_full()
@@ -272,7 +332,7 @@ impl Render for JsonPanel {
                     .bg(theme.muted.opacity(0.3))
                     .when(self.formatted_json.is_some(), |c| {
                         c.child(
-                            tree(&self.tree, move |ix, entry, _selected, _window, _cx| {
+                            tree(&self.tree, move |ix, entry, _selected, _window, cx| {
                                 let item = entry.item();
                                 let depth = entry.depth();
                                 let is_folder = entry.is_folder();
@@ -280,44 +340,102 @@ impl Render for JsonPanel {
                                 let label_str = item.label.to_string();
                                 let tree_for_click = tree_entity.clone();
 
-                                gpui_component::list::ListItem::new(SharedString::from(format!("json-row-{}", item.id)))
-                                    .pl(px(8.) * depth)
-                                    .when(is_folder, |row| {
-                                        let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
-                                        let tree_chevron = tree_for_click.clone();
-                                        let tree_row = tree_for_click.clone();
-                                        row.child(
+                                let chevron_size = 20.;
+                                let indent_width = 20.;
+
+                                let mut row = gpui_component::list::ListItem::new(SharedString::from(format!("json-row-{}", item.id)))
+                                    .pl(px(indent_width) * depth)
+                                    .h(px(22.));
+
+                                if is_folder {
+                                    let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
+                                    let toggle_ix = ix;
+
+                                    // Parse label: we encoded as "prefix{|count" for objects, "prefix[|count" for arrays
+                                    let (is_array, key_part, count) = if let Some(pipe_pos) = label_str.rfind('|') {
+                                        let count: usize = label_str[pipe_pos+1..].parse().unwrap_or(0);
+                                        let prefix = &label_str[..pipe_pos];
+                                        let is_arr = prefix.ends_with('[');
+                                        let key_part = if is_arr {
+                                            prefix.trim_end_matches('[')
+                                        } else {
+                                            prefix.trim_end_matches('{')
+                                        };
+                                        (is_arr, key_part.to_string(), count)
+                                    } else {
+                                        (false, label_str.clone(), 0)
+                                    };
+
+                                    let display_label = if is_expanded {
+                                        // Expanded: just show opening brace/key
+                                        if is_array {
+                                            format!("{}[", key_part)
+                                        } else {
+                                            format!("{}{}", key_part, "{")
+                                        }
+                                    } else {
+                                        // Collapsed: show {...N} or [...N]
+                                        if is_array {
+                                            format!("{}[...{}]", key_part, count)
+                                        } else {
+                                            format!("{}{{...{}}}", key_part, count)
+                                        }
+                                    };
+
+                                    row = row.child(
+                                        h_flex()
+                                            .gap_0()
+                                            .items_center()
+                                            .h_full()
+                                            .w_full()
+                                            .child(
+                                                // Chevron character as indicator
+                                                div()
+                                                    .w(px(chevron_size))
+                                                    .h(px(chevron_size))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .text_color(muted_fg)
+                                                    .font_family(mono_font.clone())
+                                                    .text_xs()
+                                                    .child(if is_expanded { "▼" } else { "▶" }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(fg)
+                                                    .font_family(mono_font.clone())
+                                                    .text_sm()
+                                                    .child(display_label),
+                                            ),
+                                    );
+
+                                    // Make entire row clickable to toggle
+                                    row = row.on_click(move |_, _, cx| {
+                                        tree_for_click.update(cx, |t, cx| t.toggle_expand(toggle_ix, cx));
+                                    });
+                                } else {
+                                    // Handle closing brace/bracket
+                                    if label_str == "}" || label_str == "]" {
+                                        row = row.child(
                                             h_flex()
-                                                .gap_1()
+                                                .gap_0()
                                                 .items_center()
-                                                .child(
-                                                    Button::new(SharedString::from(format!("json-chevron-{}", item.id)))
-                                                        .icon(icon)
-                                                        .ghost()
-                                                        .small()
-                                                        .on_click(move |_, _, cx| {
-                                                            tree_chevron.update(cx, |t, cx| t.toggle_expand(ix, cx));
-                                                        }),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(fg)
-                                                        .font_family(mono_font.clone())
-                                                        .text_sm()
-                                                        .child(label_str.clone()),
-                                                ),
-                                        )
-                                        .on_click(move |_, _, cx| {
-                                            tree_row.update(cx, |t, cx| t.toggle_expand(ix, cx));
-                                        })
-                                    })
-                                    .when(!is_folder, |row| {
-                                        // Determine color for primitive value
-                                        let value_color = if label_str.contains("true") || label_str.contains("false") {
+                                                .h_full()
+                                                .pl(px(chevron_size)) // align with opening chevron
+                                                .font_family(mono_font.clone())
+                                                .text_sm()
+                                                .text_color(fg)
+                                                .child(label_str.clone()),
+                                        );
+                                    } else {
+                                        // Regular primitive value
+                                        let check_str = label_str.trim_end_matches(',');
+                                        let value_color = if check_str.contains("true") || check_str.contains("false") {
                                             warn // boolean
-                                        } else if label_str.contains("null") {
+                                        } else if check_str.contains("null") {
                                             muted_fg // null
-                                        } else if label_str.contains(": \"") {
+                                        } else if check_str.contains(": \"") || check_str.starts_with('"') {
                                             success // string
                                         } else {
                                             info // number
@@ -330,11 +448,12 @@ impl Render for JsonPanel {
                                             (String::new(), label_str.clone())
                                         };
 
-                                        row.child(
+                                        row = row.child(
                                             h_flex()
-                                                .gap_1()
+                                                .gap_0()
                                                 .items_center()
-                                                .pl(px(28.))
+                                                .h_full()
+                                                .pl(px(chevron_size)) // align with folder rows
                                                 .font_family(mono_font.clone())
                                                 .text_sm()
                                                 .child(
@@ -347,8 +466,11 @@ impl Render for JsonPanel {
                                                         .text_color(value_color)
                                                         .child(val_part),
                                                 ),
-                                        )
-                                    })
+                                        );
+                                    }
+                                }
+
+                                row
                             }),
                         )
                     })

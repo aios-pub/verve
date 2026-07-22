@@ -38,6 +38,11 @@ pub struct DockerPanel {
     active_host_id: String,
     containers: Vec<Container>,
     containers_loading: bool,
+    /// Container state filter: "all" / "running". Defaults to "running".
+    container_filter: String,
+    /// Whether we've ever loaded containers for this host. Used to auto-load
+    /// the first time the user opens the Docker panel (instead of at startup).
+    containers_loaded: bool,
     images: Vec<ImageInfo>,
     images_loading: bool,
     log_target: Option<String>,
@@ -53,14 +58,16 @@ pub struct DockerPanel {
 }
 
 impl DockerPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut panel = Self {
+    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+        Self {
             error: None,
             active_view: View::Containers,
             hosts: load_hosts(),
             active_host_id: get_active_id(),
             containers: Vec::new(),
             containers_loading: false,
+            container_filter: "running".into(),
+            containers_loaded: false,
             images: Vec::new(),
             images_loading: false,
             log_target: None,
@@ -71,11 +78,17 @@ impl DockerPanel {
             exec_stdin: None,
             exec_child: None,
             exec_session: None,
-        };
-        // Auto-load containers when the Docker panel is first opened so the
-        // user doesn't have to click "刷新" or switch tabs to see data.
-        panel.reload_containers(cx);
-        panel
+        }
+    }
+
+    /// Called by app.rs when the user clicks the Docker sidebar item.
+    /// Loads containers lazily on first activation — we don't touch Docker
+    /// at app startup time, only when the user actually opens the panel.
+    pub fn activate(&mut self, cx: &mut Context<Self>) {
+        if !self.containers_loaded && !self.containers_loading {
+            self.containers_loaded = true;
+            self.reload_containers(cx);
+        }
     }
 
     fn active_host(&self) -> Option<DockerHost> {
@@ -191,6 +204,8 @@ impl DockerPanel {
         }
         self.containers.clear();
         self.images.clear();
+        self.container_filter = "running".into();
+        self.containers_loaded = false;
         self.error = None;
         cx.notify();
     }
@@ -585,15 +600,35 @@ impl DockerPanel {
         let muted = theme.muted_foreground;
         let border = theme.border;
         let loading = self.containers_loading;
+        let filter = self.container_filter.clone();
+
+        // Count containers by state for badge labels.
+        let running_count = self.containers.iter().filter(|c| c.state == "running").count();
+        let total_count = self.containers.len();
 
         let rows = v_flex().id("docker-ct-scroll").overflow_y_scroll().flex_1().min_h_0().gap_1();
+
+        // Determine which containers to show based on the active filter.
+        let filtered: Vec<&Container> = match filter.as_str() {
+            "running" => self.containers.iter().filter(|c| c.state == "running").collect(),
+            "all" => self.containers.iter().collect(),
+            _ => self.containers.iter().filter(|c| c.state == "running").collect(),
+        };
 
         let body = if self.containers.is_empty() && !loading {
             rows.child(div().text_size(px(12.)).text_color(muted).child(
                 "点“刷新”列出容器。需要 Docker daemon 正在运行,docker CLI 在 PATH 中。",
             ))
+        } else if filtered.is_empty() && !loading {
+            rows.child(div().text_size(px(12.)).text_color(muted).child(
+                if filter == "running" {
+                    format!("没有正在运行的容器（共 {total_count} 个已停止）")
+                } else {
+                    "没有容器".to_string()
+                },
+            ))
         } else {
-            rows.children(self.containers.iter().map(|c| {
+            rows.children(filtered.into_iter().map(|c| {
                 let state_color = match c.state.as_str() {
                     "running" => theme.primary,
                     "exited" => muted,
@@ -701,6 +736,34 @@ impl DockerPanel {
             }))
         };
 
+        // Filter pill buttons.
+        let is_running = filter == "running";
+        let is_all = filter == "all";
+        let filter_bar = h_flex()
+            .gap_1()
+            .child(
+                Button::new("docker-filter-running")
+                    .xsmall()
+                    .ghost()
+                    .label(format!("运行中 ({running_count})"))
+                    .when(is_running, |b| b.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.container_filter = "running".into();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("docker-filter-all")
+                    .xsmall()
+                    .ghost()
+                    .label(format!("全部 ({total_count})"))
+                    .when(is_all, |b| b.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.container_filter = "all".into();
+                        cx.notify();
+                    })),
+            );
+
         v_flex()
             .flex_1()
             .min_h_0()
@@ -709,6 +772,7 @@ impl DockerPanel {
             .children(self.error.as_ref().map(|e| {
                 div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
             }))
+            .child(filter_bar)
             .child(if loading {
                 div().text_size(px(12.)).text_color(muted).child("加载中…").into_any_element()
             } else {

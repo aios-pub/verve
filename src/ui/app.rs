@@ -2253,6 +2253,10 @@ impl VerveApp {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_view = view;
+                        // Lazy-activate panels that shouldn't connect at app startup.
+                        if view == SideView::Docker {
+                            this.docker.update(cx, |d, cx| d.activate(cx));
+                        }
                         cx.notify();
                     }));
 

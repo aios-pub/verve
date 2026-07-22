@@ -2194,11 +2194,11 @@ impl VerveApp {
 
         let entity_cancel = entity.clone();
         v_flex()
-            .w(px(44.))
+            .w(px(48.))
             .flex_shrink_0()
             .h_full()
             .py_2()
-            .gap_1()
+            .gap_2()
             .items_center()
             .bg(theme.muted)
             // Catch-all drop: if the user releases over a non-target area
@@ -2217,7 +2217,7 @@ impl VerveApp {
                 let hover_bg = gpui::hsla(p.h, p.s, (p.l + 0.12).min(1.0), p.a);
                 div()
                     .id("brand-mark")
-                    .size_7()
+                    .size_8()
                     .mb_2()
                     .rounded(theme.radius)
                     .bg(theme.primary)
@@ -2226,6 +2226,7 @@ impl VerveApp {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
+                    .text_size(px(16.))
                     .hover(move |d| d.bg(hover_bg))
                     .child(div().font_weight(FontWeight::BOLD).child("V"))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2242,7 +2243,7 @@ impl VerveApp {
 
                 let btn = Button::new(format!("rail-btn-{}", view.name()))
                     .ghost()
-                    .small()
+                    .large()
                     .icon(Self::rail_icon_for(view))
                     .selected(is_active)
                     .tooltip(view.label())
@@ -2366,7 +2367,7 @@ impl VerveApp {
             .child(
                 Button::new("rail-settings")
                     .ghost()
-                    .small()
+                    .large()
                     .icon(IconName::Settings)
                     .tooltip(rust_i18n::t!("settings.title").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2387,7 +2388,7 @@ impl VerveApp {
                     .trigger(
                         Button::new("rail-theme")
                             .ghost()
-                            .small()
+                            .large()
                             .icon(IconName::Palette)
                             .tooltip(format!("主题：{}", theme_name)),
                     )

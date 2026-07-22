@@ -114,18 +114,27 @@ build_macos() {
         # Applications symlink — creates the drag-to-install target.
         ln -s /Applications "$STAGING/Applications"
 
-        # Optional: tweak finder layout (icon positions, icon size, toolbar
-        # hidden) via a .DS_Store. If `osascript`/bless aren't available or
-        # anything fails we still emit a working DMG — just without the
-        # polished window layout.
+        # Optional: tweak Finder layout (icon positions, icon size, toolbar
+        # hidden) by writing a .DS_Store onto a writable image. If any step
+        # fails we fall back to a plain DMG (still works for install).
         (
-            # Create a writable RW DMG first so we can bless it with a view.
+            # Detach any stale Verve mounts left over from prior runs so that
+            # the mount point is a clean "/Volumes/Verve" (no "Verve 2" suffixes).
+            for m in /Volumes/Verve*; do
+                [ -d "$m" ] && hdiutil detach "$m" -force -quiet 2>/dev/null || true
+            done
+
             RW_DMG="$PROJECT_DIR/target/release/Verve-$VERSION-rw.dmg"
+            rm -f "$RW_DMG" "$DMG"
             hdiutil create -volname "Verve" -srcfolder "$STAGING" -ov -format UDRW "$RW_DMG" >/dev/null
-            # Mount (don't pop Finder yet — we script the layout).
-            MOUNT=$(hdiutil attach "$RW_DMG" -nobrowse -readwrite | tail -1 | awk '{print $NF}')
+
+            # Attach and capture the mount point (path may contain spaces, so
+            # parse with sed instead of awk's $NF).
+            ATTACH_OUT=$(hdiutil attach "$RW_DMG" -nobrowse -readwrite 2>&1)
+            MOUNT=$(echo "$ATTACH_OUT" | sed -n 's|^.*\(/Volumes/.*\)$|\1|p' | head -1)
+
             if [ -d "$MOUNT" ]; then
-                # Position icons and arrange the window via AppleScript.
+                # Arrange the Finder window via AppleScript.
                 osascript <<EOF >/dev/null 2>&1 || true
 tell application "Finder"
     tell disk "Verve"
@@ -142,15 +151,30 @@ tell application "Finder"
         close
         open
         update without registering applications
-        delay 2
+        delay 3
     end tell
 end tell
 EOF
                 sync
-                hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1
+                # Force-detach; retry a few times in case Finder is still holding it.
+                for _ in 1 2 3 4 5 6 7 8; do
+                    hdiutil detach "$MOUNT" -quiet 2>/dev/null && break
+                    sleep 1
+                done
+                # Last-resort force detach if still attached.
+                hdiutil info | grep -F "$MOUNT" >/dev/null 2>&1 && \
+                    hdiutil detach "$MOUNT" -force -quiet 2>/dev/null || true
             fi
-            # Compress to final DMG.
-            hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
+
+            # Compress the RW image into the final distributable DMG.
+            if hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" 2>&1; then
+                : # success
+            else
+                # Fallback: if convert failed (busy), just use a plain UDZO
+                # srcfolder DMG without the custom Finder layout — still works.
+                echo "   (custom layout failed, falling back to plain DMG)"
+                hdiutil create -volname "Verve" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null 2>&1 || true
+            fi
             rm -f "$RW_DMG"
         )
 
@@ -239,6 +263,39 @@ build_windows() {
     echo "✅ Windows build complete (target/release/dist/)"
 }
 
+# ─── Install: copy built .app to /Applications (macOS) ─────────────────────
+install_macos() {
+    APP_SRC="$PROJECT_DIR/target/release/bundle/osx/Verve.app"
+    APP_DST="/Applications/Verve.app"
+    if [ ! -d "$APP_SRC" ]; then
+        echo "❌ $APP_SRC not found — run './scripts/build.sh macos' first."
+        exit 1
+    fi
+    echo "📥 Installing Verve.app to /Applications..."
+    # If already running, offer to kill it.
+    if pgrep -x "verve" >/dev/null 2>&1; then
+        echo "   Verve is currently running — quitting..."
+        pkill -x verve 2>/dev/null || true
+        sleep 1
+    fi
+    # Remove old install.
+    if [ -d "$APP_DST" ]; then
+        echo "   Removing previous installation..."
+        rm -rf "$APP_DST"
+    fi
+    cp -R "$APP_SRC" "$APP_DST"
+    # Remove quarantine so Gatekeeper doesn't flag a local copy.
+    # `xattr -r` is not supported on older macOS; -c clears all xattrs safely.
+    xattr -rc "$APP_DST" 2>/dev/null || \
+        find "$APP_DST" -print0 2>/dev/null | xargs -0 xattr -d com.apple.quarantine 2>/dev/null || true
+    # Re-sign ad-hoc after copying to a new path.
+    codesign --force --deep --sign - "$APP_DST" 2>/dev/null || true
+    echo "✅ Installed: $APP_DST"
+    echo ""
+    echo "🚀 Launch with: open -a Verve"
+    open -a Verve 2>/dev/null && echo "   (launched)" || true
+}
+
 # ─── Main ───────────────────────────────────────────────────────────────────
 case "$PLATFORM" in
     darwin|macos)
@@ -250,6 +307,12 @@ case "$PLATFORM" in
     mingw*|msys*|cygwin*|windows)
         build_windows
         ;;
+    install)
+        case "$(uname -s)" in
+            Darwin) install_macos ;;
+            *) echo "❌ 'install' is currently supported on macOS only."; exit 1 ;;
+        esac
+        ;;
     all|"")
         case "$(uname -s)" in
             Darwin) build_macos ;;
@@ -258,8 +321,8 @@ case "$PLATFORM" in
         esac
         ;;
     *)
-        echo "❌ Unknown platform: $PLATFORM"
-        echo "   Supported: macos, linux, windows, all"
+        echo "❌ Unknown platform/command: $PLATFORM"
+        echo "   Supported: macos, linux, windows, all, install"
         exit 1
         ;;
 esac

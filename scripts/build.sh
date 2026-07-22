@@ -284,10 +284,13 @@ install_macos() {
         rm -rf "$APP_DST"
     fi
     cp -R "$APP_SRC" "$APP_DST"
-    # Remove quarantine so Gatekeeper doesn't flag a local copy.
-    # `xattr -r` is not supported on older macOS; -c clears all xattrs safely.
-    xattr -rc "$APP_DST" 2>/dev/null || \
+    # Remove quarantine so Gatekeeper doesn't flag a local copy. Some macOS
+    # versions don't support `xattr -r`; fall back to find + xattr -c.
+    if xattr -c "$APP_DST" 2>/dev/null; then
+        find "$APP_DST" -print0 2>/dev/null | xargs -0 xattr -c 2>/dev/null || true
+    else
         find "$APP_DST" -print0 2>/dev/null | xargs -0 xattr -d com.apple.quarantine 2>/dev/null || true
+    fi
     # Re-sign ad-hoc after copying to a new path.
     codesign --force --deep --sign - "$APP_DST" 2>/dev/null || true
     echo "✅ Installed: $APP_DST"

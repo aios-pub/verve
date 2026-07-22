@@ -9,6 +9,29 @@ view:
   ssh: SSH 管理
   hosts: Hosts 编辑器
   notes: 记事本
+  json_format: JSON 格式化
+  pdf_editor: PDF 编辑器
+
+json:
+  title: JSON 格式化工具
+  input_ph: 在此粘贴原始 JSON 字符串...
+  format_btn: 格式化
+  expand_all: 全部展开
+  collapse_all: 全部折叠
+  copy_btn: 复制
+  invalid_json: JSON 格式无效
+  copy_success: 已复制到剪贴板
+
+pdf:
+  title: PDF 编辑器
+  open_btn: 打开 PDF
+  save_btn: 保存
+  prev_page: 上一页
+  next_page: 下一页
+  no_file: 未打开文件
+  page: 第 %{current}/%{total} 页
+  loading: 正在加载 PDF...
+  pdfium_missing: PDF 功能需要 Pdfium 库，请通过 `brew install pdfium` 安装
 
 hosts:
   title: Hosts 快速编辑器

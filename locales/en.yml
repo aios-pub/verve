@@ -9,6 +9,29 @@ view:
   ssh: SSH
   hosts: Hosts Editor
   notes: Notepad
+  json_format: JSON Formatter
+  pdf_editor: PDF Editor
+
+json:
+  title: JSON Formatter
+  input_ph: Paste raw JSON string here...
+  format_btn: Format
+  expand_all: Expand All
+  collapse_all: Collapse All
+  copy_btn: Copy
+  invalid_json: Invalid JSON
+  copy_success: Copied to clipboard
+
+pdf:
+  title: PDF Editor
+  open_btn: Open PDF
+  save_btn: Save
+  prev_page: Previous
+  next_page: Next
+  no_file: No file opened
+  page: Page %{current}/%{total}
+  loading: Loading PDF...
+  pdfium_missing: PDF support requires Pdfium library. Please install via `brew install pdfium`
 
 hosts:
   title: Hosts Quick Editor

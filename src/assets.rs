@@ -35,6 +35,8 @@ pub const IMPORT: &str = "icons/verve/import.svg";
 pub const EXPORT: &str = "icons/verve/export.svg";
 pub const SERVER: &str = "icons/verve/server.svg";
 pub const NOTEBOOK: &str = "icons/verve/notebook-pen.svg";
+pub const BRACES_JSON: &str = "icons/verve/braces-json.svg";
+pub const FILE_PDF: &str = "icons/verve/file-pdf.svg";
 
 /// Composite asset source passed to `with_assets(...)`.
 pub struct VerveAssets(pub StockAssets);

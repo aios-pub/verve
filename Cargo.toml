@@ -131,6 +131,8 @@ bincode = "1"
 rfd = "0.15"
 # Low-level PDF generation (built-in Helvetica/Times/Courier fonts require no font files).
 printpdf = "0.7"
+# PDF rendering via Pdfium (bundled native library, extracted at build time)
+pdfium-render = "0.8"
 # Semantic version comparison for the auto-update check.
 semver = "1"
 # Embed Verve-specific Lucide SVG icons at compile time (composite AssetSource).

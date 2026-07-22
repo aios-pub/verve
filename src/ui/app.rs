@@ -15,7 +15,7 @@ use gpui_component::{
     WindowExt as _,
 };
 
-use crate::assets::{BRACES, DOCS, DOCKER as DOCKER_ICON, EXPORT, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, NOTEBOOK, REFRESH_CW, SERVER, SHARE};
+use crate::assets::{BRACES, BRACES_JSON, DOCS, DOCKER as DOCKER_ICON, EXPORT, FILE_PDF, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, NOTEBOOK, REFRESH_CW, SERVER, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -41,6 +41,8 @@ use crate::ui::k8s_panel::K8sPanel;
 use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
+use crate::ui::json_panel::JsonPanel;
+use crate::ui::pdf_panel::PdfPanel;
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -70,6 +72,10 @@ pub struct VerveApp {
     pub hosts: Entity<HostsPanel>,
     /// Notepad panel with markdown preview.
     pub notes: Entity<NotesPanel>,
+    /// JSON formatter / pretty printer panel.
+    pub json: Entity<JsonPanel>,
+    /// PDF viewer / editor panel.
+    pub pdf: Entity<PdfPanel>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -198,8 +204,6 @@ pub enum SideView {
     Api,
     /// Request/response history.
     History,
-    /// Environments manager.
-    Environments,
     /// Mock service status.
     Mock,
     /// Git-based project management.
@@ -222,6 +226,10 @@ pub enum SideView {
     Hosts,
     /// Notepad with markdown rendering.
     Notes,
+    /// JSON formatter / pretty printer with collapsible tree.
+    JsonFormat,
+    /// PDF viewer / editor.
+    PdfEditor,
 }
 
 impl SideView {
@@ -237,7 +245,8 @@ impl SideView {
         SideView::Docker,
         SideView::Hosts,
         SideView::Notes,
-        SideView::Environments,
+        SideView::JsonFormat,
+        SideView::PdfEditor,
         SideView::Mock,
         SideView::History,
         SideView::Ssh,
@@ -248,7 +257,6 @@ impl SideView {
         match self {
             SideView::Api => "Api",
             SideView::History => "History",
-            SideView::Environments => "Environments",
             SideView::Mock => "Mock",
             SideView::ProjectManage => "ProjectManage",
             SideView::Share => "Share",
@@ -260,6 +268,8 @@ impl SideView {
             SideView::Ssh => "Ssh",
             SideView::Hosts => "Hosts",
             SideView::Notes => "Notes",
+            SideView::JsonFormat => "JsonFormat",
+            SideView::PdfEditor => "PdfEditor",
         }
     }
 
@@ -267,7 +277,6 @@ impl SideView {
     pub fn parse(s: &str) -> SideView {
         match s {
             "History" => SideView::History,
-            "Environments" => SideView::Environments,
             "Mock" => SideView::Mock,
             "ProjectManage" => SideView::ProjectManage,
             "Share" => SideView::Share,
@@ -279,6 +288,8 @@ impl SideView {
             "Ssh" => SideView::Ssh,
             "Hosts" => SideView::Hosts,
             "Notes" => SideView::Notes,
+            "JsonFormat" => SideView::JsonFormat,
+            "PdfEditor" => SideView::PdfEditor,
             _ => SideView::Api,
         }
     }
@@ -288,7 +299,6 @@ impl SideView {
         match self {
             SideView::Api => rust_i18n::t!("view.api").to_string(),
             SideView::History => rust_i18n::t!("view.history").to_string(),
-            SideView::Environments => rust_i18n::t!("view.environments").to_string(),
             SideView::Mock => rust_i18n::t!("view.mock").to_string(),
             SideView::ProjectManage => rust_i18n::t!("view.project_manage").to_string(),
             SideView::Share => rust_i18n::t!("view.share").to_string(),
@@ -300,6 +310,8 @@ impl SideView {
             SideView::Ssh => rust_i18n::t!("view.ssh").to_string(),
             SideView::Hosts => rust_i18n::t!("view.hosts").to_string(),
             SideView::Notes => rust_i18n::t!("view.notes").to_string(),
+            SideView::JsonFormat => rust_i18n::t!("view.json_format").to_string(),
+            SideView::PdfEditor => rust_i18n::t!("view.pdf_editor").to_string(),
         }
     }
 }
@@ -422,6 +434,8 @@ impl VerveApp {
         let docker = cx.new(|cx| DockerPanel::new(window, cx));
         let hosts = cx.new(|cx| HostsPanel::new(state.clone(), window, cx));
         let notes = cx.new(|cx| NotesPanel::new(state.clone(), window, cx));
+        let json = cx.new(|cx| JsonPanel::new(window, cx));
+        let pdf = cx.new(|cx| PdfPanel::new(window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -473,6 +487,8 @@ impl VerveApp {
             docker,
             hosts,
             notes,
+            json,
+            pdf,
             share_server,
             share_configs,
             share_host,
@@ -508,9 +524,26 @@ impl VerveApp {
             update_info: None,
             update_checking: false,
             update_check_result: None,
-            rail_order: crate::state::persistence::load_rail_order().unwrap_or_else(|| {
-                SideView::ALL.iter().map(|v| v.name().to_string()).collect()
-            }),
+            rail_order: {
+                let saved = crate::state::persistence::load_rail_order();
+                let default: Vec<String> = SideView::ALL.iter().map(|v| v.name().to_string()).collect();
+                match saved {
+                    None => default,
+                    Some(mut order) => {
+                        let existing: std::collections::HashSet<_> = order.iter().cloned().collect();
+                        // Append new default items missing from saved order
+                        for name in &default {
+                            if !existing.contains(name) {
+                                order.push(name.clone());
+                            }
+                        }
+                        // Remove items no longer in defaults
+                        let default_set: std::collections::HashSet<_> = default.into_iter().collect();
+                        order.retain(|n| default_set.contains(n));
+                        order
+                    }
+                }
+            },
             dragging_rail: None,
             rail_drop_target: None,
             _subs: Vec::new(),
@@ -1877,9 +1910,9 @@ impl Render for VerveApp {
         // default, or the history list for the History view. ProjectManage is
         // NOT handled here — it takes over the whole body (see below).
         let side_left: gpui::AnyElement = match self.active_view {
-            SideView::Api | SideView::Environments | SideView::Mock => tree.into_any_element(),
+            SideView::Api | SideView::Mock => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes => {
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -1945,13 +1978,13 @@ impl Render for VerveApp {
         // replace the entire workbench (rail + tree + request/response).
         let _exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor
         );
 
         // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor
         );
 
         v_flex()
@@ -1983,6 +2016,8 @@ impl Render for VerveApp {
                             SideView::Docker => self.docker.clone().into_any_element(),
                             SideView::Hosts => self.hosts.clone().into_any_element(),
                             SideView::Notes => self.notes.clone().into_any_element(),
+                            SideView::JsonFormat => self.json.clone().into_any_element(),
+                            SideView::PdfEditor => self.pdf.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(
@@ -2093,7 +2128,8 @@ impl VerveApp {
             SideView::Hosts => vicon(SERVER),
             SideView::Notes => vicon(NOTEBOOK),
             SideView::ProjectManage => vicon(KANBAN),
-            SideView::Environments => vicon(BRACES),
+            SideView::JsonFormat => vicon(BRACES_JSON),
+            SideView::PdfEditor => vicon(FILE_PDF),
             SideView::Mock => IconName::Cpu.into(),
             SideView::History => vicon(HISTORY),
             SideView::Ssh => IconName::SquareTerminal.into(),
@@ -2213,19 +2249,11 @@ impl VerveApp {
                     .when(is_active, |btn| {
                         btn.bg(theme.accent.opacity(0.5))
                             .text_color(theme.foreground)
-                    });
-                // Environments opens a dialog instead of switching side view.
-                let btn = if view == SideView::Environments {
-                    btn.on_click(cx.listener(|this, _, _, cx| {
-                        this.pending_dialog = Some(PendingDialog::Environments);
-                        cx.notify();
-                    }))
-                } else {
-                    btn.on_click(cx.listener(move |this, _, _, cx| {
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_view = view;
                         cx.notify();
-                    }))
-                };
+                    }));
 
                 let drop_name = view_name.clone();
                 let drop_name_hover = view_name.clone();
@@ -2428,6 +2456,8 @@ impl VerveApp {
             SideView::Docker => self.render_docker_title_bar(cx).into_any_element(),
             SideView::K8s => self.render_k8s_title_bar(cx).into_any_element(),
             SideView::Notes => self.render_notes_title_bar(cx).into_any_element(),
+            SideView::JsonFormat => self.render_json_title_bar(cx).into_any_element(),
+            SideView::PdfEditor => self.render_pdf_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
         }
     }
@@ -3934,4 +3964,134 @@ fn show_share_result_dialog(
                     }),
             )
     });
+}
+
+impl VerveApp {
+    /// JSON Formatter title bar: rail toggle + braces icon + title + action buttons.
+    fn render_json_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // Icon + title
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(vicon(BRACES_JSON)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(rust_i18n::t!("json.title").to_string()),
+                    ),
+            )
+            .child(div().flex_1())
+            // Toolbar buttons that trigger actions on the json panel
+            .child({
+                let json = self.json.clone();
+                Button::new("json-title-format")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Check)
+                    .label(rust_i18n::t!("json.format_btn").to_string())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = json.update(cx, |panel, cx| panel.format_from_title(cx));
+                    }))
+            })
+            .child({
+                let json = self.json.clone();
+                Button::new("json-title-expand")
+                    .small()
+                    .ghost()
+                    .label(rust_i18n::t!("json.expand_all").to_string())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = json.update(cx, |panel, cx| panel.expand_all(cx));
+                    }))
+            })
+            .child({
+                let json = self.json.clone();
+                Button::new("json-title-collapse")
+                    .small()
+                    .ghost()
+                    .label(rust_i18n::t!("json.collapse_all").to_string())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = json.update(cx, |panel, cx| panel.collapse_all(cx));
+                    }))
+            })
+            .child({
+                let json = self.json.clone();
+                Button::new("json-title-copy")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Copy)
+                    .label(rust_i18n::t!("json.copy_btn").to_string())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = json.update(cx, |panel, cx| panel.copy_result(cx));
+                    }))
+            })
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// PDF Editor title bar: rail toggle + file icon + title + open button.
+    fn render_pdf_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let pdf = self.pdf.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // Icon + title
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(vicon(FILE_PDF)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(rust_i18n::t!("pdf.title").to_string()),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("pdf-title-open")
+                    .small()
+                    .primary()
+                    .icon(IconName::File)
+                    .label(rust_i18n::t!("pdf.open_btn").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = pdf.update(cx, |panel, cx| panel.open_pdf_from_title(window, cx));
+                    })),
+            )
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
 }

@@ -259,6 +259,9 @@ pub struct PanelLayout {
     /// Remote document-sharing server configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteConfig>,
+    /// Whether the notes panel's left-side note tree is collapsed.
+    #[serde(default)]
+    pub notes_collapsed: bool,
 }
 
 /// Persisted Git integration settings.

@@ -105,12 +105,14 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("cmd-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("cmd-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("cmd-n", ui::app::NewRequest, None),
+        KeyBinding::new("cmd-e", ui::notes_panel::ToggleViewMode, None),
     ]);
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([
         KeyBinding::new("ctrl-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("ctrl-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("ctrl-n", ui::app::NewRequest, None),
+        KeyBinding::new("ctrl-e", ui::notes_panel::ToggleViewMode, None),
     ]);
 
     let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);

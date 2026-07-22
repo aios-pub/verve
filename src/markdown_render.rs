@@ -4,21 +4,27 @@
 //! This module is pure logic (no GPUI dependency), so it can be unit-tested
 //! without a window context.
 
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Parser, Tag, TagEnd};
 
 /// A block-level Markdown node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MdNode {
     Heading(u32, Vec<MdInline>),
     Paragraph(Vec<MdInline>),
-    /// `ordered` = true for numbered lists; items are themselves lists of blocks.
-    List(bool, Vec<Vec<MdNode>>),
+    /// `ordered` = true for numbered lists; `start` = first item number (1-based).
+    List {
+        ordered: bool,
+        start: u64,
+        items: Vec<Vec<MdNode>>,
+    },
     CodeBlock { lang: String, code: String },
     Blockquote(Vec<MdNode>),
     Rule,
     Table {
         header: Vec<Vec<MdInline>>,
         rows: Vec<Vec<Vec<MdInline>>>,
+        /// Column alignment, one entry per column (None | Left | Center | Right).
+        alignments: Vec<Alignment>,
     },
 }
 
@@ -32,6 +38,10 @@ pub enum MdInline {
     Code(String),
     Link { text: String, url: String },
     Image { alt: String, url: String },
+    /// Hard line break (two trailing spaces or backslash at EOL).
+    HardBreak,
+    /// GFM task list checkbox: true = checked, false = unchecked.
+    TaskMarker(bool),
 }
 
 /// Parse CommonMark markdown source into a tree of `MdNode` blocks.
@@ -43,8 +53,8 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
 
     let mut blocks: Vec<MdNode> = Vec::new();
     let mut inline_stack: Vec<Vec<MdInline>> = vec![Vec::new()];
-    // Stack of open list contexts: (ordered, completed_items, current_item_blocks)
-    let mut list_stack: Vec<(bool, Vec<Vec<MdNode>>, Vec<MdNode>)> = Vec::new();
+    // Stack of open list contexts: (ordered, start_number, completed_items, current_item_blocks)
+    let mut list_stack: Vec<(bool, u64, Vec<Vec<MdNode>>, Vec<MdNode>)> = Vec::new();
     let mut blockquote_stack: Vec<Vec<MdNode>> = Vec::new();
     let mut table_state: Option<TableState> = None;
     let mut pending_code_lang: Option<String> = None;
@@ -60,7 +70,7 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
     fn flush_inlines(
         inline_stack: &mut Vec<Vec<MdInline>>,
         blocks: &mut Vec<MdNode>,
-        list_stack: &mut Vec<(bool, Vec<Vec<MdNode>>, Vec<MdNode>)>,
+        list_stack: &mut Vec<(bool, u64, Vec<Vec<MdNode>>, Vec<MdNode>)>,
         blockquote_stack: &mut Vec<Vec<MdNode>>,
     ) {
         while inline_stack.len() > 1 {
@@ -110,7 +120,9 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut list_stack,
                         &mut blockquote_stack,
                     );
-                    list_stack.push((start.is_some(), Vec::new(), Vec::new()));
+                    let ordered = start.is_some();
+                    let start_num = start.unwrap_or(1);
+                    list_stack.push((ordered, start_num, Vec::new(), Vec::new()));
                     in_paragraph = false;
                 }
                 Tag::Item => {
@@ -142,7 +154,7 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     pending_code = Some(String::new());
                     in_paragraph = false;
                 }
-                Tag::Table(_) => {
+                Tag::Table(alignments) => {
                     flush_inlines(
                         &mut inline_stack,
                         &mut blocks,
@@ -154,6 +166,7 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         rows: Vec::new(),
                         current_row: Vec::new(),
                         in_header: false,
+                        alignments,
                     });
                     in_paragraph = false;
                 }
@@ -241,8 +254,12 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut list_stack,
                         &mut blockquote_stack,
                     );
-                    if let Some((ordered, items, _)) = list_stack.pop() {
-                        let node = MdNode::List(ordered, items);
+                    if let Some((ordered, start, items, _)) = list_stack.pop() {
+                        let node = MdNode::List {
+                            ordered,
+                            start,
+                            items,
+                        };
                         push_block(
                             &mut blocks,
                             &mut list_stack,
@@ -260,7 +277,7 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut list_stack,
                         &mut blockquote_stack,
                     );
-                    if let Some((_, items, current)) = list_stack.last_mut() {
+                    if let Some((_, _, items, current)) = list_stack.last_mut() {
                         items.push(std::mem::take(current));
                     }
                     in_paragraph = false;
@@ -296,6 +313,7 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         let node = MdNode::Table {
                             header: ts.header,
                             rows: ts.rows,
+                            alignments: ts.alignments,
                         };
                         push_block(
                             &mut blocks,
@@ -374,11 +392,17 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     .unwrap()
                     .push(MdInline::Code(text.to_string()));
             }
-            Event::SoftBreak | Event::HardBreak => {
+            Event::SoftBreak => {
                 inline_stack
                     .last_mut()
                     .unwrap()
                     .push(MdInline::Text(" ".to_string()));
+            }
+            Event::HardBreak => {
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(MdInline::HardBreak);
             }
             Event::Rule => {
                 flush_inlines(
@@ -394,8 +418,19 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     MdNode::Rule,
                 );
             }
-            Event::FootnoteReference(_) | Event::Html(_) | Event::InlineHtml(_) => {}
-            Event::TaskListMarker(_) => {}
+            Event::Html(text) | Event::InlineHtml(text) => {
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(MdInline::Text(text.to_string()));
+            }
+            Event::TaskListMarker(checked) => {
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(MdInline::TaskMarker(checked));
+            }
+            Event::FootnoteReference(_) => {}
             Event::InlineMath(_) | Event::DisplayMath(_) => {}
         }
     }
@@ -416,6 +451,7 @@ struct TableState {
     rows: Vec<Vec<Vec<MdInline>>>,
     current_row: Vec<Vec<MdInline>>,
     in_header: bool,
+    alignments: Vec<Alignment>,
 }
 
 fn heading_level(level: HeadingLevel) -> u32 {
@@ -440,6 +476,10 @@ fn collect_text(inlines: &[MdInline]) -> String {
             }
             MdInline::Link { text, .. } => s.push_str(text),
             MdInline::Image { alt, .. } => s.push_str(alt),
+            MdInline::HardBreak => s.push('\n'),
+            MdInline::TaskMarker(checked) => {
+                s.push_str(if *checked { "[x] " } else { "[ ] " })
+            }
         }
     }
     s
@@ -448,11 +488,11 @@ fn collect_text(inlines: &[MdInline]) -> String {
 /// Push a block node to the current innermost container (root blocks, list item, or blockquote).
 fn push_block(
     blocks: &mut Vec<MdNode>,
-    list_stack: &mut [(bool, Vec<Vec<MdNode>>, Vec<MdNode>)],
+    list_stack: &mut [(bool, u64, Vec<Vec<MdNode>>, Vec<MdNode>)],
     blockquote_stack: &mut [Vec<MdNode>],
     node: MdNode,
 ) {
-    if let Some((_, _, current)) = list_stack.last_mut() {
+    if let Some((_, _, _, current)) = list_stack.last_mut() {
         current.push(node);
     } else if let Some(inner) = blockquote_stack.last_mut() {
         inner.push(node);
@@ -521,8 +561,13 @@ mod tests {
         let nodes = parse_markdown(md);
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            MdNode::List(ordered, items) => {
+            MdNode::List {
+                ordered,
+                start,
+                items,
+            } => {
                 assert!(!ordered);
+                assert_eq!(*start, 1);
                 assert_eq!(items.len(), 3, "expected 3 items, got {:?}", items);
                 for item in items {
                     assert_eq!(item.len(), 1, "each item should contain one paragraph");
@@ -539,8 +584,32 @@ mod tests {
         let nodes = parse_markdown(md);
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            MdNode::List(ordered, items) => {
+            MdNode::List {
+                ordered,
+                start,
+                items,
+            } => {
                 assert!(ordered);
+                assert_eq!(*start, 1);
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("expected list"),
+        }
+    }
+
+    #[test]
+    fn parses_ordered_list_start_number() {
+        let md = "3. third\n4. fourth";
+        let nodes = parse_markdown(md);
+        assert_eq!(nodes.len(), 1);
+        match &nodes[0] {
+            MdNode::List {
+                ordered,
+                start,
+                items,
+            } => {
+                assert!(ordered);
+                assert_eq!(*start, 3);
                 assert_eq!(items.len(), 2);
             }
             _ => panic!("expected list"),

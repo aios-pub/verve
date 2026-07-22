@@ -2427,6 +2427,7 @@ impl VerveApp {
             SideView::Ssh => self.render_ssh_title_bar(cx).into_any_element(),
             SideView::Docker => self.render_docker_title_bar(cx).into_any_element(),
             SideView::K8s => self.render_k8s_title_bar(cx).into_any_element(),
+            SideView::Notes => self.render_notes_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
         }
     }
@@ -3507,6 +3508,146 @@ impl VerveApp {
                     })),
             )
             .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+}
+
+impl VerveApp {
+    /// The title bar shown while the Notes panel is active. Mirrors
+    /// `render_ssh_title_bar`: rail toggle, identity block (icon + title + count
+    /// badge), spacer, then import / export / live-source toggle / lang.
+    fn render_notes_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let notes = self.notes.clone();
+
+        // Snapshot note count and current view mode.
+        let (note_count, is_source, list_collapsed) = {
+            let r = notes.read(cx);
+            (r.note_count(), r.is_source_mode(), r.is_list_collapsed())
+        };
+
+        let notes_import = notes.clone();
+        let notes_export = notes.clone();
+        let notes_toggle = notes.clone();
+        let notes_collapse = notes.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            // Far-left rail toggle (shared across views).
+            .child(self.render_rail_toggle(cx))
+            // Sidebar collapse button — "收起笔记列表" / "展开笔记列表".
+            .child(
+                Button::new("sidebar-toggle")
+                    .ghost()
+                    .small()
+                    .icon(if list_collapsed {
+                        IconName::PanelLeftOpen
+                    } else {
+                        IconName::PanelLeft
+                    })
+                    .selected(!list_collapsed)
+                    .tooltip(if list_collapsed {
+                        rust_i18n::t!("notes.expand_list").to_string()
+                    } else {
+                        rust_i18n::t!("notes.collapse_list").to_string()
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = notes_collapse.update(cx, |notes, cx| {
+                            notes.toggle_list_collapsed(cx);
+                        });
+                    })),
+            )
+            // Identity block: notebook icon + "笔记" + note-count badge.
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(theme.primary)
+                            .child(vicon(crate::assets::NOTEBOOK)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(rust_i18n::t!("notes.title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.foreground)
+                            .child(rust_i18n::t!("notes.note_count", count = note_count).to_string()),
+                    ),
+            )
+            .child(div().flex_1())
+            // Import button.
+            .child(
+                Button::new("notes-title-import")
+                    .ghost()
+                    .small()
+                    .icon(vicon(IMPORT))
+                    .label(rust_i18n::t!("notes.import").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = notes_import.update(cx, |p, cx| {
+                            p.import_markdown_dialog(window, cx);
+                        });
+                    })),
+            )
+            // Export button.
+            .child(
+                Button::new("notes-title-export")
+                    .ghost()
+                    .small()
+                    .icon(vicon(EXPORT))
+                    .label(rust_i18n::t!("notes.export").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = notes_export.update(cx, |p, cx| {
+                            p.export_active_note_dialog(window, cx);
+                        });
+                    })),
+            )
+            // Live / Source segmented toggle.
+            .child({
+                let notes_toggle_live = notes_toggle.clone();
+                let notes_toggle_source = notes_toggle;
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("notes-mode-live")
+                            .small()
+                            .selected(!is_source)
+                            .label(rust_i18n::t!("notes.live_view").to_string())
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                let _ = notes_toggle_live.update(cx, |p, cx| {
+                                    p.set_view_mode("live", cx);
+                                });
+                            })),
+                    )
+                    .child(
+                        Button::new("notes-mode-source")
+                            .small()
+                            .selected(is_source)
+                            .label(rust_i18n::t!("notes.source_view").to_string())
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                let _ = notes_toggle_source.update(cx, |p, cx| {
+                                    p.set_view_mode("source", cx);
+                                });
+                            })),
+                    )
+            })
             .child(self.render_lang_picker(cx))
     }
 }

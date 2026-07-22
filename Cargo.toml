@@ -129,6 +129,8 @@ secrecy = "0.8"
 bincode = "1"
 # Native file open/save dialogs for SFTP upload/download (cross-platform, async-safe).
 rfd = "0.15"
+# Low-level PDF generation (built-in Helvetica/Times/Courier fonts require no font files).
+printpdf = "0.7"
 # Semantic version comparison for the auto-update check.
 semver = "1"
 # Embed Verve-specific Lucide SVG icons at compile time (composite AssetSource).

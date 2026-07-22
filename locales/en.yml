@@ -37,16 +37,31 @@ hosts:
 notes:
   title: Notepad
   new_note: New Note
+  new_sub_note: New Sub-note
   search_ph: "Search notes..."
   untitled: Untitled Note
-  split_view: Split
-  edit_view: Edit
-  preview_view: Preview
+  live_view: Live
+  source_view: Source
+  import: Import
+  export: Export
+  export_md: "Export as Markdown"
+  export_pdf: "Export as PDF"
+  collapse_list: "Collapse Notes"
+  expand_list: "Expand Notes"
+  note_count: "%{count} notes"
   confirm_delete: Confirm Delete Note
   confirm_delete_msg: "Delete note \"%{title}\"? This cannot be undone."
+  confirm_delete_cascade: "Delete note \"%{title}\" and its %{count} sub-note(s)? This cannot be undone."
   last_updated: "Updated %{time}"
   empty: 'No notes yet. Click "New Note" to start writing.'
   empty_editor: Select a note from the left or create a new one
+  duplicate: Duplicate
+  duplicate_copy_suffix: " (Copy)"
+  move_to_root: Move to Root
+  pin: Pin to Top
+  unpin: Unpin
+  row_export_md: Export as Markdown
+  row_export_pdf: Export as PDF
 
 git_bootstrap:
   title: Welcome to Verve

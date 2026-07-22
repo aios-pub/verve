@@ -37,16 +37,31 @@ hosts:
 notes:
   title: 记事本
   new_note: 新建笔记
+  new_sub_note: 新建子笔记
   search_ph: 搜索笔记…
   untitled: 无标题笔记
-  split_view: 分屏
-  edit_view: 编辑
-  preview_view: 预览
+  live_view: 实时渲染
+  source_view: 源码
+  import: 导入
+  export: 导出
+  export_md: 导出为 Markdown
+  export_pdf: 导出为 PDF
+  collapse_list: 收起笔记列表
+  expand_list: 展开笔记列表
+  note_count: "%{count} 篇笔记"
   confirm_delete: 确认删除笔记
   confirm_delete_msg: 确定要删除笔记「%{title}」吗？此操作不可撤销。
+  confirm_delete_cascade: 确定要删除笔记「%{title}」及其 %{count} 个子笔记吗？此操作不可撤销。
   last_updated: 更新于 %{time}
   empty: 还没有笔记。点击「新建笔记」开始记录。
   empty_editor: 从左侧选择笔记或新建一个
+  duplicate: 复制
+  duplicate_copy_suffix: "（副本）"
+  move_to_root: 移动到根目录
+  pin: 置顶
+  unpin: 取消置顶
+  row_export_md: 导出为 Markdown
+  row_export_pdf: 导出为 PDF
 
 git_bootstrap:
   title: 欢迎使用 Verve

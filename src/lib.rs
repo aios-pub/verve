@@ -20,6 +20,7 @@ pub mod k8s;
 pub mod markdown_render;
 pub mod mock;
 pub mod notes;
+pub mod notes_pdf;
 pub mod proxy;
 pub mod scripting;
 pub mod share;

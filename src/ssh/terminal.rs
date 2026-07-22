@@ -8,7 +8,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::{h_flex, ActiveTheme};
 
 /// A null event listener for the alacritty terminal.
 #[derive(Clone, Default)]
@@ -153,6 +153,14 @@ impl EntityInputHandler for TerminalView {
     }
 }
 
+/// A selected (row, col) coordinate in the terminal grid. 0-indexed, row 0 is
+/// the topmost visible line after trimming leading empties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectionPoint {
+    row: usize,
+    col: usize,
+}
+
 /// A GPUI entity wrapping an alacritty terminal model.
 pub struct TerminalView {
     pub term: Arc<std::sync::Mutex<Term<NullListener>>>,
@@ -170,6 +178,20 @@ pub struct TerminalView {
     _keystroke_sub: Option<gpui::Subscription>,
     /// Last IME composing text (for delta calculation).
     last_marked_text: String,
+    /// Active text selection (start/end in visible row indices after trimming).
+    /// None when no selection. When dragging, anchor stays fixed while head moves.
+    selection_anchor: Option<SelectionPoint>,
+    selection_head: Option<SelectionPoint>,
+    /// Whether the mouse is currently being dragged to extend a selection.
+    selecting: bool,
+    /// Cached number of leading empty rows trimmed on last render — needed to
+    /// map a screen-space Y coordinate back to the right visible row (since we
+    /// render from `first_non_empty..`).
+    last_trim_top: usize,
+    /// Cached count of visible lines rendered last time (drives hit-testing).
+    last_visible_rows: usize,
+    /// Line height (px) used on last render — for mouse→row mapping.
+    last_line_height: f32,
 }
 
 impl TerminalView {
@@ -219,7 +241,40 @@ impl TerminalView {
             resize_tx,
             _keystroke_sub: Some(sub),
             last_marked_text: String::new(),
+            selection_anchor: None,
+            selection_head: None,
+            selecting: false,
+            last_trim_top: 0,
+            last_visible_rows: 0,
+            last_line_height: 13.0,
         }
+    }
+
+    /// Return the currently selected text (normalized from anchor/head), or
+    /// None if no selection exists.
+    fn selected_text(&self, lines: &[String]) -> Option<String> {
+        let (a, h) = self.selection_anchor.zip(self.selection_head)?;
+        let (start, end) = if (a.row, a.col) <= (h.row, h.col) { (a, h) } else { (h, a) };
+        if start.row >= lines.len() {
+            return None;
+        }
+        if start.row == end.row {
+            let line = &lines[start.row];
+            let end_col = end.col.min(line.len());
+            let start_col = start.col.min(end_col);
+            return Some(line[start_col..end_col].to_string());
+        }
+        let mut out = String::new();
+        out.push_str(&lines[start.row][start.col.min(lines[start.row].len())..]);
+        for row in (start.row + 1)..end.row.min(lines.len()) {
+            out.push('\n');
+            out.push_str(lines[row].trim_end());
+        }
+        if end.row < lines.len() {
+            out.push('\n');
+            out.push_str(&lines[end.row][..end.col.min(lines[end.row].len())]);
+        }
+        Some(out)
     }
 
     /// Feed raw bytes from SSH into the terminal parser.
@@ -516,8 +571,25 @@ impl Render for TerminalView {
                 .position(|row| !row.trim().is_empty())
                 .unwrap_or(0);
 
-            all_text[first_non_empty..].to_vec()
+            let trimmed = all_text[first_non_empty..].to_vec();
+            trimmed
         };
+
+        // Update cached geometry so mouse events can map positions back to rows.
+        self.last_trim_top = 0; // trim only affects what we render; mapping uses visible rows
+        self.last_visible_rows = lines.len();
+        self.last_line_height = line_height;
+
+        // Normalize selection points (anchor ≤ head) for rendering.
+        let sel = self
+            .selection_anchor
+            .zip(self.selection_head)
+            .map(|(a, h)| {
+                if (a.row, a.col) <= (h.row, h.col) { (a, h) } else { (h, a) }
+            });
+
+        // Selection highlight color (subtle blue overlay).
+        let sel_bg = theme.accent.opacity(0.3);
 
         // The input handler must be registered during paint (not render).
         // We use a canvas element as a paint-phase hook.
@@ -532,14 +604,89 @@ impl Render for TerminalView {
             .bg(bg)
             .text_color(default_fg)
             .px_2()
+            .pt_1()
             // Click to focus the terminal for keyboard input.
-            .on_click(cx.listener(|_this, _ev, window, cx| {
+            .on_click(cx.listener(|this, _ev, window, cx| {
                 window.focus(&cx.focus_handle(), cx);
                 cx.notify();
             }))
+            // Mouse down — start a new selection.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, _window, cx| {
+                    let pos = ev.position;
+                    let px_x: f32 = pos.x.into();
+                    let px_y: f32 = pos.y.into();
+                    let char_w = approximate_char_width(this.font_size);
+                    let col = ((px_x - 8.0) / char_w).floor().max(0.0) as usize;
+                    let row = (px_y / this.last_line_height).floor().max(0.0) as usize;
+                    let point = SelectionPoint {
+                        row: row.min(this.last_visible_rows.saturating_sub(1)),
+                        col,
+                    };
+                    this.selection_anchor = Some(point);
+                    this.selection_head = Some(point);
+                    this.selecting = true;
+                    cx.notify();
+                }),
+            )
+            // Mouse drag — extend the selection.
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
+                if !this.selecting {
+                    return;
+                }
+                if this.selection_anchor.is_none() {
+                    return;
+                }
+                let pos = ev.position;
+                let px_x: f32 = pos.x.into();
+                let px_y: f32 = pos.y.into();
+                let char_w = approximate_char_width(this.font_size);
+                let col = ((px_x - 8.0) / char_w).floor().max(0.0) as usize;
+                let row = (px_y / this.last_line_height).floor().max(0.0) as usize;
+                this.selection_head = Some(SelectionPoint {
+                    row: row.min(this.last_visible_rows.saturating_sub(1)),
+                    col,
+                });
+                cx.notify();
+            }))
+            // Mouse up — finalize selection (head stays at release point).
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseUpEvent, _window, cx| {
+                    this.selecting = false;
+                    // If anchor == head it was just a click with no drag — clear
+                    // the selection so Cmd+C doesn't copy empty text.
+                    if let (Some(a), Some(h)) = (this.selection_anchor, this.selection_head) {
+                        if a == h {
+                            this.selection_anchor = None;
+                            this.selection_head = None;
+                        }
+                    }
+                    cx.notify();
+                }),
+            )
             // Content anchored to the top (no vertical centering).
             .items_start()
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            .on_key_down({
+                let lines_for_copy = lines.clone();
+                cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                // Cmd+C / Ctrl+C WITH a selection present → copy selected text.
+                // Without a selection, fall through to send the byte (Ctrl+C is
+                // SIGINT in terminals, so we must not block that).
+                let is_copy = (event.keystroke.modifiers.platform
+                    && event.keystroke.key == "c")
+                    || (event.keystroke.modifiers.control && event.keystroke.key == "insert");
+                if is_copy {
+                    if let Some(text) = this.selected_text(&lines_for_copy) {
+                        if !text.is_empty() {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                }
+
                 // Cmd+V / Ctrl+V → paste from clipboard.
                 if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
                     if let Some(item) = cx.read_from_clipboard() {
@@ -562,20 +709,63 @@ impl Render for TerminalView {
                     cx.stop_propagation();
                     window.refresh();
                 }
-            }))
-            // Each terminal row: simple string rendering.
-            .children(lines.into_iter().map(move |text| {
-                let lh = line_height;
-                let fs = font_size;
+            })})
+            // Each terminal row: split into selected/unselected spans.
+            // Clone lines into an owned vec so the map closure doesn't hold a
+            // borrow of the local `lines` binding past its scope.
+            .children(
+                lines
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(row_idx, text)| {
+                        let lh = line_height;
+                        let fs = font_size;
+                        let row_el = div()
+                            .h(px(lh))
+                            .line_height(px(lh))
+                            .text_size(px(fs))
+                            .whitespace_nowrap();
 
-                div()
-                    .h(px(lh))
-                    .line_height(px(lh))
-                    .text_size(px(fs))
-                    .whitespace_nowrap()
-                    .text_color(default_fg)
-                    .child(text)
-            }))
+                        let Some((start, end)) = sel else {
+                            return row_el.text_color(default_fg).child(text.clone()).into_any_element();
+                        };
+
+                        // No overlap with this row.
+                        if row_idx < start.row || row_idx > end.row {
+                            return row_el.text_color(default_fg).child(text.clone()).into_any_element();
+                        }
+
+                        // Compute column range within this row.
+                        let len = text.len();
+                        let from = if row_idx == start.row { start.col } else { 0 };
+                        let to = if row_idx == end.row {
+                            end.col.min(len)
+                        } else {
+                            len
+                        };
+                        let from = from.min(len);
+                        let to = to.max(from);
+
+                        // Build three segments: before / selected / after.
+                        // We use h_flex with nowrap so the three segments sit on one line.
+                        let before = text[..from].to_string();
+                        let selected = text[from..to].to_string();
+                        let after = text[to..].to_string();
+
+                        h_flex()
+                            .h(px(lh))
+                            .line_height(px(lh))
+                            .text_size(px(fs))
+                            .whitespace_nowrap()
+                            .gap_0()
+                            .text_color(default_fg)
+                            .child(before)
+                            .child(div().bg(sel_bg).text_color(default_fg).child(selected))
+                            .child(after)
+                            .into_any_element()
+                    }),
+            )
             // Canvas child: registers the input handler during paint phase.
             // This is REQUIRED because window.handle_input() can only be called
             // during paint, not during render.
@@ -588,4 +778,13 @@ impl Render for TerminalView {
             ))
             .into_any_element()
     }
+}
+
+/// Approximate character width in pixels for a monospace font at `font_size`.
+/// Monospace glyphs are ~0.6 × font_size for typical fonts at 13px ≈ 7.8px; we
+/// use 0.6 as a reasonable default — exact pixel-perfect mapping requires
+/// measuring glyphs which is overkill for selection hit-testing.
+fn approximate_char_width(font_size: f32) -> f32 {
+    // `font_size` is the em-height; monospace char advance is ~0.6em.
+    font_size * 0.6
 }

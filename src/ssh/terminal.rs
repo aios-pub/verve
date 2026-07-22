@@ -210,6 +210,17 @@ pub struct TerminalView {
 
 impl TerminalView {
     pub fn new(cols: u16, rows: u16, cx: &mut Context<Self>) -> Self {
+        Self::new_inner(cols, rows, cx)
+    }
+
+    /// Create a terminal sized for log display (wider than shell, enough rows
+    /// for scrollback). Long lines wrap normally (this is how terminals display
+    /// text; "staircase" wrap was due to bad column count previously).
+    pub fn new_log(cx: &mut Context<Self>) -> Self {
+        Self::new_inner(240, 200, cx)
+    }
+
+    fn new_inner(cols: u16, rows: u16, cx: &mut Context<Self>) -> Self {
         let dims = TermDims {
             cols: cols as usize,
             rows: rows as usize,
@@ -580,15 +591,14 @@ impl Render for TerminalView {
                 all_text.push(text);
             }
 
-            // Trim leading empty rows (don't show 50 blank rows above content).
-            // But always keep at least 1 row so clear shows a blank screen.
-            let first_non_empty = all_text
-                .iter()
-                .position(|row| !row.trim().is_empty())
-                .unwrap_or(0);
-
-            let trimmed = all_text[first_non_empty..].to_vec();
-            trimmed
+            // Strip trailing whitespace from each row but preserve empty lines
+            // and leading whitespace — critical for log display where blank
+            // separators and indented lines are meaningful.
+            all_text.into_iter().map(|mut row| {
+                let trim_end = row.trim_end().len();
+                row.truncate(trim_end);
+                row
+            }).collect::<Vec<_>>()
         };
 
         // Update cached geometry so mouse events can map positions back to rows.

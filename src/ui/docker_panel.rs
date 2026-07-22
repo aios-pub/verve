@@ -22,6 +22,7 @@ use crate::docker::{
 };
 use crate::ssh::terminal::TerminalView;
 use crate::ui::docker_host_dialog;
+use gpui_component::text::TextView;
 
 /// Top-level "page" the user is viewing. Sessions (logs/shell) are overlaid
 /// on top of these via a tab bar; switching between Containers/Images/Hosts
@@ -466,6 +467,7 @@ impl DockerPanel {
         let id_for_thread = container_id.to_string();
         let host = self.active_host();
         let key = session_key(container_id, SessionKind::Logs);
+
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
@@ -649,7 +651,7 @@ impl Render for DockerPanel {
         let body = if let Some(idx) = self.active_session_idx() {
             let s = &self.sessions[idx];
             match s.kind {
-                SessionKind::Logs => self.render_logs(&theme, idx),
+                SessionKind::Logs => self.render_logs(&theme, idx, cx),
                 SessionKind::Shell => self.render_shell(&theme, idx),
             }
         } else {
@@ -919,25 +921,50 @@ impl DockerPanel {
     }
 
     // ---- logs ---------------------------------------------------------------
-    fn render_logs(&self, theme: &gpui_component::Theme, idx: usize) -> AnyElement {
+    fn render_logs(&self, theme: &gpui_component::Theme, idx: usize, cx: &mut Context<Self>) -> AnyElement {
         let s = &self.sessions[idx];
+        let this_ent = cx.entity();
+        // Render logs via GPUI's native selectable TextView (markdown code
+        // block) for proper text selection without terminal wrap artifacts.
+        let content = format!("```\n{}\n```", s.log_lines.join("\n"));
         v_flex()
+            .id(format!("docker-logs-scroll-{}", idx))
             .flex_1()
             .min_h_0()
+            .size_full()
             .child(
-                v_flex()
-                    .id(format!("docker-logs-scroll-{}", idx))
+                h_flex()
+                    .justify_end()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        Button::new(format!("docker-logs-copy-{}", idx))
+                            .xsmall()
+                            .ghost()
+                            .label("复制全部")
+                            .on_click(move |_, _window, cx| {
+                                let _ = this_ent.update(cx, |this, cx| {
+                                    if let Some(s) = this.sessions.get(idx) {
+                                        let text = s.log_lines.join("\n");
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                    }
+                                });
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id(format!("docker-logs-text-{}", idx))
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_3()
                     .bg(theme.muted)
-                    .children(s.log_lines.iter().map(|l| {
-                        div()
-                            .text_size(px(11.))
-                            .font_family(theme.mono_font_family.clone())
-                            .child(l.clone())
-                    })),
+                    .text_size(px(11.))
+                    .child(
+                        TextView::markdown(format!("docker-logs-md-{}", idx), content)
+                            .selectable(true),
+                    ),
             )
             .into_any_element()
     }

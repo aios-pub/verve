@@ -23,6 +23,7 @@ use crate::k8s::clusters::{
 use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, LogStream, Pod};
 use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
 use crate::ssh::terminal::TerminalView;
+use gpui_component::text::TextView;
 use crate::ui::k8s_cluster_dialog;
 
 /// Which sub-view is active.
@@ -835,7 +836,7 @@ impl K8sPanel {
             .into_any_element()
     }
 
-    fn render_logs(&self, theme: &gpui_component::Theme, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_logs(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted = theme.muted_foreground;
         let border = theme.border;
         let target = self
@@ -845,33 +846,47 @@ impl K8sPanel {
         v_flex()
             .flex_1()
             .min_h_0()
-            .gap_2()
             .child(
                 h_flex()
                     .gap_2()
                     .items_center()
                     .px_4()
-                    .pt_2()
+                    .py_2()
                     .child(div().text_size(px(12.)).text_color(muted).child("Pod"))
                     .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(target)),
             )
             .child(div().h(px(1.)).w_full().bg(border))
-            .child(
-                v_flex()
-                    .id("k8s-logs-scroll")
+            .child({
+                let ent = cx.entity();
+                h_flex()
+                    .justify_end()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        Button::new("k8s-logs-copy")
+                            .xsmall()
+                            .ghost()
+                            .label("复制全部")
+                            .on_click(move |_, _window, cx| {
+                                let _ = ent.update(cx, |this, cx| {
+                                    let text = this.log_lines.join("\n");
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                });
+                            }),
+                    )
+            })
+            .child({
+                let content = format!("```\n{}\n```", self.log_lines.join("\n"));
+                div()
+                    .id("k8s-logs-text")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_3()
-                    .gap_0()
                     .bg(theme.muted)
-                    .children(self.log_lines.iter().map(|line| {
-                        div()
-                            .text_size(px(11.))
-                            .font_family(theme.mono_font_family.clone())
-                            .child(line.clone())
-                    })),
-            )
+                    .text_size(px(11.))
+                    .child(TextView::markdown("k8s-logs-md", content).selectable(true))
+            })
             .into_any_element()
     }
 

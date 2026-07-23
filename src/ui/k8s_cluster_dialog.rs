@@ -1,7 +1,7 @@
 //! Dialog to add/edit a Kubernetes cluster.
 //!
 //! Provides two tabs:
-//! 1. **导入 KubeConfig** - Upload/paste kubeconfig file, select a context to import
+//! 1. **导入 KubeConfig** - Select kubeconfig file or paste content, then select a context to import
 //! 2. **手动配置** - Enter API URL + credentials manually
 //!
 //! Both paths support connection mode selection: Direct or SSH tunnel.
@@ -173,7 +173,7 @@ impl K8sClusterDialogState {
             s
         });
         let kubeconfig_text = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).multi_line(true).placeholder("粘贴 kubeconfig YAML 内容，或点击下方按钮选择文件");
+            let mut s = InputState::new(window, cx).multi_line(true).placeholder("粘贴 kubeconfig YAML 内容，或点击\"选择文件\"按钮导入");
             // If editing and has raw kubeconfig, preload it
             if let Some(e) = &existing {
                 if let Some(raw) = &e.raw_kubeconfig {
@@ -378,55 +378,109 @@ where
                                     .gap_1()
                                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("KubeConfig YAML"))
                                     .child(Input::new(&s.kubeconfig_text).small().h(px(140.)))
-                                    .child(div().text_xs().text_color(muted).child("粘贴 ~/.kube/config 文件内容，点击下方\"解析\"按钮列出可用 Context"))
+                                    .child(div().text_xs().text_color(muted).child("粘贴 kubeconfig YAML 内容或点击\"选择文件\"导入，然后点击\"解析\"列出可用 Context"))
                             );
 
-                        // Parse button and context list
+                        // File picker + Parse buttons
+                        let state_for_file = state_for_content.clone();
                         import_body = import_body.child(
-                            Button::new("k8s-parse-kubeconfig")
-                                .small()
-                                .label("解析 kubeconfig")
-                                .on_click({
-                                    let state = state_for_content.clone();
-                                    move |_ev, window, cx: &mut App| {
-                                        let text = state.read(cx).kubeconfig_text.read(cx).value().to_string();
-                                        let (error, contexts, selected, name_val_for_auto) = if text.trim().is_empty() {
-                                            (Some("请粘贴 kubeconfig YAML 内容或选择文件".to_string()), Vec::new(), None, None)
-                                        } else {
-                                            match parse_kubeconfig_contexts(&text) {
-                                                Ok(ctxs) => {
-                                                    if ctxs.is_empty() {
-                                                        (Some("kubeconfig 中未找到任何有效的 context".to_string()), Vec::new(), None, None)
-                                                    } else {
-                                                        let first_name = ctxs.first().unwrap().name.clone();
-                                                        (None, ctxs, Some(0), Some(first_name))
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("k8s-select-kubeconfig-file")
+                                        .small()
+                                        .ghost()
+                                        .label("选择文件…")
+                                        .on_click(move |_ev, window, cx: &mut App| {
+                                            let state = state_for_file.clone();
+                                            let window_handle = window.window_handle();
+                                            let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+                                            std::thread::spawn(move || {
+                                                let res = rfd::FileDialog::new()
+                                                    .add_filter("kubeconfig", &["yaml", "yml", "conf", "*"])
+                                                    .pick_file();
+                                                let _ = tx.send(res.map(|p| p.to_path_buf()));
+                                            });
+                                            cx.spawn(async move |cx| {
+                                                loop {
+                                                    match rx.try_recv() {
+                                                        Ok(Some(path)) => {
+                                                            let content = std::fs::read_to_string(&path)
+                                                                .map_err(|e| format!("读取文件失败: {e}"));
+                                                            let _ = window_handle.update(cx, |_this, window, cx| {
+                                                                let _ = state.update(cx, |s, cx| {
+                                                                    match content {
+                                                                        Ok(text) => {
+                                                                            s.kubeconfig_text.update(cx, |input, cx| {
+                                                                                input.set_value(&text, window, cx);
+                                                                            });
+                                                                            s.error = None;
+                                                                        }
+                                                                        Err(e) => {
+                                                                            s.error = Some(e);
+                                                                        }
+                                                                    }
+                                                                    cx.notify();
+                                                                });
+                                                            });
+                                                            break;
+                                                        }
+                                                        Ok(None) => break,
+                                                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                                            smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                                                        }
+                                                        Err(_) => break,
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    (Some(format!("解析 kubeconfig 失败: {e}")), Vec::new(), None, None)
+                                            }).detach();
+                                        })
+                                )
+                                .child(
+                                    Button::new("k8s-parse-kubeconfig")
+                                        .small()
+                                        .label("解析 kubeconfig")
+                                        .on_click({
+                                            let state = state_for_content.clone();
+                                            move |_ev, window, cx: &mut App| {
+                                                let text = state.read(cx).kubeconfig_text.read(cx).value().to_string();
+                                                let (error, contexts, selected, name_val_for_auto) = if text.trim().is_empty() {
+                                                    (Some("请粘贴 kubeconfig YAML 内容或选择文件".to_string()), Vec::new(), None, None)
+                                                } else {
+                                                    match parse_kubeconfig_contexts(&text) {
+                                                        Ok(ctxs) => {
+                                                            if ctxs.is_empty() {
+                                                                (Some("kubeconfig 中未找到任何有效的 context".to_string()), Vec::new(), None, None)
+                                                            } else {
+                                                                let first_name = ctxs.first().unwrap().name.clone();
+                                                                (None, ctxs, Some(0), Some(first_name))
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            (Some(format!("解析 kubeconfig 失败: {e}")), Vec::new(), None, None)
+                                                        }
+                                                    }
+                                                };
+
+                                                let _ = state.update(cx, |s, cx| {
+                                                    s.error = error;
+                                                    s.parsed_contexts = contexts;
+                                                    s.selected_context = selected;
+                                                    cx.notify();
+                                                });
+
+                                                if let Some(name_val) = name_val_for_auto {
+                                                    let s = state.clone();
+                                                    window.defer(cx, move |window, cx| {
+                                                        let _ = s.update(cx, |s, cx| {
+                                                            s.name.update(cx, |input, cx| {
+                                                                input.set_value(&name_val, window, cx);
+                                                            });
+                                                        });
+                                                    });
                                                 }
                                             }
-                                        };
-
-                                        let _ = state.update(cx, |s, cx| {
-                                            s.error = error;
-                                            s.parsed_contexts = contexts;
-                                            s.selected_context = selected;
-                                            cx.notify();
-                                        });
-
-                                        if let Some(name_val) = name_val_for_auto {
-                                            let s = state.clone();
-                                            window.defer(cx, move |window, cx| {
-                                                let _ = s.update(cx, |s, cx| {
-                                                    s.name.update(cx, |input, cx| {
-                                                        input.set_value(&name_val, window, cx);
-                                                    });
-                                                });
-                                            });
-                                        }
-                                    }
-                                })
+                                        })
+                                )
                         );
 
                         if !contexts.is_empty() {
@@ -806,7 +860,7 @@ where
                                 } else if selected_context.is_none() {
                                     error = Some("请选择要导入的 Context".into());
                                 } else if kubeconfig_raw.trim().is_empty() {
-                                    error = Some("请粘贴或选择 kubeconfig 文件".into());
+                                    error = Some("请粘贴 kubeconfig 内容或点击\"选择文件\"导入文件".into());
                                 } else if let ClusterConnectionType::SshTunnel = connection_type {
                                     if selected_ssh_label.is_none() {
                                         error = Some("请选择 SSH 跳板机".into());

@@ -1,12 +1,31 @@
 <div align="center">
 
-# Verve
+# ⚡ Verve
 
-**The Offline-First API Co-Development Platform**
+### The One-Stop Developer Workbench
 
-HTTP Debugging · SSH Terminal · Docker & Kubernetes · Stress Testing · Mock & Proxy · Document Sharing · Git Sync
+**Debug APIs, investigate issues, tail logs, exec into containers — one window for the high-frequency tasks you repeat every day.** Built-in HTTP debugging, SSH terminal, Docker / K8s read-only inspection & troubleshooting, stress testing, mock, and traffic capture — plus notes, hosts, JSON formatting, and other dev utilities, with document sharing and Git sync. Everything a developer reaches for daily, finally under one roof.
 
-A native desktop workbench built with Rust + GPUI
+`API & Testing` · `Terminal & Triage` · `Mock & Capture` · `Docs & Git` · `Notes` · `Hosts` · `JSON` · `PDF` · `DB Tools`
+
+<br/>
+
+> 🚫 **Stop juggling Postman + iTerm2 + Docker Desktop + Swagger + a notes app + a JSON formatter + a hosts editor…**
+> Verve is the single native desktop app that absorbs your daily high-frequency dev workflow — built in Rust for developers who refuse to settle for sluggish Electron bloat.
+
+<br/>
+
+<table>
+  <tr>
+    <td align="center"><b>🦀 Rust-Native</b><br/><sub>No Electron, no Chromium</sub></td>
+    <td align="center"><b>⚡ &lt;1s Startup</b><br/><sub>Instant launch</sub></td>
+    <td align="center"><b>💾 &lt;100MB RAM</b><br/><sub>5× lighter</sub></td>
+    <td align="center"><b>🔒 Offline-First</b><br/><sub>Your data stays local</sub></td>
+    <td align="center"><b>🖥️ Cross-Platform</b><br/><sub>macOS · Linux · Windows</sub></td>
+  </tr>
+</table>
+
+<br/>
 
 [Features](#-features) · [What's New](#-whats-new) · [Getting Started](#-getting-started) · [Official Release](#-official-release--limited-time-offer)
 
@@ -14,65 +33,172 @@ A native desktop workbench built with Rust + GPUI
 
 ---
 
+## 🦀 Built with Rust — Why It Matters
+
+Verve is built in **Rust** from the ground up. Here's the real-world difference against Electron-based tools:
+
+| | Verve (Rust) | Electron-based tools |
+|---|---|---|
+| ⚡ **Startup** | < 1 second | 3–5 seconds |
+| 💾 **Memory** | < 100 MB | 500 MB+ |
+| 🎨 **Rendering** | Native GPU, ~60fps | Chromium software compositing |
+| 🛡️ **Safety** | Memory-safe, zero-cost abstraction | GC pauses, V8 overhead |
+
+What this means for you: instant responses when debugging APIs, fluid terminals under heavy load, and a battery-friendly footprint that stays light all day.
+
+---
+
 ## ✨ Features
 
+Verve covers the full daily workflow of a developer — not just API debugging. Four pillars, one app:
+
+| Pillar | What's inside |
+|--------|---------------|
+| 🧪 **API & Testing** | HTTP debugging · stress testing · automated test suites · mock server · HTTP capture proxy |
+| 🖥️ **Terminal & Triage** | SSH terminal · SFTP file transfer · port forwarding · Docker container inspection & log triage · Kubernetes pod inspection & log triage |
+| 🤝 **Collaboration & Docs** | Document sharing (HTML/QR/link) · Git version sync · cloud `verve-server` |
+| 🛠️ **Dev Utilities** | Markdown notes (+ PDF export) · hosts manager · JSON formatter · PDF viewer/editor · database client launcher · 22 themes · i18n |
+
+Dive into each below 👇
+
+---
+
 ### 🔌 API Debugging
+<div align="center">
+  <img src="./assets/verve_demo/project.png" width="850" alt="Project Tree" />
+  <br/>
+  <em>Project tree (multi-level nesting)</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/api.png" width="850" alt="API Debugging" />
+  <br/>
+  <em>Request editor & response panel</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/drag_order.png" width="850" alt="Drag to Reorder" />
+  <br/>
+  <em>Drag &amp; drop to reorder the tree</em>
+</div>
+
 - Projects → folders → requests tree with multi-level nesting
 - Full HTTP methods: `GET POST PUT DELETE PATCH HEAD OPTIONS`
 - Request body: none / form-data / x-www-form-urlencoded / raw (JSON / XML / Text / HTML / JS)
 - `{{variable}}` placeholder substitution with multi-scope priority (request > folder > environment > global)
-- Pre-request & Tests scripts (JavaScript via `boa_engine`)
+- Pre-request & Tests scripts (JavaScript)
 - Response panel: status / time / size / headers / body with JSON pretty-print
 - API clone, JSON format & validation, history hidden
 
 ### 🔐 SSH Terminal
+<div align="center">
+  <img src="./assets/verve_demo/ssh.png" width="850" alt="SSH Host Cards" />
+  <br/>
+  <em>Host card management (secure credential storage)</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/ssh-terminal.png" width="850" alt="SSH Terminal" />
+  <br/>
+  <em>Multi-tab terminal sessions</em>
+</div>
+
 - Connect to Linux servers with password / private-key / agent authentication
 - Multi-tab terminal sessions (switch / close / persist), multi-terminal support
-- Built-in terminal emulator (alacritty_terminal + GPUI rendering)
-- ANSI color support (16 colors + 256-color + truecolor)
+- Built-in terminal emulator with full ANSI color support
 - Tab auto-completion · Paste support (Cmd/Ctrl+V) · Terminal text copy
-- Jump host / bastion support (ProxyJump via `channel_open_direct_tcpip`)
+- Jump host / bastion support (ProxyJump)
 - Auto-reconnect with exponential backoff
 - Host card management with secure credential storage (OS keychain + encrypted vault)
 
 ### 📁 SFTP & File Transfer
+<div align="center">
+  <img src="./assets/verve_demo/ssh-file.png" width="850" alt="SFTP File Browser" />
+</div>
+
 - SFTP file browser over SSH (upload / download with native file dialogs)
 - **Zmodem `rz` / `sz`** transfer directly inside the terminal — no extra setup
 
 ### 🔀 SSH Port Forwarding
-- Local port forwarding (`-L`) via `channel_open_direct_tcpip`
+- Local port forwarding (`-L`)
 - Expose an internal service to the API tester with one click
 
 ### 🐳 Docker Management
+<div align="center">
+  <img src="./assets/verve_demo/docker.png" width="850" alt="Docker Management" />
+  <br/>
+  <em>Containers</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/docker-images.png" width="420" alt="Docker Images" /> &nbsp;
+  <img src="./assets/verve_demo/docker-log.png" width="420" alt="Docker Logs" />
+  <br/>
+  <em>Images &nbsp;·&nbsp; Logs</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/docker-shell.png" width="850" alt="Docker Exec Shell" />
+  <br/>
+  <em>Exec shell (multi-tab)</em>
+</div>
+
 - Connect to local or remote Docker daemons (Docker host cards)
 - List / start / stop / restart / remove containers, list & prune images
 - Stream container logs, exec into containers (real PTY, multi-tab shells)
 - Shell auto-completion · Container filtering · Docker SSH tunnel for remote daemons
 
 ### ☸️ Kubernetes Management
+<div align="center">
+  <img src="./assets/verve_demo/k8s.png" width="850" alt="Kubernetes Management" />
+  <br/>
+  <em>Pods</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/k8s-log.png" width="420" alt="K8s Logs" /> &nbsp;
+  <img src="./assets/verve_demo/k8s-shell.png" width="420" alt="K8s Exec Shell" />
+  <br/>
+  <em>Logs &nbsp;·&nbsp; Exec shell</em>
+</div>
+
 - Parse `~/.kube/config` + Verve-managed kubeconfig, switch context
 - List pods, stream logs, exec into pods/containers, port-forward
 - Two connection modes: **Direct** (API server) or **SSH tunnel** (via bastion)
 - kubectl shell auto-completion · Multi-tab · Shell backup scripts
 
 ### ⚡ Stress Testing
-- Built-in load generator (powered by `oha`) — concurrency + duration, **live chart** streaming
+<div align="center">
+  <img src="./assets/verve_demo/stress.png" width="850" alt="Stress Testing" />
+</div>
+
+- Built-in load generator — concurrency + duration, **live chart** streaming
 - Scenario stress: multi-step test cases run in a loop, latency percentile tracking
 - Labeled result metrics · i18n
 
 ### 🧪 Automated Testing
+<div align="center">
+  <img src="./assets/verve_demo/auto_test.png" width="850" alt="Automated Testing" />
+</div>
+
 - Test suites / cases / steps with sequential runner
 - Reuses the scripting & HTTP infrastructure for assertions
 
 ### 🎭 Mock Server
+<div align="center">
+  <img src="./assets/verve_demo/mock.png" width="850" alt="Mock Server" />
+</div>
+
 - Rule-based mock responses served on the unified share server (port 3097)
 - Matching by method + path (Exact → Prefix → Regex) + query + headers, priority-ordered
 
 ### 🌐 HTTP Capture Proxy
+<div align="center">
+  <img src="./assets/verve_demo/http-captrue.png" width="850" alt="HTTP Capture Proxy" />
+</div>
+
 - Local HTTP forward proxy on `127.0.0.1:<port>`
 - Records request + response pairs to a ring buffer for in-app inspection
 
 ### 📄 Document Sharing
+<div align="center">
+  <img src="./assets/verve_demo/doc.png" width="850" alt="Document Sharing" />
+</div>
+
 - Generate self-contained HTML docs from any project / folder / single request
 - Modular layout with field display controls, color-coded parameter tables with required markers
 - QR code sharing + link sharing + HTML export
@@ -81,17 +207,49 @@ A native desktop workbench built with Rust + GPUI
 - Admin Web UI for upload / create / browse / delete shares
 
 ### 🗒️ Markdown Notes
+<div align="center">
+  <img src="./assets/verve_demo/note.png" width="850" alt="Markdown Notes" />
+  <br/>
+  <em>Notes with live preview</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/pdf.png" width="850" alt="PDF Viewer / Export" />
+  <br/>
+  <em>PDF viewer & export</em>
+</div>
+
 - Note tree (folders, pin, tags) with **live preview canvas**
 - Export notes to **PDF** (built-in fonts, headings, code blocks, lists, links)
 - PDF viewer with zoom · PDF editor
 
 ### 🌍 Git Version Control
+<div align="center">
+  <img src="./assets/verve_demo/git_sync_time.png" width="850" alt="Git Version Sync" />
+</div>
+
 - Multi-workspace support (each workspace = a git branch)
 - Auto-commit + auto-sync every 30 minutes
 - Per-workspace `workspace.json` isolation
 - Username / password / token authentication · Branch management UI
 
 ### 🛠️ More Tools
+<div align="center">
+  <img src="./assets/verve_demo/hosts.png" width="420" alt="Hosts Manager" /> &nbsp;
+  <img src="./assets/verve_demo/json-format.png" width="420" alt="JSON Format" />
+  <br/>
+  <em>Hosts manager &nbsp;·&nbsp; JSON format</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/theme.png" width="850" alt="Themes" />
+  <br/>
+  <em>22 built-in themes</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/settings.png" width="850" alt="Settings" />
+  <br/>
+  <em>Settings (i18n, theme, home view, auto-update)</em>
+</div>
+
 - **Hosts file manager** — read `/etc/hosts`, manage profiles
 - **Database client launcher** — auto-detect & launch TablePlus, DBeaver, DataGrip, pgAdmin, RedisInsight, Sequel Ace… (macOS / Linux / Windows)
 - i18n: Simplified Chinese (default) / English
@@ -107,7 +265,7 @@ A native desktop workbench built with Rust + GPUI
 ### v0.2.0 (Current)
 - 🐳 **Docker management** — containers, images, logs, exec, multi-tab shells, remote daemon tunneling
 - ☸️ **Kubernetes management** — kubeconfig contexts, pods, logs, exec, port-forward, SSH-tunneled API server
-- ⚡ **Stress testing** — `oha`-powered load generator with real-time charts + scenario mode
+- ⚡ **Stress testing** — load generator with real-time charts + scenario mode
 - 🧪 **Automated testing** — suites / cases / steps runner with assertions
 - 🎭 **Mock server** — priority-ordered rule matching (Exact / Prefix / Regex)
 - 🌐 **HTTP capture proxy** — inspect local HTTP traffic
@@ -133,60 +291,17 @@ A native desktop workbench built with Rust + GPUI
 
 ## 🚀 Getting Started
 
-### Build & Run
-```bash
-# Requires Rust 1.95.0+
-cargo run
-```
+Verve is closed-source proprietary software distributed as ready-to-use builds — no build toolchain needed.
 
-First launch auto-creates `~/.verve/` data directory with a demo project.
-
-### Package for Distribution
-```bash
-# macOS
-./scripts/build.sh macos    # → .app + .dmg
-
-# Linux
-./scripts/build.sh linux    # → .deb + .AppImage
-
-# Windows
-./scripts/build.sh windows  # → .msi
-
-# Current platform
-./scripts/build.sh all
-```
-
----
-
-## 🏗️ Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| UI Framework | [GPUI](https://github.com/zed-industries/zed) (same as Zed editor) |
-| SSH Client | [russh](https://github.com/Eugeny/russh) 0.60 (pure Rust) |
-| Terminal Emulator | [alacritty_terminal](https://crates.io/crates/alacritty_terminal) 0.24 |
-| Git Engine | [gix](https://crates.io/crates/gix) 0.69 (gitoxide) |
-| Script Engine | [boa_engine](https://crates.io/crates/boa_engine) (JavaScript) |
-| Load Testing | [oha](https://crates.io/crates/oha) 1.15 |
-| PDF Render | [pdfium-render](https://crates.io/crates/pdfium-render) + [printpdf](https://crates.io/crates/printpdf) |
-| Encryption | AES-256-GCM + Argon2 |
+1. **Download** the latest preview build for your platform (macOS / Linux / Windows).
+2. On first launch, Verve auto-creates its data directory with a demo project so you can explore right away.
+3. Want the full **official release** with continuous updates and priority support? See the [Official Release](#-official-release--limited-time-offer) section below.
 
 ---
 
 ## 📦 verve-server (Cloud Deployment)
 
-Verve ships a standalone server binary for hosting documents & mock APIs in the cloud:
-
-```bash
-verve-server --port 8080
-# Admin UI: http://your-server:8080/admin
-```
-
-Docker deployment:
-```bash
-docker build -t verve-server .
-docker run -d -p 3097:3097 -v verve-data:/data verve-server
-```
+Verve ships a standalone server for hosting shared documents & mock APIs in the cloud, with an admin Web UI for uploading projects and managing share links.
 
 See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment guide.
 
@@ -208,7 +323,7 @@ See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment gui
 
 > ⚠️ **Limited-Time Launch Pricing — ends soon!**
 
-Verve is open source and fully usable. The **official release** (pre-compiled binaries + continuous updates + priority support) is offered through a **donation-based model**, and the entry price below is a **time-limited early-bird rate**.
+Verve is **closed-source proprietary software** (not open source); an official preview build is available to try. The **official release** (pre-compiled binaries + continuous updates + priority support) is offered through a **donation-based model**, and the entry price below is a **time-limited early-bird rate**.
 
 ### 🔥 Early-Bird Special — only **¥99** (CNY)
 The current **¥99** early-bird price is a limited-time launch offer. **It will return to the regular ¥199 once the promotion ends.** Lock in the lowest price now:
@@ -222,14 +337,24 @@ The current **¥99** early-bird price is a limited-time launch offer. **It will 
 <table>
   <tr>
     <td align="center">
-      <img src="./assets/wechat.jpg" width="200" alt="WeChat Donate" />
+      <img src="./assets/wechat_official.jpg" width="200" alt="WeChat Official Account (Donate)" />
       <br />
-      <b>WeChat Donate</b>
+      <b>① Donate — scan to open the official-account article</b>
+    </td>
+    <td align="center">
+      <img src="./assets/wechat.jpg" width="200" alt="Author's Personal WeChat" />
+      <br />
+      <b>② Add my personal WeChat</b>
     </td>
   </tr>
 </table>
 
-⏰ **Don't miss out — the price goes up after the launch window.** After donating, please note your GitHub username or email in WeChat, and I'll send you the official release download link.
+> 📩 **How to get the official release:**
+> 1. **Donate** — scan the left QR code to open the WeChat official-account article and complete your donation (¥99+).
+> 2. **Add me** — scan the right QR code to add my **personal WeChat** as a contact.
+> 3. Send a screenshot of your donation, and I'll send you the latest official-release download link and activation instructions.
+
+⏰ **Don't miss out — the price goes up after the launch window.**
 
 ---
 
@@ -239,8 +364,15 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 ---
 
-## License
+## 📄 License
 
-Source code is licensed under **MIT**, free to use, modify, and distribute.
+Verve is **closed-source proprietary software**. The source code is **not open** and is **not distributed**. All Rights Reserved.
 
-The official release (pre-compiled binaries + continuous updates + technical support) is provided through the donation model.
+Without the author's written permission, the following are **prohibited**:
+- ❌ Reverse engineering, decompiling, or disassembling the software
+- ❌ Copying, modifying, or redistributing the software or derivatives
+- ❌ Using the software for commercial resale or hosted services
+
+**Permitted**: downloading the officially released preview / official build for personal and team day-to-day development use.
+
+The official release (pre-compiled binaries + continuous updates + technical support) is licensed through the donation model. For commercial licensing or team collaboration plans, contact the author via WeChat above.

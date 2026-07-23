@@ -19,7 +19,7 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Si
 use tokio::io::AsyncWriteExt;
 
 use crate::k8s::clusters::{
-    import_kubeconfig as import_kubeconfig_file, load_manual_clusters, remove_manual_cluster, ClusterAuth, ManualCluster,
+    load_manual_clusters, remove_manual_cluster, ClusterAuth, ManualCluster,
 };
 use crate::k8s::kubectl::{exec_pod, list_namespaces, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod};
 use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
@@ -268,11 +268,6 @@ impl K8sPanel {
             View::Pods => self.reload_pods(cx),
             _ => cx.notify(),
         }
-    }
-
-    /// Open the kubeconfig import dialog from the title bar.
-    pub fn open_import_kubeconfig(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.import_kubeconfig_dialog(window, cx);
     }
 
     /// Return the current context name (passed as --context to kubectl).
@@ -625,46 +620,6 @@ impl K8sPanel {
         .detach();
         cx.notify();
     }
-
-    /// Open a native file picker to import an external kubeconfig file.
-    fn import_kubeconfig_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
-        std::thread::spawn(move || {
-            let res = rfd::FileDialog::new()
-                .add_filter("kubeconfig", &["yaml", "yml", "conf", "*"])
-                .pick_file();
-            let _ = tx.send(res.map(|p| p.to_path_buf()));
-        });
-        let ent = cx.entity().downgrade();
-        cx.spawn(async move |_this, cx| {
-            loop {
-                match rx.try_recv() {
-                    Ok(Some(path)) => {
-                        let result = import_kubeconfig_file(&path);
-                        let _ = ent.update(cx, |panel, cx| {
-                            match result {
-                                Ok(n) => {
-                                    panel.error = Some(format!("成功导入 {n} 个 context"));
-                                    panel.refresh_config(cx);
-                                }
-                                Err(e) => {
-                                    panel.error = Some(e);
-                                    cx.notify();
-                                }
-                            }
-                        });
-                        break;
-                    }
-                    Ok(None) => break,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                    }
-                    Err(_) => break,
-                }
-            }
-        })
-        .detach();
-    }
 }
 
 impl Render for K8sPanel {
@@ -816,15 +771,6 @@ impl K8sPanel {
                             .font_weight(FontWeight::SEMIBOLD)
                             .flex_1()
                             .child("可用 Context (点击切换)"),
-                    )
-                    .child(
-                        Button::new("k8s-import-kubeconfig")
-                            .xsmall()
-                            .ghost()
-                            .label("导入 kubeconfig")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.import_kubeconfig_dialog(window, cx);
-                            })),
                     )
                     .child(
                         Button::new("k8s-add-cluster")

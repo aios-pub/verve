@@ -3460,7 +3460,6 @@ impl VerveApp {
         let k8s_ctx = k8s.clone();
         let k8s_fwd = k8s.clone();
         let k8s_reload = k8s.clone();
-        let k8s_import = k8s.clone();
         let k8s_add = k8s.clone();
 
         h_flex()
@@ -3560,15 +3559,6 @@ impl VerveApp {
                     .label("刷新")
                     .on_click(cx.listener(move |_, _, _, cx| {
                         k8s_reload.update(cx, |p, cx| p.refresh_current(cx));
-                    })),
-            )
-            .child(
-                Button::new("k8s-title-import")
-                    .ghost()
-                    .small()
-                    .label("导入 kubeconfig")
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        k8s_import.update(cx, |p, cx| p.open_import_kubeconfig(window, cx));
                     })),
             )
             .child(

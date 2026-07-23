@@ -176,7 +176,7 @@ async fn bridge_one(
     log::debug!("docker tunnel: opening exec channel for `{REMOTE_DIAL_CMD}`");
     let mut channel = {
         let h = handle.lock().await;
-        let mut ch = h
+        let ch = h
             .channel_open_session()
             .await
             .map_err(|e| format!("打开 SSH session 通道失败: {e}"))?;

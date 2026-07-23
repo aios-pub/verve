@@ -703,7 +703,7 @@ impl SshPanel {
 
                         // Helper: drain outgoing bytes + events.
                         let zm_uid = session_uid;
-                        let mut drain_zm = |zm: &mut ZmodemSession,
+                        let drain_zm = |zm: &mut ZmodemSession,
                                             input_tx: &Option<
                             tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
                         >,

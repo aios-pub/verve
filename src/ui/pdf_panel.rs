@@ -533,7 +533,7 @@ impl PdfPanel {
                         let bytes_c = bytes.clone();
                         let res = cx
                             .background_executor()
-                            .spawn(async move { std::fs::write(&path, &bytes_c).map_err(|e| e) })
+                            .spawn(async move { std::fs::write(&path, &bytes_c) })
                             .await;
                         let _ = ent.update(cx, |_this, _cx| match res {
                             Ok(()) => log::info!("pdf saved"),

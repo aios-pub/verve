@@ -425,8 +425,10 @@ pub struct VariableExtractor {
 /// Which part of the response the extractor reads from.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ExtractSource {
     /// Dot-path into the JSON response body (e.g. `data.token`).
+    #[default]
     JsonPath,
     /// Response header value (`path` = header name, case-insensitive).
     Header,
@@ -438,11 +440,6 @@ pub enum ExtractSource {
     Body,
 }
 
-impl Default for ExtractSource {
-    fn default() -> Self {
-        ExtractSource::JsonPath
-    }
-}
 
 /// Result of a single step within a test run.
 #[derive(Debug, Clone, Serialize, Deserialize)]

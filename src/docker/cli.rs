@@ -553,7 +553,7 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
     // Allocate a PTY at a default size; terminal resizes happen via PTY resize API
     // but wiring that up is a later improvement — 120x32 is a sane default.
     let pty_system = native_pty_system();
-    let mut pair = pty_system
+    let pair = pty_system
         .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| DockerError(format!("分配 PTY 失败: {e}")))?;
 
@@ -570,7 +570,7 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
     // portable-pty exposes separate reader/writer handles via dedicated methods:
     // `try_clone_reader()` → independent boxed Read impl (own fd)
     // `take_writer()`      → boxed Write impl that consumes write-side ownership
-    let mut reader = pair
+    let reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| DockerError(format!("PTY reader 获取失败: {e}")))?;

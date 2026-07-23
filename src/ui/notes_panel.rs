@@ -624,7 +624,7 @@ impl NotesPanel {
             if label.is_empty() {
                 label = rust_i18n::t!("notes.untitled").to_string();
             }
-            let mut item = TreeItem::new(id.clone(), label)
+            let item = TreeItem::new(id.clone(), label)
                 .children(children)
                 .expanded(!is_collapsed);
             items.push(item);

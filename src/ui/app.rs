@@ -692,7 +692,7 @@ impl VerveApp {
                     this.import_collection(cx);
                 }
                 crate::ui::project_manage_panel::ManageEvent::Export(fmt) => {
-                    this.export_project(fmt.clone(), cx);
+                    this.export_project(*fmt, cx);
                 }
                 crate::ui::project_manage_panel::ManageEvent::GenerateMocks => {
                     this.generate_mocks(cx);

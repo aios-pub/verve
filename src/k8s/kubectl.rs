@@ -696,7 +696,7 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
     cmd.arg(shell);
 
     let pty_system = native_pty_system();
-    let mut pair = pty_system
+    let pair = pty_system
         .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| PodError(format!("分配 PTY 失败: {e}")))?;
     let mut _child = pair

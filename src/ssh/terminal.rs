@@ -727,7 +727,7 @@ impl Render for TerminalView {
                     |_bounds, _window, _cx| {},
                     move |bounds, _state, window, cx: &mut App| {
                         if let Ok(mut b) = bounds_for_paint.lock() {
-                            *b = bounds.clone();
+                            *b = bounds;
                         }
                         window.handle_input(&fh, ElementInputHandler::new(bounds, entity.clone()), cx);
                     },

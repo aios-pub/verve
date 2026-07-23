@@ -712,7 +712,7 @@ fn step_display_name(step: &TestCaseStep, req_names: &BTreeMap<String, String>) 
             .get(&r.request_id)
             .cloned()
             .or(r.name_override.clone())
-            .unwrap_or_else(|| format!("<未找到请求>", )),
+            .unwrap_or_else(|| "<未找到请求>".to_string()),
         other => other.display_label(),
     }
 }
@@ -812,7 +812,7 @@ fn render_child_results(children: &[crate::autotest::TestStepResult], cx: &Conte
         .children(children.iter().map(|c| {
             let color = if c.passed { cx.theme().success } else { cx.theme().danger };
             let icon = if c.passed { "✓" } else { "✗" };
-            let mut row = h_flex()
+            let row = h_flex()
                 .gap_2()
                 .items_center()
                 .child(div().text_size(px(11.)).text_color(color).child(icon))

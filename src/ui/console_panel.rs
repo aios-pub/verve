@@ -128,8 +128,8 @@ impl Render for ConsolePanel {
 
 /// Trim a URL to something displayable: strip query string and fragment.
 fn shorten_url(url: &str) -> String {
-    let without_query = url.splitn(2, '?').next().unwrap_or(url);
-    let without_frag = without_query.splitn(2, '#').next().unwrap_or(without_query);
+    let without_query = url.split('?').next().unwrap_or(url);
+    let without_frag = without_query.split('#').next().unwrap_or(without_query);
     without_frag.to_string()
 }
 

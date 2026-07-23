@@ -170,6 +170,28 @@ impl K8sPanel {
         }
     }
 
+    /// Called by app.rs when the user clicks the K8s sidebar item.
+    /// If a cluster/context is already configured, jump straight to the Pods view
+    /// and auto-trigger a pod reload so the user sees workloads immediately.
+    /// Otherwise leave the panel on the Contexts view so they can add one.
+    pub fn activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // Always refresh config in case clusters were added externally.
+        self.cfg = load_merged();
+        if self.current_context_name().is_some() && !self.cfg.contexts.is_empty() {
+            self.set_view(View::Pods, cx);
+            // Only trigger a single load to avoid racing two concurrent SSH
+            // tunnel opens (which caused duplicate tunnels and a panic when the
+            // Runtime inside the losing tunnel was dropped from an async context).
+            // Namespaces are loaded lazily when the user clicks the "加载" button.
+            if self.pods.is_empty() && !self.pods_loading {
+                self.reload_pods(cx);
+            }
+        } else {
+            self.set_view(View::Contexts, cx);
+        }
+        cx.notify();
+    }
+
     /// Switch to the pods view. Does NOT auto-load data — user must click "Load".
     pub fn show_pods(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_view(View::Pods, cx);
@@ -306,6 +328,10 @@ impl K8sPanel {
     }
 
     pub fn reload_pods(&mut self, cx: &mut Context<Self>) {
+        // Guard against double-invocation (rapid clicks / activate() + button click)
+        if self.pods_loading {
+            return;
+        }
         // Namespace filter: None → all namespaces (-A), Some(name) → specific namespace
         let ns = self.selected_namespace.clone();
         let ctx = self.current_context_name().map(String::from);

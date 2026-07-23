@@ -2251,11 +2251,17 @@ impl VerveApp {
                         btn.bg(theme.accent.opacity(0.5))
                             .text_color(theme.foreground)
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.active_view = view;
                         // Lazy-activate panels that shouldn't connect at app startup.
-                        if view == SideView::Docker {
-                            this.docker.update(cx, |d, cx| d.activate(cx));
+                        match view {
+                            SideView::Docker => {
+                                this.docker.update(cx, |d, cx| d.activate(cx));
+                            }
+                            SideView::K8s => {
+                                this.k8s.update(cx, |k, cx| k.activate(window, cx));
+                            }
+                            _ => {}
                         }
                         cx.notify();
                     }));

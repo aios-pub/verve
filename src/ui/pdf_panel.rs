@@ -53,6 +53,8 @@ pub struct PdfPanel {
     rendering: std::collections::HashSet<u32>,
     edit_mode: EditMode,
     erase_start: Option<(u32, f32, f32)>, // (page_idx, x_pts, y_pts)
+    /// Zoom factor (1.0 = 100%).
+    zoom: f32,
     /// Shared with each page's canvas prepaint closure.
     /// Key = page_idx; value = bounds of that page in the scroll container.
     page_bounds: Rc<RefCell<HashMap<u32, Bounds<Gpx>>>>,
@@ -74,6 +76,7 @@ impl PdfPanel {
             rendering: std::collections::HashSet::new(),
             edit_mode: EditMode::View,
             erase_start: None,
+            zoom: 1.0,
             page_bounds: Rc::new(RefCell::new(HashMap::new())),
             scroll_handle: ScrollHandle::new(),
             _subs: Vec::new(),
@@ -129,6 +132,7 @@ impl PdfPanel {
                                 this.rendering.clear();
                                 this.erase_start = None;
                                 this.edit_mode = EditMode::View;
+                                this.zoom = 1.0;
                                 this.page_bounds.borrow_mut().clear();
                                 this.scroll_handle.scroll_to_item(0);
                                 this.refresh_page_count(cx);
@@ -229,13 +233,15 @@ impl PdfPanel {
             return;
         }
         self.rendering.insert(page_idx);
-        const MAX_DIM_PX: i32 = 1200;
+        // Scale render resolution with zoom, capped to avoid huge bitmaps.
+        // Base 1200px at 100% zoom; max ~3000px at 250%+.
+        let max_dim = ((1200.0 * self.zoom).round() as i32).clamp(400, 3000);
         let ent = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    Self::render_page_from_bytes(&bytes, page_idx, MAX_DIM_PX)
+                    Self::render_page_from_bytes(&bytes, page_idx, max_dim)
                 })
                 .await;
             let _ = ent.update(cx, |this, cx| {
@@ -618,6 +624,31 @@ impl PdfPanel {
         cx.notify();
     }
 
+    fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(self.zoom * 1.25, cx);
+    }
+
+    fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(self.zoom / 1.25, cx);
+    }
+
+    fn zoom_reset(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(1.0, cx);
+    }
+
+    fn set_zoom(&mut self, new_zoom: f32, cx: &mut Context<Self>) {
+        let z = new_zoom.clamp(0.25, 4.0);
+        if (z - self.zoom).abs() < 0.01 {
+            return;
+        }
+        self.zoom = z;
+        // Clear cache so pages re-render at the new resolution.
+        self.page_cache.clear();
+        self.rendering.clear();
+        self.ensure_visible_pages_rendered(cx);
+        cx.notify();
+    }
+
     fn window_pos_to_pdf_points(
         &self,
         page_idx: u32,
@@ -895,6 +926,39 @@ impl Render for PdfPanel {
             .child(
                 h_flex()
                     .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new("pdf-zoom-out")
+                            .icon(IconName::Minus)
+                            .small()
+                            .ghost()
+                            .tooltip("Zoom out (Ctrl+-)")
+                            .disabled(!has_doc || is_busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.zoom_out(cx))),
+                    )
+                    .child(
+                        Button::new("pdf-zoom-reset")
+                            .small()
+                            .ghost()
+                            .label(format!("{}%", (self.zoom * 100.0).round() as i32))
+                            .tooltip("Reset zoom to 100% (Ctrl+0)")
+                            .disabled(!has_doc || is_busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.zoom_reset(cx))),
+                    )
+                    .child(
+                        Button::new("pdf-zoom-in")
+                            .icon(IconName::Plus)
+                            .small()
+                            .ghost()
+                            .tooltip("Zoom in (Ctrl++)")
+                            .disabled(!has_doc || is_busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.zoom_in(cx))),
+                    ),
+            )
+            .child(div().w(px(8.)))
+            .child(
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("mode-view")
                             .small()
@@ -976,7 +1040,20 @@ impl Render for PdfPanel {
                 .gap_3()
                 .p_4()
                 // Re-evaluate virtualization when scroll happens.
-                .on_scroll_wheel(cx.listener(|this: &mut Self, _ev: &ScrollWheelEvent, _window, cx| {
+                .on_scroll_wheel(cx.listener(|this: &mut Self, ev: &ScrollWheelEvent, _window, cx| {
+                    // Ctrl/Cmd + scroll wheel = zoom.
+                    if ev.modifiers.control || ev.modifiers.platform {
+                        let delta_y = match &ev.delta {
+                            gpui::ScrollDelta::Pixels(p) => p.y.as_f32(),
+                            gpui::ScrollDelta::Lines(l) => l.y * 20.0,
+                        };
+                        if delta_y > 1.0 {
+                            this.zoom_in(cx);
+                        } else if delta_y < -1.0 {
+                            this.zoom_out(cx);
+                        }
+                        return;
+                    }
                     // Render pages near the current scroll position. Since scroll wheel
                     // events fire during scrolling, just re-render the pages around top_item.
                     this.ensure_visible_pages_rendered(cx);
@@ -1038,6 +1115,10 @@ impl PdfPanel {
         let idx_for_click = idx;
         let has_render = self.page_cache.contains_key(&idx);
         let pr = self.page_cache.get(&idx).cloned();
+        // A4 base size (800x1130 ≈ A4 at ~85px/inch), scaled by zoom.
+        let zoom = self.zoom;
+        let page_w = 800.0 * zoom;
+        let page_h = 1130.0 * zoom;
 
         // Use canvas: prepaint records bounds for click coord translation; paint
         // draws the page image using paint_image.
@@ -1103,8 +1184,8 @@ impl PdfPanel {
             )
             .child(
                 div()
-                    .w(px(800.))
-                    .h(px(1130.))
+                    .w(px(page_w))
+                    .h(px(page_h))
                     .mx_auto()
                     .border_1()
                     .border_color(cx.theme().border)

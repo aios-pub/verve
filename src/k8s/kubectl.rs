@@ -85,11 +85,30 @@ fn tunnels() -> &'static StdMutex<std::collections::HashMap<String, Arc<ApiTunne
 }
 
 /// Close (and drop) the SSH tunnel for a given cluster id, if open.
+///
+/// The actual drop is offloaded to a dedicated std thread because dropping the
+/// `ApiTunnel` tears down its embedded tokio `Runtime`, which panics if invoked
+/// from within an asynchronous context (the "Cannot drop a runtime in a context
+/// where blocking is not allowed" panic).
 pub fn close_ssh_tunnel(cluster_id: &str) {
-    let mut guard = tunnels().lock().unwrap();
-    if guard.remove(cluster_id).is_some() {
+    // Recover from a poisoned mutex (if a previous open/drop panicked, the data
+    // is still structurally fine — we just want to remove the entry).
+    let mut guard = tunnels()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(tunnel) = guard.remove(cluster_id) {
         log::info!("k8s tunnel: closed for cluster {cluster_id}");
+        defer_tunnel_drop(tunnel);
     }
+}
+
+/// Drop an `Arc<ApiTunnel>` on a dedicated std thread so the contained tokio
+/// `Runtime` is torn down in a blocking context. Must be used whenever the last
+/// Arc reference for a tunnel is released from within an async context.
+fn defer_tunnel_drop(tunnel: Arc<ApiTunnel>) {
+    std::thread::spawn(move || {
+        drop(tunnel);
+    });
 }
 
 /// Look up the ManualCluster by matching context name. The context name in
@@ -108,6 +127,10 @@ fn find_manual_cluster_by_context(context: &str) -> Option<ManualCluster> {
 /// own dedicated tokio runtime and calls `block_on`, we must run the open on a
 /// dedicated std thread to avoid "Cannot start a runtime from within a runtime"
 /// panic (this mirrors how docker tunnels are opened).
+///
+/// Concurrent callers racing to open the same cluster are serialized by holding
+/// the global lock across the entire open — the first one opens, subsequent
+/// callers wait and then reuse the cached tunnel.
 fn resolve_ssh_tunnel(cluster: &ManualCluster) -> Result<Arc<ApiTunnel>, PodError> {
     let cluster_id = cluster.id.clone();
     let ssh_host_id = cluster
@@ -115,16 +138,20 @@ fn resolve_ssh_tunnel(cluster: &ManualCluster) -> Result<Arc<ApiTunnel>, PodErro
         .as_ref()
         .ok_or_else(|| PodError("集群配置缺少 ssh_host_id".into()))?;
 
+    // Recover from a poisoned mutex (a prior open/drop may have panicked; the
+    // map itself is fine). We still need the lock to serialize concurrent opens.
+    let mut guard = tunnels()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Fast path: tunnel already open.
-    {
-        let guard = tunnels().lock().unwrap();
-        if let Some(tun) = guard.get(&cluster_id) {
-            return Ok(tun.clone());
-        }
+    if let Some(tun) = guard.get(&cluster_id) {
+        return Ok(tun.clone());
     }
 
-    // Slow path: open a new tunnel on a dedicated std thread (avoids runtime
-    // nesting panic when called from within a tokio runtime context).
+    // Slow path: open a new tunnel on a dedicated std thread while *holding*
+    // the lock, so concurrent callers wait here instead of each opening their
+    // own duplicate tunnel.
     let server_url = cluster.server.clone();
     let ssh_host_id_owned = ssh_host_id.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<ApiTunnel, String>>();
@@ -141,7 +168,6 @@ fn resolve_ssh_tunnel(cluster: &ManualCluster) -> Result<Arc<ApiTunnel>, PodErro
         .map_err(|e| PodError(format!("建立 SSH 隧道失败: {e}")))?;
 
     let arc = Arc::new(tunnel);
-    let mut guard = tunnels().lock().unwrap();
     guard.insert(cluster_id, arc.clone());
     Ok(arc)
 }

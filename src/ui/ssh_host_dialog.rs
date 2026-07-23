@@ -133,13 +133,14 @@ pub fn open_dialog<F>(
 
         dialog
             .title(title_text)
+            .w(px(520.))
             .content(move |content, _window, cx| {
                 let s = state_for_content.read(cx);
                 let auth_type = s.auth_type;
                 let body =
                     v_flex()
                         .p_4()
-                        .w(px(460.))
+                        .w_full()
                         .gap_3()
                         // Name
                         .child(

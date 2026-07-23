@@ -130,8 +130,7 @@ pub fn render_content(
 
     v_flex()
         .p_4()
-        .w(px(520.))
-        .max_w(px(520.))
+        .w_full()
         .gap_4()
         // Title input (always first).
         .child(section_label("文档标题", muted))
@@ -608,6 +607,7 @@ pub fn open_dialog<F>(
 
         dialog
             .title("分享文档")
+            .w(px(580.))
             .content(move |content, _window, cx| {
                 let body = render_content(state_for_content.clone(), theme.clone(), cx);
                 content.child(body)

@@ -821,6 +821,7 @@ fn open_global_dialog(
         let view = view.clone();
         dialog
             .title(title.clone())
+            .w(px(700.))
             .content(move |content, _, _| content.child(div().p_4().child(view.clone())))
     });
 }

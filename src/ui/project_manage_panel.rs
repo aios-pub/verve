@@ -253,8 +253,9 @@ impl ProjectManagePanel {
                     let git_f = git.clone();
                     dialog
                         .title("提交更改")
+                        .w(px(480.))
                         .content(move |content, _w, _cx| {
-                            content.child(v_flex().p_4().w(px(420.)).child(Input::new(&input_c)))
+                            content.child(v_flex().p_4().w_full().child(Input::new(&input_c)))
                         })
                         .footer(
                             Button::new("ok-commit")
@@ -283,8 +284,9 @@ impl ProjectManagePanel {
                     let git_f = git.clone();
                     dialog
                         .title("新建分支")
+                        .w(px(480.))
                         .content(move |content, _w, _cx| {
-                            content.child(v_flex().p_4().w(px(420.)).child(Input::new(&input_c)))
+                            content.child(v_flex().p_4().w_full().child(Input::new(&input_c)))
                         })
                         .footer(
                             Button::new("ok-branch")
@@ -313,11 +315,12 @@ impl ProjectManagePanel {
                     let panel_f = panel.clone();
                     dialog
                         .title("远程仓库")
+                        .w(px(520.))
                         .content(move |content, _w, _cx| {
                             content.child(
                                 v_flex()
                                     .p_4()
-                                    .w(px(460.))
+                                    .w_full()
                                     .gap_2()
                                     .child(
                                         div()
@@ -360,11 +363,12 @@ impl ProjectManagePanel {
                     let panel_f = panel.clone();
                     dialog
                         .title("认证配置")
+                        .w(px(520.))
                         .content(move |content, _w, _cx| {
                             content.child(
                                 v_flex()
                                     .p_4()
-                                    .w(px(460.))
+                                    .w_full()
                                     .gap_3()
                                     .child(
                                         v_flex()
@@ -415,11 +419,12 @@ impl ProjectManagePanel {
                     let state_f = state.clone();
                     dialog
                         .title("新建合并请求")
+                        .w(px(520.))
                         .content(move |content, _w, _cx| {
                             content.child(
                                 v_flex()
                                     .p_4()
-                                    .w(px(460.))
+                                    .w_full()
                                     .gap_3()
                                     .child(field("标题", Input::new(&title_c)))
                                     .child(field("源分支", Input::new(&source_c)))
@@ -474,11 +479,12 @@ impl ProjectManagePanel {
                     let state_f = state.clone();
                     dialog
                         .title("新增状态码")
+                        .w(px(520.))
                         .content(move |content, _w, _cx| {
                             content.child(
                                 v_flex()
                                     .p_4()
-                                    .w(px(460.))
+                                    .w_full()
                                     .gap_3()
                                     .child(field("状态码", Input::new(&code_c)))
                                     .child(field("名称", Input::new(&name_c)))
@@ -524,11 +530,12 @@ impl ProjectManagePanel {
                     let state_f = state.clone();
                     dialog
                         .title("新建 API Token")
+                        .w(px(520.))
                         .content(move |content, _w, _cx| {
                             content.child(
                                 v_flex()
                                     .p_4()
-                                    .w(px(460.))
+                                    .w_full()
                                     .gap_2()
                                     .child(
                                         div()

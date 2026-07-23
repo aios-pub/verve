@@ -213,7 +213,7 @@ impl Render for KvManagerView {
         };
 
         v_flex()
-            .w(px(640.))
+            .w_full()
             .h(px(420.))
             .gap_2()
             // Header: title + description.

@@ -2748,21 +2748,6 @@ impl VerveApp {
                             }),
                     ),
             )
-            // Active nav: the current project name as a breadcrumb.
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .text_color(theme.muted_foreground)
-                    .child(IconName::ChevronRight)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child(project_name),
-                    ),
-            )
             // Share the whole project's docs (scope = Project).
             .child(
                 Button::new("share-project")

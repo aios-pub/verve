@@ -527,6 +527,12 @@ impl Render for ProjectTreePanel {
                                 // ONE rounded layer — the ListItem's overflow clip.
                                 // That avoids the crescent gap caused by two
                                 // mismatched rounded layers.
+                                //
+                                // Use `theme.selection` (a vivid blue) rather than
+                                // `theme.primary` — primary is neutral-50/white in
+                                // dark mode (neutral-900/black in light mode), which
+                                // makes the 3px edge bar look like a text-insertion
+                                // caret instead of a selection indicator.
                                 .when(is_selected, |item| {
                                     item.child(
                                         div()
@@ -535,7 +541,7 @@ impl Render for ProjectTreePanel {
                                             .left_0()
                                             .bottom_0()
                                             .w(px(3.))
-                                            .bg(theme.primary),
+                                            .bg(theme.selection),
                                     )
                                     .child(
                                         div()
@@ -544,7 +550,7 @@ impl Render for ProjectTreePanel {
                                             .left_0()
                                             .right_0()
                                             .bottom_0()
-                                            .bg(theme.primary.opacity(0.22)),
+                                            .bg(theme.selection.opacity(0.16)),
                                     )
                                     .text_color(theme.foreground)
                                 })
@@ -712,7 +718,7 @@ impl Render for ProjectTreePanel {
                             list_item
                                 .when(is_dragging, |row| row.opacity(0.5))
                                 .when(is_drop_target, |row| {
-                                    row.border_l_2().border_color(theme.primary)
+                                    row.border_l_2().border_color(theme.selection)
                                 })
                                 // Make the row a drag source (carries TreeDrag).
                                 .on_drag(drag_value, move |drag: &TreeDrag, _pos, _window, cx| {

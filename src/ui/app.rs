@@ -37,7 +37,7 @@ use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::docker_panel::DockerPanel;
-use crate::ui::k8s_panel::K8sPanel;
+use crate::ui::k8s_panel::{K8sPanel, View as K8sView};
 use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
@@ -3483,7 +3483,14 @@ impl VerveApp {
                             .label("Pods")
                             .when(cur_view == "pods", |b| b.selected(true))
                             .on_click(cx.listener(move |_, _, _, cx| {
-                                k8s_pods.update(cx, |p, cx| p.show_pods(cx));
+                                k8s_pods.update(cx, |p, cx| {
+                                    // show_pods needs &Window; skip explicit namespace load here,
+                                    // it will load on first render in render_pods
+                                    p.set_view(K8sView::Pods, cx);
+                                    if p.pods.is_empty() && !p.pods_loading {
+                                        p.reload_pods(cx);
+                                    }
+                                });
                             })),
                     )
                     .child(
@@ -3537,8 +3544,15 @@ impl VerveApp {
                         let panel = k8s_add.clone();
                         // k8s_cluster_dialog::open_dialog takes &mut App.
                         window.defer(cx, move |window, cx| {
-                            crate::ui::k8s_cluster_dialog::open_dialog(window, cx);
-                            let _ = panel.update(cx, |p, cx| p.refresh_current(cx));
+                            let panel_for_cb = panel.clone();
+                            crate::ui::k8s_cluster_dialog::open_dialog(
+                                None,
+                                move |_window, cx| {
+                                    let _ = panel_for_cb.update(cx, |p, cx| p.refresh_current(cx));
+                                },
+                                window,
+                                cx,
+                            );
                         });
                     })),
             )

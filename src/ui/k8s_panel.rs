@@ -14,13 +14,14 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
+use gpui_component::select::{Select, SelectState};
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
 use tokio::io::AsyncWriteExt;
 
 use crate::k8s::clusters::{
-    import_kubeconfig as import_kubeconfig_file, load_manual_clusters, ClusterAuth, ManualCluster,
+    import_kubeconfig as import_kubeconfig_file, load_manual_clusters, remove_manual_cluster, ClusterAuth, ManualCluster,
 };
-use crate::k8s::kubectl::{exec_pod, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod};
+use crate::k8s::kubectl::{exec_pod, list_namespaces, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod};
 use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
 use crate::ssh::terminal::TerminalView;
 use gpui_component::text::TextView;
@@ -28,7 +29,7 @@ use crate::ui::k8s_cluster_dialog;
 
 /// Which sub-view is active.
 #[derive(Clone, PartialEq, Eq)]
-enum View {
+pub enum View {
     Contexts,
     Pods,
     Logs,
@@ -38,12 +39,20 @@ enum View {
 
 pub struct K8sPanel {
     cfg: KubeConfig,
-    error: Option<String>,
+    pub error: Option<String>,
     active_view: View,
     // --- pods ---
-    namespace_input: Option<Entity<InputState>>,
-    pods: Vec<Pod>,
-    pods_loading: bool,
+    namespace_select: Option<Entity<SelectState<Vec<String>>>>,
+    pub namespaces: Vec<String>,
+    namespaces_loaded: bool,
+    /// Currently selected namespace filter:
+    /// - None → all namespaces (`kubectl get pods -A`)
+    /// - Some("") → all namespaces (placeholder)
+    /// - Some("name") → specific namespace
+    pub selected_namespace: Option<String>,
+    search_input: Option<Entity<InputState>>,
+    pub pods: Vec<Pod>,
+    pub pods_loading: bool,
     // --- logs ---
     log_target: Option<String>,
     log_lines: Vec<String>,
@@ -58,16 +67,24 @@ pub struct K8sPanel {
 
 impl K8sPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let namespace_input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("default");
-            s.set_value("default", window, cx);
-            s
+        let namespace_select = cx.new(|cx| {
+            SelectState::new(
+                vec!["所有 Namespaces".to_string()],
+                Some(gpui_component::IndexPath::new(0)),
+                window,
+                cx,
+            )
         });
-        let mut me = Self {
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称搜索 Pod..."));
+        Self {
             cfg: load_merged(),
             error: None,
             active_view: View::Contexts,
-            namespace_input: Some(namespace_input),
+            namespace_select: Some(namespace_select),
+            namespaces: vec!["所有 Namespaces".to_string()],
+            namespaces_loaded: false,
+            selected_namespace: None, // default: all namespaces
+            search_input: Some(search_input),
             pods: Vec::new(),
             pods_loading: false,
             log_target: None,
@@ -77,19 +94,47 @@ impl K8sPanel {
             exec_target: None,
             exec_terminal: None,
             exec_stdin: None,
-        };
-        me.maybe_default_namespace();
-        me
+        }
     }
 
-    fn maybe_default_namespace(&mut self) {
-        if let Some(ctx) = self.cfg.active_context() {
-            let ns = ctx.context.namespace.clone().unwrap_or_else(|| "default".into());
-            if let Some(input) = &self.namespace_input {
-                // Value is already set; nothing to do unless it's still the placeholder.
-                let _ = (input, ns);
+    /// Fetch namespaces from the cluster and populate the dropdown.
+    fn load_namespaces(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let ctx = self.current_context_name().map(String::from);
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<String>, String>>();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(list_namespaces(ctx.as_deref())).map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        let ent = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(Ok(mut ns_list)) => {
+                        let _ = ent.update(cx, |panel, cx| {
+                            ns_list.sort();
+                            let mut options = vec!["所有 Namespaces".to_string()];
+                            options.extend(ns_list.iter().cloned());
+                            panel.namespaces = options.clone();
+                            // Clear select so it gets recreated on next render with new options
+                            panel.namespace_select = None;
+                            panel.selected_namespace = None;
+                            panel.namespaces_loaded = true;
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        log::warn!("Failed to list namespaces: {e}");
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
+                }
             }
-        }
+        }).detach();
     }
 
     fn refresh_config(&mut self, cx: &mut Context<Self>) {
@@ -125,12 +170,10 @@ impl K8sPanel {
         }
     }
 
-    /// Switch to the pods view and reload if empty.
-    pub fn show_pods(&mut self, cx: &mut Context<Self>) {
+    /// Switch to the pods view. Does NOT auto-load data — user must click "Load".
+    pub fn show_pods(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.set_view(View::Pods, cx);
-        if self.pods.is_empty() && !self.pods_loading {
-            self.reload_pods(cx);
-        }
+        // Do not auto-load namespaces or pods; lazy load when user clicks "Load" button
     }
 
     /// Switch to the contexts view.
@@ -167,7 +210,7 @@ impl K8sPanel {
         }
     }
 
-    fn switch_context(&mut self, name: String, cx: &mut Context<Self>) {
+    fn switch_context(&mut self, name: String, _window: &mut Window, cx: &mut Context<Self>) {
         // Update in-memory state. kubectl commands use --context, so we don't
         // need to modify any kubeconfig file on disk.
         self.cfg.current_context = name.clone();
@@ -177,10 +220,15 @@ impl K8sPanel {
         let _ = crate::k8s::clusters::save_verve_kubeconfig(&verve_cfg);
         self.pods.clear();
         self.error = None;
+        // Reset namespace list - will reload when user clicks Load
+        self.namespaces = vec!["所有 Namespaces".to_string()];
+        self.namespaces_loaded = false;
+        self.namespace_select = None;
+        self.selected_namespace = None;
         cx.notify();
     }
 
-    fn set_view(&mut self, v: View, cx: &mut Context<Self>) {
+    pub fn set_view(&mut self, v: View, cx: &mut Context<Self>) {
         let leaving_logs = v != View::Logs;
         let leaving_exec = v != View::Exec;
         self.active_view = v;
@@ -195,11 +243,9 @@ impl K8sPanel {
         cx.notify();
     }
 
-    fn start_exec(&mut self, pod: String, _window: &mut Window, cx: &mut Context<Self>) {
-        let ns = self
-            .namespace_input
-            .as_ref()
-            .map(|i| i.read(cx).value().to_string());
+    fn start_exec(&mut self, pod: String, pod_namespace: String, window: &mut Window, cx: &mut Context<Self>) {
+        // When viewing all namespaces (-A), use pod's own namespace; otherwise use filter namespace
+        let ns = Some(pod_namespace);
         let ctx = self.current_context_name().map(String::from);
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<ExecSession, String>>();
         let pod_for_thread = pod.clone();
@@ -259,11 +305,9 @@ impl K8sPanel {
         }).detach();
     }
 
-    fn reload_pods(&mut self, cx: &mut Context<Self>) {
-        let ns = self
-            .namespace_input
-            .as_ref()
-            .map(|i| i.read(cx).value().to_string());
+    pub fn reload_pods(&mut self, cx: &mut Context<Self>) {
+        // Namespace filter: None → all namespaces (-A), Some(name) → specific namespace
+        let ns = self.selected_namespace.clone();
         let ctx = self.current_context_name().map(String::from);
         self.pods_loading = true;
         self.error = None;
@@ -271,7 +315,13 @@ impl K8sPanel {
         let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<Pod>, String>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let res = rt.block_on(list_pods(ns.as_deref(), ctx.as_deref())).map_err(|e| e.to_string());
+            // Pass None or empty string for all namespaces
+            let ns_arg = match &ns {
+                Some(s) if s == "所有 Namespaces" => None,
+                Some(s) => Some(s.as_str()),
+                None => None,
+            };
+            let res = rt.block_on(list_pods(ns_arg, ctx.as_deref())).map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
         let ent = cx.entity().downgrade();
@@ -299,16 +349,13 @@ impl K8sPanel {
         .detach();
     }
 
-    fn start_logs(&mut self, pod: String, cx: &mut Context<Self>) {
+    fn start_logs(&mut self, pod: String, pod_namespace: Option<String>, cx: &mut Context<Self>) {
         enum Ev {
             Started,
             Line(String),
             Err(String),
         }
-        let ns = self
-            .namespace_input
-            .as_ref()
-            .map(|i| i.read(cx).value().to_string());
+        let ns = pod_namespace.or(self.selected_namespace.clone());
         let ctx = self.current_context_name().map(String::from);
         let pod_for_ui = pod.clone();
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
@@ -366,15 +413,12 @@ impl K8sPanel {
         .detach();
     }
 
-    fn start_forward(&mut self, pod: String, remote_port: u16, cx: &mut Context<Self>) {
+    fn start_forward(&mut self, pod: String, pod_namespace: Option<String>, remote_port: u16, cx: &mut Context<Self>) {
         enum Ev {
             Ok(u16),
             Err(String),
         }
-        let ns = self
-            .namespace_input
-            .as_ref()
-            .map(|i| i.read(cx).value().to_string());
+        let ns = pod_namespace.or(self.selected_namespace.clone());
         let ctx = self.current_context_name().map(String::from);
         let (tx, rx) = std::sync::mpsc::channel::<Ev>();
         let pod_for_thread = pod.clone();
@@ -473,17 +517,7 @@ impl K8sPanel {
 
 impl Render for K8sPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.namespace_input.is_none() {
-            let ns = cx.new(|cx| {
-                let mut s = InputState::new(window, cx).placeholder("default");
-                s.set_value("default", window, cx);
-                s
-            });
-            self.namespace_input = Some(ns);
-        }
         let theme = cx.theme().clone();
-
-        let ns_input = self.namespace_input.as_ref().unwrap().clone();
         let pods_loading = self.pods_loading;
 
         v_flex()
@@ -491,7 +525,7 @@ impl Render for K8sPanel {
             .min_h_0()
             .child(match self.active_view {
                 View::Contexts => self.render_contexts(&theme, cx).into_any_element(),
-                View::Pods => self.render_pods(&theme, ns_input.clone(), pods_loading, cx).into_any_element(),
+                View::Pods => self.render_pods(&theme, pods_loading, window, cx).into_any_element(),
                 View::Logs => self.render_logs(&theme, cx).into_any_element(),
                 View::Forwards => self.render_forwards(&theme, cx).into_any_element(),
                 View::Exec => self.render_exec(&theme, cx).into_any_element(),
@@ -507,6 +541,13 @@ impl K8sPanel {
     ) -> AnyElement {
         let muted = theme.muted_foreground;
         let border = theme.border;
+        // Load manual clusters to detect SSH tunnel mode
+        let manual_clusters = load_manual_clusters();
+        let is_ssh_tunnel: std::collections::HashMap<&str, bool> = manual_clusters
+            .iter()
+            .map(|c| (c.name.as_str(), c.uses_ssh_tunnel()))
+            .collect();
+
         let active_server = self
             .cfg
             .active_context()
@@ -583,8 +624,17 @@ impl K8sPanel {
                             .icon(IconName::Plus)
                             .label("添加集群")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                k8s_cluster_dialog::open_dialog(window, cx);
-                                this.refresh_config(cx);
+                                let ent = cx.entity().downgrade();
+                                k8s_cluster_dialog::open_dialog(
+                                    None,
+                                    move |_window, cx| {
+                                        let _ = ent.update(cx, |panel, cx| {
+                                            panel.refresh_config(cx);
+                                        });
+                                    },
+                                    window,
+                                    cx,
+                                );
                             })),
                     ),
             )
@@ -604,6 +654,11 @@ impl K8sPanel {
                     .map(|cl| cl.server.clone())
                     .unwrap_or_default();
                 let name = c.name.clone();
+                let is_tunnel = is_ssh_tunnel.get(c.name.as_str()).copied().unwrap_or(false);
+                // Find the manual cluster (if it's a Verve-added cluster, not from ~/.kube/config)
+                let manual_cluster = manual_clusters.iter().find(|mc| mc.name == c.name).cloned();
+                let is_manual = manual_cluster.is_some();
+
                 h_flex()
                     .gap_2()
                     .items_center()
@@ -613,16 +668,81 @@ impl K8sPanel {
                     .border_color(border)
                     .rounded_md()
                     .bg(if is_active { theme.accent.opacity(0.15) } else { Hsla::transparent_black() })
-                    .child(div().text_size(px(12.)).font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).flex_1().child(c.name.clone()))
-                    .child(div().text_size(px(11.)).text_color(muted).child(server))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .flex_1()
+                            .child(div().text_size(px(12.)).font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).child(c.name.clone()))
+                            .when(is_tunnel, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(px(9.))
+                                        .px(px(4.))
+                                        .py(px(1.))
+                                        .rounded_sm()
+                                        .bg(theme.primary.opacity(0.2))
+                                        .text_color(theme.primary)
+                                        .child("SSH 隧道")
+                                )
+                            })
+                    )
+                    .child(div().text_size(px(11.)).text_color(muted).child(server.clone()))
                     .when(!is_active, |d| {
                         d.child(
                             Button::new(format!("k8s-switch-{}", c.name))
                                 .xsmall()
                                 .ghost()
                                 .label("切换")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.switch_context(name.clone(), cx);
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.switch_context(name.clone(), window, cx);
+                                })),
+                        )
+                    })
+                    // Edit/Delete buttons only for manual (Verve-added) clusters
+                    .when_some(manual_cluster, |d, mc| {
+                        let edit_cluster = mc.clone();
+                        let delete_id = mc.id.clone();
+                        let delete_id_for_del = delete_id.clone();
+                        let deleted_ctx_name = c.name.clone();
+                        d.child(
+                            Button::new(format!("k8s-edit-{}", c.name))
+                                .xsmall()
+                                .ghost()
+                                .label("编辑")
+                                .tooltip("编辑集群")
+                                .on_click(cx.listener(move |_this, _, window, cx| {
+                                    let ent = cx.entity().downgrade();
+                                    let edit_c = edit_cluster.clone();
+                                    let close_id = delete_id.clone();
+                                    k8s_cluster_dialog::open_dialog(
+                                        Some(&edit_c),
+                                        move |_window, cx| {
+                                            let _ = ent.update(cx, |panel, cx| {
+                                                // Close any open tunnel for this cluster before refreshing
+                                                crate::k8s::kubectl::close_ssh_tunnel(&close_id);
+                                                panel.refresh_config(cx);
+                                            });
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new(format!("k8s-delete-{}", c.name))
+                                .xsmall()
+                                .ghost()
+                                .icon(IconName::Delete)
+                                .tooltip("删除集群")
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    remove_manual_cluster(&delete_id_for_del);
+                                    crate::k8s::kubectl::close_ssh_tunnel(&delete_id_for_del);
+                                    // If we just deleted the active context, clear it
+                                    if this.cfg.current_context == deleted_ctx_name {
+                                        this.cfg.current_context = String::new();
+                                    }
+                                    this.refresh_config(cx);
                                 })),
                         )
                     })
@@ -631,14 +751,33 @@ impl K8sPanel {
     }
 
     fn render_pods(
-        &self,
+        &mut self,
         theme: &gpui_component::Theme,
-        ns_input: Entity<InputState>,
         loading: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = theme.muted_foreground;
         let border = theme.border;
+
+        // Lazily create namespace select and search input
+        if self.namespace_select.is_none() {
+            let sel = cx.new(|cx| SelectState::new(
+                self.namespaces.clone(),
+                Some(gpui_component::IndexPath::new(0)),
+                window,
+                cx,
+            ));
+            self.namespace_select = Some(sel);
+        }
+        if self.search_input.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称搜索..."));
+            self.search_input = Some(input);
+        }
+
+        let ns_select = self.namespace_select.as_ref().unwrap().clone();
+        let search_input = self.search_input.as_ref().unwrap().clone();
+
         v_flex()
             .flex_1()
             .min_h_0()
@@ -648,8 +787,8 @@ impl K8sPanel {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().text_size(px(12.)).text_color(muted).child("Namespace"))
-                    .child(Input::new(&ns_input).small().w(px(180.)))
+                    .child(Select::new(&ns_select).small().w(px(200.)))
+                    .child(Input::new(&search_input).small().w(px(200.)))
                     .child(
                         Button::new("k8s-reload-pods")
                             .small()
@@ -657,7 +796,22 @@ impl K8sPanel {
                             .icon(if loading { IconName::Loader } else { IconName::File })
                             .label(if loading { "加载中…" } else { "加载" })
                             .disabled(loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.reload_pods(cx))),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // Lazy load namespaces on first load click
+                                if !this.namespaces_loaded {
+                                    this.load_namespaces(window, cx);
+                                }
+                                // Read selected namespace from dropdown on click
+                                if let Some(sel) = &this.namespace_select {
+                                    let val = sel.read(cx).selected_value();
+                                    this.selected_namespace = match val {
+                                        Some(s) if s == "所有 Namespaces" => None,
+                                        Some(s) => Some(s.clone()),
+                                        None => None,
+                                    };
+                                }
+                                this.reload_pods(cx);
+                            })),
                     ),
             )
             .children(self.error.as_ref().map(|e| {
@@ -665,18 +819,27 @@ impl K8sPanel {
             }))
             .child(div().h(px(1.)).w_full().bg(border))
             .child({
-                let rows = v_flex()
+                let mut rows = v_flex()
                     .id("k8s-pods-scroll")
                     .overflow_y_scroll()
                     .flex_1()
                     .min_h_0()
                     .gap_1();
+                let search_query = search_input.read(cx).value().to_string().to_lowercase();
+                // Collect and filter pods by search query
+                let filtered_pods: Vec<&Pod> = self.pods.iter()
+                    .filter(|p| p.metadata.name.to_lowercase().contains(&search_query))
+                    .collect();
+
                 if self.pods.is_empty() && !loading {
-                    rows.child(div().text_size(px(12.)).text_color(muted).child("点\"加载\"列出 Pods"))
-                        .into_any_element()
+                    rows = rows.child(div().text_size(px(12.)).text_color(muted).child("点\"加载\"列出所有命名空间的 Pods"));
+                } else if filtered_pods.is_empty() && !search_query.is_empty() {
+                    rows = rows.child(div().text_size(px(12.)).text_color(muted).child(format!("未找到匹配 \"{}\" 的 Pod", search_query)));
                 } else {
-                    rows.children(self.pods.iter().map(|p| {
+                    let show_ns_column = self.selected_namespace.is_none(); // show NS column when viewing all
+                    for p in filtered_pods {
                         let name = p.metadata.name.clone();
+                        let pod_ns = p.metadata.namespace.clone();
                         let phase = p.status.phase.clone();
                         let restarts: u32 = p.status.container_statuses.iter().map(|c| c.restart_count).sum();
                         let ready = p.status.container_statuses.iter().filter(|c| c.ready).count();
@@ -688,21 +851,37 @@ impl K8sPanel {
                             _ => muted,
                         };
                         let logs_name = name.clone();
+                        let logs_ns = pod_ns.clone();
                         let fwd_name = name.clone();
+                        let fwd_ns = pod_ns.clone();
                         let exec_name = name.clone();
-                        h_flex()
+                        let exec_ns = pod_ns.clone();
+                        let mut row = h_flex()
                             .gap_2()
                             .items_center()
                             .p_2()
                             .border_1()
                             .border_color(border)
-                            .rounded_md()
+                            .rounded_md();
+
+                        // Show namespace when viewing all namespaces
+                        if show_ns_column {
+                            row = row.child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(muted)
+                                    .w(px(100.))
+                                    .child(pod_ns.clone())
+                            );
+                        }
+
+                        row = row
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .flex_1()
-                                    .child(name),
+                                    .child(name.clone()),
                             )
                             .child(
                                 div()
@@ -712,7 +891,7 @@ impl K8sPanel {
                                     .rounded_sm()
                                     .bg(phase_color.opacity(0.18))
                                     .text_color(phase_color)
-                                    .child(phase),
+                                    .child(phase.clone()),
                             )
                             .child(
                                 div()
@@ -721,36 +900,38 @@ impl K8sPanel {
                                     .child(format!("{ready}/{total} ready · {restarts}↻")),
                             )
                             .child(
-                                Button::new(format!("k8s-logs-{}", p.metadata.name))
+                                Button::new(format!("k8s-logs-{}", name))
                                     .xsmall()
                                     .ghost()
                                     .label("日志")
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.start_logs(logs_name.clone(), cx);
+                                        this.start_logs(logs_name.clone(), Some(logs_ns.clone()), cx);
                                     })),
                             )
                             .child(
-                                Button::new(format!("k8s-exec-{}", p.metadata.name))
+                                Button::new(format!("k8s-exec-{}", name))
                                     .xsmall()
                                     .ghost()
                                     .label("Shell")
                                     .tooltip("kubectl exec -it 进入 Pod")
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.start_exec(exec_name.clone(), window, cx);
+                                        this.start_exec(exec_name.clone(), exec_ns.clone(), window, cx);
                                     })),
                             )
                             .child(
-                                Button::new(format!("k8s-fwd-{}", p.metadata.name))
+                                Button::new(format!("k8s-fwd-{}", name))
                                     .xsmall()
                                     .ghost()
                                     .label("转发 80→8080")
                                     .tooltip("转发 pod/xxx:8080 到 127.0.0.1:<port>")
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.start_forward(fwd_name.clone(), 8080, cx);
+                                        this.start_forward(fwd_name.clone(), Some(fwd_ns.clone()), 8080, cx);
                                     })),
-                            )
-                    })).into_any_element()
+                            );
+                        rows = rows.child(row);
+                    }
                 }
+                rows.into_any_element()
             })
             .into_any_element()
     }

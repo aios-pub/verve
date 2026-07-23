@@ -4,21 +4,31 @@
 //! `~/.kube/config` and a Verve-managed kubeconfig, lets the user switch
 //! context, and exposes the active cluster's context for downstream
 //! operations (kubectl logs / exec / port-forward).
+//!
+//! Supports two connection modes per manual cluster:
+//! - **Direct** — use the server URL from kubeconfig directly (default, for
+//!   clusters with a reachable API server).
+//! - **SSH tunnel** — forward the API server port through an SSH jump host
+//!   (for clusters that are only reachable from inside a private network via
+//!   a bastion). Mirrors the Docker SSH tunnel architecture.
 
+pub mod api_tunnel;
 pub mod clusters;
 pub mod config;
 pub mod kubectl;
 
+pub use api_tunnel::ApiTunnel;
 pub use clusters::{
-    import_kubeconfig, load_manual_clusters, load_verve_kubeconfig, merged_kubeconfig_env,
-    remove_manual_cluster, save_verve_kubeconfig, upsert_manual_cluster, ClusterAuth,
-    ManualCluster,
+    cluster_from_kubeconfig, import_kubeconfig, import_kubeconfig_from_string, load_manual_clusters,
+    load_verve_kubeconfig, merged_kubeconfig_env, parse_kubeconfig_contexts, remove_manual_cluster,
+    save_verve_kubeconfig, upsert_manual_cluster, ClusterAuth, ClusterConnectionType,
+    KubeconfigContextInfo, ManualCluster,
 };
 pub use config::{
     kubeconfig_path, load_default, load_merged, Cluster, Context as KubeContext, KubeConfig,
     NamedCluster, NamedContext, NamedUser, UserEntry,
 };
 pub use kubectl::{
-    exec_pod, list_pods, port_forward, stream_logs, ContainerStatus, ExecSession, LogStream, Pod,
-    PodError, PodMeta, PodStatus, PortForwardHandle,
+    close_ssh_tunnel, exec_pod, list_pods, port_forward, stream_logs, ContainerStatus,
+    ExecSession, LogStream, Pod, PodError, PodMeta, PodStatus, PortForwardHandle,
 };

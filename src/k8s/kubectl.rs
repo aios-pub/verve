@@ -11,13 +11,18 @@
 //! a PTY — the SSH TerminalView can be adapted but is tightly coupled to russh).
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
+
+use super::api_tunnel::ApiTunnel;
+use super::clusters::{load_manual_clusters, ManualCluster};
 
 /// A pod summary returned by [`list_pods`].
 #[derive(Debug, Clone, Deserialize)]
@@ -64,25 +69,257 @@ impl std::fmt::Display for PodError {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SSH tunnel management
+// ---------------------------------------------------------------------------
+
+/// Global cache of open SSH tunnels for Kubernetes clusters, keyed by
+/// **cluster id**. A tunnel is opened on first use for a given cluster and
+/// kept alive until the app exits (kubectl opens short-lived connections;
+/// re-establishing the SSH transport per call would be too slow).
+static TUNNELS: OnceLock<StdMutex<std::collections::HashMap<String, Arc<ApiTunnel>>>> =
+    OnceLock::new();
+
+fn tunnels() -> &'static StdMutex<std::collections::HashMap<String, Arc<ApiTunnel>>> {
+    TUNNELS.get_or_init(|| StdMutex::new(std::collections::HashMap::new()))
+}
+
+/// Close (and drop) the SSH tunnel for a given cluster id, if open.
+pub fn close_ssh_tunnel(cluster_id: &str) {
+    let mut guard = tunnels().lock().unwrap();
+    if guard.remove(cluster_id).is_some() {
+        log::info!("k8s tunnel: closed for cluster {cluster_id}");
+    }
+}
+
+/// Look up the ManualCluster by matching context name. The context name in
+/// kubeconfig equals the ManualCluster.name (see clusters.rs::write_verve_kubeconfig).
+fn find_manual_cluster_by_context(context: &str) -> Option<ManualCluster> {
+    load_manual_clusters()
+        .into_iter()
+        .find(|c| c.name == context)
+}
+
+/// Resolve (opening if necessary) the SSH tunnel for a cluster that uses
+/// SshTunnel mode. Returns a reference to the cached `ApiTunnel`.
+///
+/// **Important:** This may be called from within an existing tokio runtime
+/// (e.g. inside async kubectl operations). Since `ApiTunnel::open` creates its
+/// own dedicated tokio runtime and calls `block_on`, we must run the open on a
+/// dedicated std thread to avoid "Cannot start a runtime from within a runtime"
+/// panic (this mirrors how docker tunnels are opened).
+fn resolve_ssh_tunnel(cluster: &ManualCluster) -> Result<Arc<ApiTunnel>, PodError> {
+    let cluster_id = cluster.id.clone();
+    let ssh_host_id = cluster
+        .ssh_host_id
+        .as_ref()
+        .ok_or_else(|| PodError("集群配置缺少 ssh_host_id".into()))?;
+
+    // Fast path: tunnel already open.
+    {
+        let guard = tunnels().lock().unwrap();
+        if let Some(tun) = guard.get(&cluster_id) {
+            return Ok(tun.clone());
+        }
+    }
+
+    // Slow path: open a new tunnel on a dedicated std thread (avoids runtime
+    // nesting panic when called from within a tokio runtime context).
+    let server_url = cluster.server.clone();
+    let ssh_host_id_owned = ssh_host_id.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<ApiTunnel, String>>();
+    std::thread::spawn(move || {
+        let result = match super::api_tunnel::find_ssh_host(&ssh_host_id_owned) {
+            Some(ssh_host) => ApiTunnel::open(&ssh_host, &server_url),
+            None => Err(format!("找不到关联的 SSH 主机: {ssh_host_id_owned}")),
+        };
+        let _ = tx.send(result);
+    });
+    let tunnel = rx
+        .recv()
+        .map_err(|_| PodError("SSH 隧道创建线程异常退出".into()))?
+        .map_err(|e| PodError(format!("建立 SSH 隧道失败: {e}")))?;
+
+    let arc = Arc::new(tunnel);
+    let mut guard = tunnels().lock().unwrap();
+    guard.insert(cluster_id, arc.clone());
+    Ok(arc)
+}
+
+/// Generate a one-off kubeconfig YAML that overrides the cluster server URL
+/// to the local tunnel endpoint (and optionally enforces insecure-skip-tls-verify).
+/// This avoids modifying the persisted Verve kubeconfig — we just set
+/// KUBECONFIG to this temp file for kubectl calls over the tunnel.
+fn generate_tunnel_kubeconfig(tunnel: &ApiTunnel, cluster: &ManualCluster) -> Result<PathBuf, PodError> {
+    use crate::k8s::config::{
+        Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser, UserEntry,
+    };
+
+    // Load the base (merged) kubeconfig, then patch the target cluster entry.
+    let mut cfg = crate::k8s::clusters::load_verve_kubeconfig();
+
+    // The cluster entry is named "<name>-cluster" (see write_verve_kubeconfig).
+    let cluster_entry_name = format!("{}-cluster", cluster.name);
+
+    // Patch: override server URL to local tunnel address.
+    if let Some(named) = cfg.clusters.iter_mut().find(|c| c.name == cluster_entry_name) {
+        named.cluster.server = tunnel.local_server_url();
+        // When tunneling to 127.0.0.1 the server cert almost never matches;
+        // respect the cluster's insecure_skip_tls flag (default true for SSH
+        // tunnel clusters created via via_ssh()).
+        named.cluster.insecure_skip_tls_verify = cluster.insecure_skip_tls;
+        // MUST clear CA data when insecure is true, otherwise kubectl errors
+        if cluster.insecure_skip_tls {
+            named.cluster.ca_data = None;
+        }
+    } else {
+        // Fallback: synthesize a minimal cluster entry if not found.
+        cfg.clusters.push(NamedCluster {
+            name: cluster_entry_name.clone(),
+            cluster: Cluster {
+                server: tunnel.local_server_url(),
+                insecure_skip_tls_verify: cluster.insecure_skip_tls,
+                ca_data: None,
+                ca_file: None,
+            },
+        });
+        // Make sure a matching context + user exist too.
+        let user_name = format!("{}-user", cluster.name);
+        if !cfg.contexts.iter().any(|c| c.name == cluster.name) {
+            cfg.contexts.push(NamedContext {
+                name: cluster.name.clone(),
+                context: KubeContext {
+                    cluster: cluster_entry_name.clone(),
+                    user: Some(user_name.clone()),
+                    namespace: if cluster.namespace.is_empty() {
+                        None
+                    } else {
+                        Some(cluster.namespace.clone())
+                    },
+                },
+            });
+        }
+        if !cfg.users.iter().any(|u| u.name == user_name) {
+            let (cert_data, key_data, token, username, password) = match &cluster.auth {
+                super::clusters::ClusterAuth::Token { token } => {
+                    (None, None, Some(token.clone()), None, None)
+                }
+                super::clusters::ClusterAuth::ClientCert { cert_data, key_data } => {
+                    (Some(cert_data.clone()), Some(key_data.clone()), None, None, None)
+                }
+                super::clusters::ClusterAuth::BasicAuth { username, password } => {
+                    (None, None, None, Some(username.clone()), Some(password.clone()))
+                }
+            };
+            cfg.users.push(NamedUser {
+                name: user_name,
+                user: UserEntry {
+                    cert_data, key_data, token, username, password,
+                    cert_file: None, key_file: None,
+                },
+            });
+        }
+    }
+
+    // Set current-context so kubectl picks the right cluster without --context.
+    cfg.current_context = cluster.name.clone();
+
+    // Write to a temp file. Use deterministic per-cluster filename so kubectl
+    // can reuse it across calls (file is overwritten each time).
+    let tmp_dir = std::env::temp_dir();
+    let short_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        cluster.id.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
+    };
+    let path = tmp_dir.join(format!("vk8s-{}.yaml", &short_hash[..8]));
+    let yaml = serde_yaml::to_string(&cfg)
+        .map_err(|e| PodError(format!("序列化临时 kubeconfig 失败: {e}")))?;
+    std::fs::write(&path, yaml)
+        .map_err(|e| PodError(format!("写入临时 kubeconfig 失败: {e}")))?;
+    Ok(path)
+}
+
+/// Resolved kubectl environment: either standard merged kubeconfig, or a
+/// tunnel-specific temp kubeconfig when using SSH tunnel mode.
+enum KubeconfigSource {
+    Standard,
+    Tunnel(PathBuf),
+}
+
+/// Build a kubectl Command configured to talk to the given `context`. If the
+/// context corresponds to a ManualCluster in SSH-tunnel mode, the tunnel is
+/// established (or reused from cache) and KUBECONFIG is pointed at a temp file
+/// that overrides the server URL to the local forwarded port.
+fn kubectl_command_for_context(context: Option<&str>) -> Result<Command, PodError> {
+    let source = match context {
+        Some(ctx) if !ctx.is_empty() => {
+            if let Some(cluster) = find_manual_cluster_by_context(ctx) {
+                if cluster.uses_ssh_tunnel() {
+                    let tunnel = resolve_ssh_tunnel(&cluster)?;
+                    let kubeconfig_path = generate_tunnel_kubeconfig(&tunnel, &cluster)?;
+                    KubeconfigSource::Tunnel(kubeconfig_path)
+                } else {
+                    KubeconfigSource::Standard
+                }
+            } else {
+                KubeconfigSource::Standard
+            }
+        }
+        _ => KubeconfigSource::Standard,
+    };
+
+    let mut cmd = Command::new("kubectl");
+    match source {
+        KubeconfigSource::Standard => {
+            cmd.env("KUBECONFIG", crate::k8s::clusters::merged_kubeconfig_env());
+        }
+        KubeconfigSource::Tunnel(path) => {
+            // When using the tunnel, point KUBECONFIG to our patched temp file.
+            // Include the default kubeconfig in the merge so unrelated contexts
+            // are still addressable (though the current-context is already set
+            // to the tunnel cluster in the patched file).
+            let default = crate::k8s::clusters::default_kubeconfig_path();
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let mut merged = String::new();
+            if default.exists() {
+                merged.push_str(&default.to_string_lossy());
+                merged.push_str(sep);
+            }
+            merged.push_str(&path.to_string_lossy());
+            cmd.env("KUBECONFIG", merged);
+        }
+    }
+    Ok(cmd)
+}
+
 /// Build a `kubectl` Command with the merged KUBECONFIG env var set.
+/// (Kept for calls that don't specify a context — uses standard kubeconfig.)
 fn kubectl_command() -> Command {
     let mut cmd = Command::new("kubectl");
     cmd.env("KUBECONFIG", crate::k8s::clusters::merged_kubeconfig_env());
     cmd
 }
 
-/// List pods in the given namespace (or "" for the context default).
+/// List pods across all namespaces (kubectl get pods -A) or in a specific namespace.
+/// - `namespace = None` or `Some("")` → list pods across ALL namespaces (-A)
+/// - `namespace = Some("ns")` → list only in that namespace
 pub async fn list_pods(namespace: Option<&str>, context: Option<&str>) -> Result<Vec<Pod>, PodError> {
-    let mut cmd = kubectl_command();
+    let mut cmd = kubectl_command_for_context(context)?;
     cmd.arg("get").arg("pods").arg("-o").arg("json");
     if let Some(ctx) = context {
         if !ctx.is_empty() {
             cmd.args(["--context", ctx]);
         }
     }
-    if let Some(ns) = namespace {
-        if !ns.is_empty() {
+    match namespace {
+        Some(ns) if !ns.is_empty() => {
             cmd.args(["-n", ns]);
+        }
+        _ => {
+            // All namespaces
+            cmd.arg("-A");
         }
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
@@ -98,6 +335,47 @@ pub async fn list_pods(namespace: Option<&str>, context: Option<&str>) -> Result
     let list: PodList = serde_json::from_slice(&out.stdout)
         .map_err(|e| PodError(format!("解析 pod JSON 失败: {e}")))?;
     Ok(list.items)
+}
+
+/// A namespace summary returned by [`list_namespaces`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct Namespace {
+    #[serde(rename = "metadata")]
+    pub metadata: NamespaceMeta,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NamespaceMeta {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NamespaceList {
+    items: Vec<Namespace>,
+}
+
+/// List all namespaces in the cluster.
+pub async fn list_namespaces(context: Option<&str>) -> Result<Vec<String>, PodError> {
+    let mut cmd = kubectl_command_for_context(context)?;
+    cmd.arg("get").arg("namespaces").arg("-o").arg("json");
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            cmd.args(["--context", ctx]);
+        }
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| PodError(format!("kubectl get namespaces 执行失败: {e}")))?;
+    if !out.status.success() {
+        return Err(PodError(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    let list: NamespaceList = serde_json::from_slice(&out.stdout)
+        .map_err(|e| PodError(format!("解析 namespace JSON 失败: {e}")))?;
+    Ok(list.items.into_iter().map(|ns| ns.metadata.name).collect())
 }
 
 /// Handle returned by [`stream_logs`]. Call `take_lines()` to get the channel
@@ -123,7 +401,7 @@ pub fn stream_logs(
     tail: u32,
     context: Option<&str>,
 ) -> Result<LogStream, PodError> {
-    let mut cmd = kubectl_command();
+    let mut cmd = kubectl_command_for_context(context)?;
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
@@ -199,7 +477,7 @@ pub async fn port_forward(
     use tokio::io::AsyncBufReadExt as _;
     use tokio::time::timeout;
 
-    let mut cmd = kubectl_command();
+    let mut cmd = kubectl_command_for_context(context)?;
     let port_spec = format!("{local_port}:{remote_port}");
     cmd.arg("port-forward")
         .arg(format!("pod/{pod}"))
@@ -263,7 +541,12 @@ pub struct ExecSession {
 fn shell_available(pod: &str, namespace: Option<&str>, context: Option<&str>, shell: &str) -> bool {
     use std::process::{Command as StdCommand, Stdio as StdStdio};
 
-    let kubeconfig = crate::k8s::clusters::merged_kubeconfig_env();
+    // Resolve kubeconfig (may set up SSH tunnel if needed).
+    let kubeconfig = match resolve_kubeconfig_env_for_context_sync(context) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+
     let mut cmd = StdCommand::new("kubectl");
     cmd.env("KUBECONFIG", &kubeconfig);
     cmd.stdout(StdStdio::null());
@@ -307,6 +590,33 @@ fn shell_available(pod: &str, namespace: Option<&str>, context: Option<&str>, sh
     }
 }
 
+/// Synchronous (blocking) version of kubeconfig resolution for std Command usage.
+/// Returns the KUBECONFIG env var value for the given context, establishing an
+/// SSH tunnel and writing the patched kubeconfig if needed.
+fn resolve_kubeconfig_env_for_context_sync(context: Option<&str>) -> Result<String, PodError> {
+    match context {
+        Some(ctx) if !ctx.is_empty() => {
+            if let Some(cluster) = find_manual_cluster_by_context(ctx) {
+                if cluster.uses_ssh_tunnel() {
+                    let tunnel = resolve_ssh_tunnel(&cluster)?;
+                    let kubeconfig_path = generate_tunnel_kubeconfig(&tunnel, &cluster)?;
+                    let default = crate::k8s::clusters::default_kubeconfig_path();
+                    let sep = if cfg!(windows) { ";" } else { ":" };
+                    let mut merged = String::new();
+                    if default.exists() {
+                        merged.push_str(&default.to_string_lossy());
+                        merged.push_str(sep);
+                    }
+                    merged.push_str(&kubeconfig_path.to_string_lossy());
+                    return Ok(merged);
+                }
+            }
+            Ok(crate::k8s::clusters::merged_kubeconfig_env())
+        }
+        _ => Ok(crate::k8s::clusters::merged_kubeconfig_env()),
+    }
+}
+
 /// Spawn `kubectl exec -it pod [-n ns] [--context ctx] -- shell` attached to a PTY
 /// so that Tab completion, arrow keys, and other terminal features work. When no
 /// shell is requested, bash is tried first and sh is used as a fallback for pods
@@ -328,7 +638,7 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
     };
     let shell = resolved_shell.as_str();
 
-    let kubeconfig = crate::k8s::clusters::merged_kubeconfig_env();
+    let kubeconfig = resolve_kubeconfig_env_for_context_sync(context)?;
     let mut cmd = CommandBuilder::new("kubectl");
     cmd.env("KUBECONFIG", &kubeconfig);
     cmd.arg("exec");

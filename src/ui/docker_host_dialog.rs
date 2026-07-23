@@ -174,6 +174,7 @@ pub fn open_dialog<F>(
 
         dialog
             .title(title_text)
+            .w(px(600.))
             .content(move |content, window, cx| {
                 let s = state_for_content.read(cx);
                 let tls_verify = s.tls_verify;
@@ -181,7 +182,7 @@ pub fn open_dialog<F>(
                 let ssh_hosts_empty = s.ssh_label_to_id.is_empty();
                 let body = v_flex()
                     .p_4()
-                    .w(px(500.))
+                    .w_full()
                     .gap_3()
                     // Name
                     .child(

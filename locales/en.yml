@@ -29,6 +29,7 @@ pdf:
   prev_page: Previous
   next_page: Next
   no_file: No file opened
+  click_to_open: Click here to open a PDF file
   page: Page %{current}/%{total}
   loading: Loading PDF...
   pdfium_missing: PDF support requires Pdfium library. Please install via `brew install pdfium`

@@ -29,6 +29,7 @@ pdf:
   prev_page: 上一页
   next_page: 下一页
   no_file: 未打开文件
+  click_to_open: 点击此处打开 PDF 文件
   page: 第 %{current}/%{total} 页
   loading: 正在加载 PDF...
   pdfium_missing: PDF 功能需要 Pdfium 库，请通过 `brew install pdfium` 安装

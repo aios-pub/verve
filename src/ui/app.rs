@@ -4103,10 +4103,9 @@ impl VerveApp {
             .child(self.render_lang_picker(cx))
     }
 
-    /// PDF Editor title bar: rail toggle + file icon + title + open button.
+    /// PDF Editor title bar: rail toggle + file icon + title.
     fn render_pdf_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let pdf = self.pdf.clone();
 
         h_flex()
             .h(px(40.))
@@ -4137,16 +4136,6 @@ impl VerveApp {
                     ),
             )
             .child(div().flex_1())
-            .child(
-                Button::new("pdf-title-open")
-                    .small()
-                    .primary()
-                    .icon(IconName::File)
-                    .label(rust_i18n::t!("pdf.open_btn").to_string())
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        let _ = pdf.update(cx, |panel, cx| panel.open_pdf_from_title(window, cx));
-                    })),
-            )
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }

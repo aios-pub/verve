@@ -104,11 +104,7 @@ impl PdfPanel {
         Ok(Pdfium::new(bindings))
     }
 
-    pub fn open_pdf_from_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_pdf(window, cx);
-    }
-
-    fn open_pdf(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_pdf(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
             let res = rfd::FileDialog::new()
@@ -1012,6 +1008,7 @@ impl Render for PdfPanel {
                 .into_any_element()
         } else if !has_doc {
             v_flex()
+                .id("pdf-empty-drop")
                 .flex_1()
                 .min_h_0()
                 .items_center()
@@ -1021,11 +1018,20 @@ impl Render for PdfPanel {
                 .rounded(px(4.))
                 .bg(theme.muted.opacity(0.2))
                 .gap_2()
-                .child(IconName::File)
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.muted.opacity(0.4)))
+                .on_click(cx.listener(|this, _, window, cx| this.open_pdf(window, cx)))
+                .child(IconName::FolderOpen)
                 .child(
                     div()
                         .text_color(theme.muted_foreground)
                         .child(rust_i18n::t!("pdf.no_file").to_string()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground.opacity(0.7))
+                        .child(rust_i18n::t!("pdf.click_to_open").to_string()),
                 )
                 .into_any_element()
         } else {

@@ -287,6 +287,7 @@ where
 
         dialog
             .title(title_text)
+            .w(px(680.))
             .content(move |content, window, cx| {
                 let s = state_for_content.read(cx);
                 let auth_kind = s.auth_kind;
@@ -298,7 +299,7 @@ where
 
                 let mut body = v_flex()
                     .p_4()
-                    .w(px(580.))
+                    .w_full()
                     .gap_3();
 
                 // Error message

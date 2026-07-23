@@ -18,6 +18,14 @@ use std::borrow::Cow;
 #[include = "*.svg"]
 struct VerveIcons;
 
+/// Bundled fonts required by gpui's SVG renderer (IBM Plex Sans for sans-serif,
+/// Lilex for monospace). Without these, every SVG text render emits a
+/// "Bundled font not found" warning.
+#[derive(RustEmbed)]
+#[folder = "assets/fonts"]
+#[include = "*.ttf"]
+struct BundledFonts;
+
 /// Prefix under which custom Verve icons are exposed to the UI layer. A
 /// button builds an icon with e.g. `Icon::new(IconName::Redo).path(VERVE_ICON_SHARE)`
 /// and this source resolves it to the embedded SVG.
@@ -38,6 +46,9 @@ pub const SERVER: &str = "icons/verve/server.svg";
 pub const NOTEBOOK: &str = "icons/verve/notebook-pen.svg";
 pub const BRACES_JSON: &str = "icons/verve/braces-json.svg";
 pub const FILE_PDF: &str = "icons/verve/file-pdf.svg";
+
+/// Prefix under which bundled fonts are exposed to gpui's SVG renderer.
+const FONTS_PREFIX: &str = "fonts/";
 
 /// Composite asset source passed to `with_assets(...)`.
 pub struct VerveAssets(pub StockAssets);
@@ -60,10 +71,17 @@ impl AssetSource for VerveAssets {
         match self.0.load(path) {
             Ok(Some(data)) => Ok(Some(data)),
             // Either the upstream returned None (not found) or errored — fall
-            // through to our own bundle for verve-specific paths.
+            // through to our own bundles.
             _ => {
+                // Verve-specific icons.
                 if let Some(rest) = path.strip_prefix(PREFIX) {
                     if let Some(file) = VerveIcons::get(rest) {
+                        return Ok(Some(file.data));
+                    }
+                }
+                // Bundled fonts for gpui's SVG renderer.
+                if let Some(rest) = path.strip_prefix(FONTS_PREFIX) {
+                    if let Some(file) = BundledFonts::get(rest) {
                         return Ok(Some(file.data));
                     }
                 }
@@ -79,6 +97,15 @@ impl AssetSource for VerveAssets {
             for name in VerveIcons::iter() {
                 if name.starts_with(suffix) {
                     out.push(format!("{PREFIX}{name}").into());
+                }
+            }
+        }
+        // List bundled fonts so the SVG renderer can discover them.
+        if path.is_empty() || FONTS_PREFIX.starts_with(path) || path.starts_with(FONTS_PREFIX) {
+            let suffix = path.strip_prefix(FONTS_PREFIX).unwrap_or("");
+            for name in BundledFonts::iter() {
+                if name.starts_with(suffix) {
+                    out.push(format!("{FONTS_PREFIX}{name}").into());
                 }
             }
         }

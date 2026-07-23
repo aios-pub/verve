@@ -251,7 +251,6 @@ Dive into each below 👇
 </div>
 
 - **Hosts file manager** — read `/etc/hosts`, manage profiles
-- **Database client launcher** — auto-detect & launch TablePlus, DBeaver, DataGrip, pgAdmin, RedisInsight, Sequel Ace… (macOS / Linux / Windows)
 - i18n: Simplified Chinese (default) / English
 - 22 built-in themes (Catppuccin, Gruvbox, Tokyo Night, Solarized, Everforest, Flexoki…)
 - Import: Postman v2.1 / OpenAPI 3 / Postman 7+ (full format compatibility)
@@ -271,7 +270,7 @@ Dive into each below 👇
 - 🌐 **HTTP capture proxy** — inspect local HTTP traffic
 - 📁 **SFTP browser** + 🔀 **SSH port forwarding** + **Zmodem `rz`/`sz`** file transfer
 - 🗒️ **Markdown notes** with live preview + **PDF export / viewer / editor**
-- 🛠️ **Hosts file manager** + **Database client launcher**
+- 🛠️ **Hosts file manager**
 - 🔗 **Remote `verve-server` push** for public document URLs
 - 🎨 Docker / K8s panel polish, drag-resizable dock, custom menu, new share icon
 

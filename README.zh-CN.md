@@ -57,7 +57,7 @@ Verve 覆盖开发者的完整日常工作流——远不止接口调试。四�
 | 🧪 **接口与测试**  | HTTP 调试 · 压力测试 · 自动化测试套件 · Mock 服务 · HTTP 抓包代理                                    |
 | 🖥️ **终端与排查** | SSH 终端 · SFTP 文件传输 · 端口转发 · Docker 容器查看与日志排查 · Kubernetes Pod 查看与日志排查             |
 | 🤝 **协作与文档**  | 文档分享(HTML/二维码/链接) · Git 版本同步 · 云端 `verve-server`                                  |
-| 🛠️ **开发小工具** | Markdown 笔记(+ PDF 导出) · Hosts 管理 · JSON 格式化 · PDF 查看/编辑 · 数据库客户端启动器 · 22 主题 · 国际化 |
+| 🛠️ **开发小工具** | Markdown 笔记(+ PDF 导出) · Hosts 管理 · JSON 格式化 · PDF 查看/编辑 · 22 主题 · 国际化 |
 
 下方逐一展开 👇
 
@@ -267,7 +267,6 @@ Verve 覆盖开发者的完整日常工作流——远不止接口调试。四�
 </div>
 
 - **Hosts 文件管理** —— 读取 `/etc/hosts`，管理多套配置
-- **数据库客户端启动器** —— 自动检测并启动 TablePlus、DBeaver、DataGrip、pgAdmin、RedisInsight、Sequel Ace 等（macOS / Linux / Windows）
 - 国际化：简体中文（默认）/ English
 - 22 个内置主题（Catppuccin、Gruvbox、Tokyo Night、Solarized、Everforest、Flexoki 等）
 - 导入：Postman v2.1 / OpenAPI 3 / Postman 7+（完全格式兼容）
@@ -288,7 +287,7 @@ Verve 覆盖开发者的完整日常工作流——远不止接口调试。四�
 - 🌐 **HTTP 抓包代理** —— 抓取本地 HTTP 流量
 - 📁 **SFTP 浏览** + 🔀 **SSH 端口转发** + **Zmodem `rz`/`sz`** 文件传输
 - 🗒️ **Markdown 笔记** 实时预览 + **PDF 导出 / 查看 / 编辑**
-- 🛠️ **Hosts 文件管理** + **数据库客户端启动器**
+- 🛠️ **Hosts 文件管理**
 - 🔗 **远程 `verve-server` 推送**，生成公网文档链接
 - 🎨 Docker / K8s 面板优化、可拖拽 Dock、自定义菜单、全新分享图标
 

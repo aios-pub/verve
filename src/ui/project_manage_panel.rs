@@ -47,7 +47,6 @@ pub enum ManageSection {
     IfaceStatus,
     ExternalCaps,
     ImportExport,
-    DbClients,
 }
 
 impl ManageSection {
@@ -65,7 +64,6 @@ impl ManageSection {
             ("iface-status", "接口状态", ManageSection::IfaceStatus),
             ("external", "对外能力", ManageSection::ExternalCaps),
             ("io", "导入 / 导出", ManageSection::ImportExport),
-            ("db", "数据库客户端", ManageSection::DbClients),
         ]
     }
 }
@@ -643,9 +641,6 @@ impl Render for ProjectManagePanel {
                     }
                     ManageSection::ImportExport => {
                         self.render_import_export(&theme, cx).into_any_element()
-                    }
-                    ManageSection::DbClients => {
-                        self.render_db_clients(&theme, cx).into_any_element()
                     }
                 },
             ))
@@ -1894,94 +1889,6 @@ impl ProjectManagePanel {
                     .child(token_table(&tokens, &theme, self.state.clone())),
             )
             .into_any_element()
-    }
-
-    fn render_db_clients(
-        &mut self,
-        theme: &gpui_component::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        use crate::db_clients;
-        let theme = theme.clone();
-        let clients = db_clients::detect();
-        v_flex()
-            .size_full()
-            .id("db-scroll")
-            .overflow_y_scroll()
-            .child(
-                v_flex()
-                    .p_6()
-                    .gap_4()
-                    .max_w(px(720.))
-                    .child(section_title("数据库客户端"))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child("快速启动本机已安装的数据库 GUI 客户端。连接配置在客户端内维护，Verve 仅做快捷入口。"),
-                    )
-                    .child(div().h(px(1.)).w_full().bg(theme.border))
-                    .when(clients.is_empty(), |c| {
-                        c.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme.muted_foreground)
-                                .child("未检测到已支持的客户端。已支持: TablePlus / Postico / Sequel Ace / DBeaver / MySQL Workbench / pgAdmin / RedisInsight / DataGrip / DB Browser for SQLite"),
-                        )
-                    })
-                    .children(clients.into_iter().enumerate().map(|(i, c)| {
-                        let vendor_color = match c.vendor {
-                            "postgres" => theme.primary,
-                            "mysql" => theme.accent,
-                            "redis" => theme.danger,
-                            _ => theme.muted_foreground,
-                        };
-                        let c_path = c.launch_path.clone();
-                        h_flex()
-                            .gap_3()
-                            .items_center()
-                            .p_2()
-                            .border_1()
-                            .border_color(theme.border)
-                            .rounded_md()
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(c.name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .px(px(6.))
-                                    .py(px(1.))
-                                    .rounded_sm()
-                                    .bg(vendor_color.opacity(0.18))
-                                    .text_color(vendor_color)
-                                    .child(c.vendor.to_string()),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                Button::new(("db-launch", i))
-                                    .small()
-                                    .primary()
-                                    .icon(IconName::ExternalLink)
-                                    .label("启动")
-                                    .on_click(cx.listener(move |_this, _, _, cx| {
-                                        let path = c_path.clone();
-                                        let client = db_clients::DbClient {
-                                            name: c.name,
-                                            vendor: c.vendor,
-                                            launch_path: path,
-                                        };
-                                        if let Err(e) = db_clients::launch(&client) {
-                                            log::error!("launch db client failed: {e}");
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                    })),
-            )
     }
 }
 

@@ -504,14 +504,24 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::io::{Read, Write};
 
-    // Caller-requested shell wins; otherwise auto-detect: prefer bash, fall back to sh.
+    // Caller-requested shell wins; otherwise auto-detect from common shells.
     let resolved_shell = match shell {
         Some(s) => s.to_string(),
         None => {
-            if shell_available(host, id, "bash") {
-                "bash".to_string()
-            } else {
-                "sh".to_string()
+            // Try shells in order of preference.
+            let candidates = ["bash", "sh", "dash", "ash"];
+            let mut found = None;
+            for candidate in candidates {
+                if shell_available(host, id, candidate) {
+                    found = Some(candidate.to_string());
+                    break;
+                }
+            }
+            match found {
+                Some(s) => s,
+                None => return Err(DockerError(
+                    "该容器中未找到可用的 shell (bash/sh/dash/ash)。可能是极简镜像 (distroless/scratch)。".to_string()
+                )),
             }
         }
     };

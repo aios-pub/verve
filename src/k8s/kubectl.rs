@@ -645,20 +645,30 @@ fn resolve_kubeconfig_env_for_context_sync(context: Option<&str>) -> Result<Stri
 
 /// Spawn `kubectl exec -it pod [-n ns] [--context ctx] -- shell` attached to a PTY
 /// so that Tab completion, arrow keys, and other terminal features work. When no
-/// shell is requested, bash is tried first and sh is used as a fallback for pods
-/// that don't ship bash (Alpine, distroless, minimal images).
+/// shell is requested, multiple shells are tried in order (bash → sh → dash → ash)
+/// to support distroless, Alpine (ash), Debian/Ubuntu minimal (dash), and standard images.
 pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context: Option<&str>) -> Result<ExecSession, PodError> {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::io::{Read, Write};
 
-    // Caller-requested shell wins; otherwise auto-detect: prefer bash, fall back to sh.
+    // Caller-requested shell wins; otherwise auto-detect from common shells.
     let resolved_shell = match shell {
         Some(s) => s.to_string(),
         None => {
-            if shell_available(pod, namespace, context, "bash") {
-                "bash".to_string()
-            } else {
-                "sh".to_string()
+            // Try shells in order of preference.
+            let candidates = ["bash", "sh", "dash", "ash"];
+            let mut found = None;
+            for candidate in candidates {
+                if shell_available(pod, namespace, context, candidate) {
+                    found = Some(candidate.to_string());
+                    break;
+                }
+            }
+            match found {
+                Some(s) => s,
+                None => return Err(PodError(
+                    "该容器中未找到可用的 shell (bash/sh/dash/ash)。可能是极简镜像 (distroless/scratch)。".to_string()
+                )),
             }
         }
     };

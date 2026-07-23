@@ -8,6 +8,7 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, Selectable as _};
 
+use crate::hosts::{self, HostEntry};
 use crate::hosts_profiles::{self, HostEntryEdit, HostsProfileStore};
 use crate::hosts_priv;
 use crate::state::{AppEvent, AppState};
@@ -18,6 +19,9 @@ pub struct HostsPanel {
     search_input: Entity<InputState>,
     entry_inputs: Vec<EntryInput>,
     apply_status: ApplyStatus,
+    /// Cached system hosts entries (re-read on refresh / after apply).
+    system_entries: Vec<HostEntry>,
+    system_error: Option<String>,
     _subs: Vec<Subscription>,
 }
 
@@ -55,10 +59,33 @@ impl HostsPanel {
             search_input,
             entry_inputs: Vec::new(),
             apply_status: ApplyStatus::Idle,
+            system_entries: Vec::new(),
+            system_error: None,
             _subs: vec![search_sub],
         };
+        this.refresh_system_hosts();
         this.rebuild_entry_inputs(window, cx);
         this
+    }
+
+    fn refresh_system_hosts(&mut self) {
+        match hosts::read_hosts() {
+            Ok(entries) => {
+                self.system_entries = entries;
+                self.system_error = None;
+            }
+            Err(msg) => {
+                self.system_entries.clear();
+                self.system_error = Some(msg);
+            }
+        }
+    }
+
+    fn open_system_in_editor(&self) {
+        match hosts::open_in_editor() {
+            Ok(()) => {}
+            Err(e) => log::error!("open hosts editor failed: {e}"),
+        }
     }
 
     fn rebuild_entry_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -284,6 +311,7 @@ impl HostsPanel {
                 match result {
                     Ok(()) => {
                         this.apply_status = ApplyStatus::Success;
+                        this.refresh_system_hosts();
                     }
                     Err(e) => {
                         this.apply_status = ApplyStatus::Error(e.to_string());
@@ -400,19 +428,32 @@ impl HostsPanel {
             .iter()
             .find(|p| Some(&p.id) == self.store.active_profile.as_ref());
 
-        if active_profile.is_none() {
-            return div()
+        let profiles_section = if active_profile.is_none() {
+            div()
                 .w_full()
-                .h_full()
+                .flex_1()
+                .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child(rust_i18n::t!("hosts.no_entries").to_string())
-                .into_any_element();
-        }
+                .into_any_element()
+        } else {
+            self.render_profile_editor(cx, active_profile.unwrap())
+        };
 
-        let p = active_profile.unwrap();
+        v_flex()
+            .w_full()
+            .h_full()
+            .min_w_0()
+            .child(self.render_system_hosts(cx))
+            .child(profiles_section)
+            .into_any_element()
+    }
+
+    fn render_profile_editor(&self, cx: &Context<Self>, p: &hosts_profiles::HostsProfile) -> AnyElement {
+        let theme = cx.theme();
         let search_val = self.search_input.read(cx).value().to_string().to_lowercase();
 
         let filtered_inputs: Vec<&EntryInput> = self
@@ -619,6 +660,107 @@ impl HostsPanel {
                         }
                     }),
             )
+            .into_any_element()
+    }
+
+    /// The system hosts preview shown pinned at the top of the right pane, always visible.
+    fn render_system_hosts(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let path = hosts::hosts_path();
+        let path_display = path.display().to_string();
+
+        v_flex()
+            .w_full()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .flex_1()
+                            .child(format!("系统 Hosts · {}", path_display)),
+                    )
+                    .child(
+                        Button::new("hosts-system-edit-ext")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::ExternalLink)
+                            .tooltip("用外部编辑器打开 (需 sudo)")
+                            .on_click(cx.listener(|this, _, _, _cx| {
+                                this.open_system_in_editor();
+                            })),
+                    )
+                    .child(
+                        Button::new("hosts-system-refresh")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Loader)
+                            .tooltip("刷新")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_system_hosts();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when_some(self.system_error.as_ref(), |c, err| {
+                c.child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .text_size(px(12.))
+                        .text_color(theme.danger)
+                        .child(err.clone()),
+                )
+            })
+            .child({
+                let mut rows = v_flex()
+                    .id("hosts-system-preview-scroll")
+                    .w_full()
+                    .max_h(px(200.))
+                    .overflow_y_scroll()
+                    .px_3()
+                    .pb_2();
+                for e in &self.system_entries {
+                    rows = rows.child(
+                        h_flex()
+                            .w_full()
+                            .gap_3()
+                            .py(px(1.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .w(px(130.))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground)
+                                    .child(e.ip.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .flex_1()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground)
+                                    .child(e.host.clone()),
+                            )
+                            .when(e.comment.is_some(), |c| {
+                                c.child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(theme.muted_foreground)
+                                        .child(e.comment.clone().unwrap_or_default()),
+                                )
+                            }),
+                    );
+                }
+                rows
+            })
             .into_any_element()
     }
 }

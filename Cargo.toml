@@ -5,7 +5,8 @@ edition = "2021"
 description = "Verve — an offline-first API co-development platform built with gpui-component."
 publish = false
 authors = ["Verve"]
-license = "MIT"
+# Closed-source proprietary software (All Rights Reserved). Source is not distributed.
+license-file = "LICENSE"
 homepage = "https://github.com/lijingrs/verve"
 
 # macOS app bundle metadata (used by cargo-bundle).
@@ -58,7 +59,7 @@ SSH terminal, document sharing, and git sync."""
 name = "Verve"
 manufacturer = "Verve"
 upgrade-guid = "12345678-1234-1234-1234-123456789012"
-license = "MIT"
+license = "LICENSE"
 icon = "assets/icons/verve.ico"
 
 # Standalone document-sharing server binary for cloud/headless deployment.

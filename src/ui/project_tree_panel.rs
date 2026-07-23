@@ -508,6 +508,16 @@ impl Render for ProjectTreePanel {
                             // reveal only when this row is hovered.
                             let group = format!("tree-row-{ix}");
 
+                            // Selection colors: the ListItem already paints a
+                            // `theme.accent` (neutral-800 gray) base on selected
+                            // rows when `active_highlight = false`, so we lay a
+                            // strongly-opaque blue over the top to overpower it.
+                            // 70% opacity is enough to make the row vividly blue
+                            // rather than gray-blue.
+                            let selection_bg = theme.selection.opacity(0.70);
+                            let selection_icon =
+                                theme.selection.blend(theme.foreground.opacity(0.4));
+
                             let list_item = ListItem::new(ix)
                                 .w_full()
                                 // .selected(true) marks the row active so the
@@ -521,36 +531,21 @@ impl Render for ProjectTreePanel {
                                 .overflow_hidden()
                                 .px_2()
                                 .pl(px(16.) * entry.depth() + px(8.))
-                                // Vivid selection background as a full-bleed
-                                // overlay child. It's a plain square rect (no
-                                // rounding of its own, no border) so there's only
-                                // ONE rounded layer — the ListItem's overflow clip.
-                                // That avoids the crescent gap caused by two
-                                // mismatched rounded layers.
-                                //
-                                // Use `theme.selection` (a vivid blue) rather than
-                                // `theme.primary` — primary is neutral-50/white in
-                                // dark mode (neutral-900/black in light mode), which
-                                // makes the 3px edge bar look like a text-insertion
-                                // caret instead of a selection indicator.
+                                // Selection highlight: a solid rounded blue
+                                // background filling the whole row (no left-edge
+                                // bar, which kept looking like a text caret even
+                                // in color). 70% opacity overpowers the ListItem's
+                                // built-in neutral accent base so the row reads
+                                // as vividly blue on near-black sidebars.
                                 .when(is_selected, |item| {
                                     item.child(
                                         div()
                                             .absolute()
                                             .top_0()
                                             .left_0()
-                                            .bottom_0()
-                                            .w(px(3.))
-                                            .bg(theme.selection),
-                                    )
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .top_0()
-                                            .left_0()
                                             .right_0()
                                             .bottom_0()
-                                            .bg(theme.selection.opacity(0.16)),
+                                            .bg(selection_bg),
                                     )
                                     .text_color(theme.foreground)
                                 })
@@ -578,7 +573,11 @@ impl Render for ProjectTreePanel {
                                                     .flex()
                                                     .items_center()
                                                     .justify_center()
-                                                    .text_color(theme.muted_foreground)
+                                                    .text_color(if is_selected {
+                                                        theme.foreground
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    })
                                                     .hover(|t| t.text_color(theme.foreground))
                                                     .child(chevron)
                                                     .on_mouse_down(
@@ -624,7 +623,11 @@ impl Render for ProjectTreePanel {
                                         .when(is_folder, |this| {
                                             this.child(
                                                 div()
-                                                    .text_color(theme.muted_foreground)
+                                                    .text_color(if is_selected {
+                                                        selection_icon
+                                                    } else {
+                                                        theme.muted_foreground
+                                                    })
                                                     .child(icon_name),
                                             )
                                         })

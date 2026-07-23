@@ -75,7 +75,6 @@ async fn handle_conn(
     let mut buf = Vec::with_capacity(4096);
     let mut tmp = [0u8; 4096];
     let mut body_to_read: Option<usize> = None;
-    let mut body_read: usize = 0;
     loop {
         let n = stream.read(&mut tmp).await?;
         if n == 0 {
@@ -91,7 +90,7 @@ async fn handle_conn(
                 }
             }
             let body_start = sep + 4;
-            body_read = buf.len().saturating_sub(body_start);
+            let body_read = buf.len().saturating_sub(body_start);
             if let Some(want) = body_to_read {
                 if body_read >= want || buf.len() > 1024 * 1024 {
                     break;

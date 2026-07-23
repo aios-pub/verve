@@ -428,7 +428,9 @@ impl HostsPanel {
             .iter()
             .find(|p| Some(&p.id) == self.store.active_profile.as_ref());
 
-        let profiles_section = if active_profile.is_none() {
+        let profiles_section = if let Some(profile) = active_profile {
+            self.render_profile_editor(cx, profile)
+        } else {
             div()
                 .w_full()
                 .flex_1()
@@ -439,8 +441,6 @@ impl HostsPanel {
                 .text_color(theme.muted_foreground)
                 .child(rust_i18n::t!("hosts.no_entries").to_string())
                 .into_any_element()
-        } else {
-            self.render_profile_editor(cx, active_profile.unwrap())
         };
 
         v_flex()

@@ -1472,7 +1472,7 @@ impl VerveApp {
         let app = self.state.read(cx);
         let idx = app.active_project;
         let mut s = app.data.clone();
-        drop(app);
+        let _ = app;
         let Some(p) = s.projects.get_mut(idx) else { return };
         let generated = crate::mock::generate_missing(p);
         if generated.is_empty() {

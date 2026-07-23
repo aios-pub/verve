@@ -836,7 +836,7 @@ mod tests {
                 let auth_hdr = req_str
                     .lines()
                     .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
-                    .map(|l| l.splitn(2, ':').nth(1).unwrap_or("").trim().to_string())
+                    .map(|l| l.split_once(':').map(|x| x.1).unwrap_or("").trim().to_string())
                     .unwrap_or_default();
 
                 let (status, body) = if path.starts_with("/login") {
@@ -906,7 +906,7 @@ mod tests {
         case.steps.push(TestCaseStep::Request(step1));
         case.steps.push(TestCaseStep::Request(RequestStep::new(&me.id)));
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<RunEvent>();
+        let (tx, _rx) = mpsc::unbounded_channel::<RunEvent>();
 
         let result = smol::block_on(run_case(&case, &project, &*client, tx, None))
             .expect("run_case should return Ok");

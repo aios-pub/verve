@@ -18,7 +18,7 @@ use crate::ssh::host_store as ssh_host_store;
 
 /// Connection mode selected in the dialog.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ConnMode {
+pub(crate) enum ConnMode {
     /// User enters a DOCKER_HOST URL directly (tcp://, ssh://, unix://).
     Direct,
     /// Tunnel through an existing Verve-managed SSH host.
@@ -44,7 +44,7 @@ pub struct DockerHostDialogState {
     pub editing_id: Option<String>,
     pub name: Entity<InputState>,
     // Mode-specific fields.
-    pub mode: ConnMode,
+    pub(crate) mode: ConnMode,
     pub host_url: Entity<InputState>,
     pub ssh_host_select: Entity<SelectState<Vec<String>>>,
     /// Map from select label -> ssh host id (built on construction).

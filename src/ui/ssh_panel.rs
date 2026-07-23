@@ -106,7 +106,7 @@ pub struct TerminalSession {
     /// Status of the connection.
     pub status: SessionStatus,
     /// Active ZMODEM transfer state (if any).
-    pub zm_state: ZmUiState,
+    pub(crate) zm_state: ZmUiState,
     /// Currently-active local port forwards. Dropping this vec (or the session)
     /// stops the forwards via LocalForward::stop's Drop impl on abort.
     pub active_forwards: Vec<LocalForward>,
@@ -123,7 +123,7 @@ pub enum SessionStatus {
 
 /// Active ZMODEM transfer state (GPUI UI-side mirror of what the pump actor reports).
 #[derive(Clone)]
-struct ZmUiState {
+pub(crate) struct ZmUiState {
     active: bool,
     filename: String,
     total: u64,

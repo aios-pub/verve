@@ -292,7 +292,7 @@ impl SshConnection {
 
     /// Expose the underlying handle for advanced use (callers must not
     /// disconnect while other channels are active).
-    pub fn handle(&self) -> Arc<Mutex<Handle<SshHandler>>> {
+    pub(crate) fn handle(&self) -> Arc<Mutex<Handle<SshHandler>>> {
         self.handle.clone()
     }
 }

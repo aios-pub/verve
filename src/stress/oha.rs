@@ -174,7 +174,7 @@ pub fn run_oha(
         .spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
-                .worker_threads(concurrency.max(2).min(16) as usize)
+                .worker_threads(concurrency.clamp(2, 16) as usize)
                 .build()
                 .unwrap();
 

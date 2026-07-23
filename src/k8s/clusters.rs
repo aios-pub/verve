@@ -625,8 +625,16 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // All tests in this module mutate the process-global HOME environment
+    // variable and share the same underlying persistence directory, so they
+    // must run serially. A single static mutex enforces this regardless of
+    // the test runner's parallelism setting.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_temp_home<F: FnOnce()>(f: F) {
+        let _guard = TEST_LOCK.lock().unwrap();
         use crate::state::models::new_id;
         let tmp = std::env::temp_dir().join(format!("verve-k8s-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -637,6 +645,7 @@ mod tests {
             std::env::set_var("HOME", h);
         }
         let _ = std::fs::remove_dir_all(&tmp);
+        drop(_guard);
         if let Err(e) = result {
             std::panic::resume_unwind(e);
         }

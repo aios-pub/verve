@@ -1041,7 +1041,7 @@ fn render_status_chart(r: &StressResult, theme: &gpui_component::Theme) -> AnyEl
     let red = theme.danger;
     // Top 8 status codes by count to keep it readable.
     let mut pairs: Vec<(u16, u64)> = r.status_distribution.iter().map(|(k, v)| (*k, *v)).collect();
-    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    pairs.sort_by_key(|b| std::cmp::Reverse(b.1));
     pairs.truncate(8);
     let data: Vec<StatusBar> = pairs
         .into_iter()

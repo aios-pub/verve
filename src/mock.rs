@@ -306,7 +306,21 @@ mod tests {
         }
     }
 
-    fn req(method: &str, path: &str) -> IncomingRequest {
+    struct TestRequest {
+        method: String,
+        path: String,
+        query: HashMap<String, String>,
+        headers: HashMap<String, String>,
+    }
+
+    impl MockRequestLike for TestRequest {
+        fn method(&self) -> &str { &self.method }
+        fn path(&self) -> &str { &self.path }
+        fn query(&self) -> &HashMap<String, String> { &self.query }
+        fn headers(&self) -> &HashMap<String, String> { &self.headers }
+    }
+
+    fn req(method: &str, path: &str) -> TestRequest {
         let (p, q) = match path.find('?') {
             Some(i) => (path[..i].to_string(), &path[i + 1..]),
             None => (path.to_string(), ""),
@@ -316,7 +330,7 @@ mod tests {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             query.insert(k.to_ascii_lowercase(), v.to_string());
         }
-        IncomingRequest {
+        TestRequest {
             method: method.into(),
             path: p,
             query,
@@ -340,8 +354,8 @@ mod tests {
             regex: None,
             name: "t".into(),
         };
-        assert!(rule_matches(&e, &req("GET", "/a")));
-        assert!(!rule_matches(&e, &req("GET", "/a/b")));
+        assert!(rule_matches_for(&e, &req("GET", "/a")));
+        assert!(!rule_matches_for(&e, &req("GET", "/a/b")));
     }
 
     #[test]
@@ -353,9 +367,9 @@ mod tests {
             regex: None,
             name: "t".into(),
         };
-        assert!(rule_matches(&e, &req("GET", "/api")));
-        assert!(rule_matches(&e, &req("GET", "/api/users")));
-        assert!(!rule_matches(&e, &req("GET", "/other")));
+        assert!(rule_matches_for(&e, &req("GET", "/api")));
+        assert!(rule_matches_for(&e, &req("GET", "/api/users")));
+        assert!(!rule_matches_for(&e, &req("GET", "/other")));
     }
 
     #[test]
@@ -367,8 +381,8 @@ mod tests {
             regex: Some(Regex::new("^(?:/api/users/\\d+)$").unwrap()),
             name: "t".into(),
         };
-        assert!(rule_matches(&e, &req("GET", "/api/users/42")));
-        assert!(!rule_matches(&e, &req("GET", "/api/users/abc")));
+        assert!(rule_matches_for(&e, &req("GET", "/api/users/42")));
+        assert!(!rule_matches_for(&e, &req("GET", "/api/users/abc")));
     }
 
     #[test]
@@ -376,8 +390,8 @@ mod tests {
         let mut r = rule_exact("/a");
         r.match_method = Some(RequestMethod::Post);
         let e = RuleEntry { rule: r, priority: 0, pattern: "/a".into(), regex: None, name: "t".into() };
-        assert!(!rule_matches(&e, &req("GET", "/a")));
-        assert!(rule_matches(&e, &req("POST", "/a")));
+        assert!(!rule_matches_for(&e, &req("GET", "/a")));
+        assert!(rule_matches_for(&e, &req("POST", "/a")));
     }
 
     #[test]
@@ -385,9 +399,9 @@ mod tests {
         let mut r = rule_exact("/a");
         r.match_query = vec![KeyValue::new("debug", "1")];
         let e = RuleEntry { rule: r, priority: 0, pattern: "/a".into(), regex: None, name: "t".into() };
-        assert!(!rule_matches(&e, &req("GET", "/a")));
-        assert!(rule_matches(&e, &req("GET", "/a?debug=1")));
-        assert!(!rule_matches(&e, &req("GET", "/a?debug=2")));
+        assert!(!rule_matches_for(&e, &req("GET", "/a")));
+        assert!(rule_matches_for(&e, &req("GET", "/a?debug=1")));
+        assert!(!rule_matches_for(&e, &req("GET", "/a?debug=2")));
     }
 
     #[test]

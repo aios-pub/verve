@@ -203,8 +203,8 @@ struct SwaggerDoc {
     paths: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     host: Option<String>,
-    #[serde(default)]
-    basePath: Option<String>,
+    #[serde(default, rename = "basePath")]
+    base_path: Option<String>,
     #[serde(default)]
     schemes: Vec<String>,
 }
@@ -223,7 +223,7 @@ pub fn swagger_v2(json: &str) -> anyhow::Result<Project> {
     // Build a baseUrl from host/basePath/schemes.
     let scheme = doc.schemes.first().map(|s| s.as_str()).unwrap_or("https");
     let host = doc.host.unwrap_or_default();
-    let base_path = doc.basePath.unwrap_or_default();
+    let base_path = doc.base_path.unwrap_or_default();
     let base_url = if !host.is_empty() {
         format!("{scheme}://{host}{base_path}")
     } else {
@@ -310,31 +310,31 @@ pub fn swagger_v2(json: &str) -> anyhow::Result<Project> {
 
 /// Top-level postman export document.
 #[derive(serde::Deserialize)]
-struct postmanDoc {
+struct PostmanDoc {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     intro: Option<String>,
     #[serde(default)]
-    global: postmanGlobal,
+    global: PostmanGlobal,
     #[serde(default)]
-    apis: Vec<postmanNode>,
+    apis: Vec<PostmanNode>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanGlobal {
+struct PostmanGlobal {
     #[serde(default)]
-    envs: Vec<postmanEnv>,
+    envs: Vec<PostmanEnv>,
     #[serde(default)]
-    global_param: postmanGlobalParam,
+    global_param: PostmanGlobalParam,
     /// Global server definitions (server_id → name).
     #[serde(default)]
-    servers: Vec<postmanServerDef>,
+    servers: Vec<PostmanServerDef>,
     // Status-code dictionary / describe library / marks are ignored for now.
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanServerDef {
+struct PostmanServerDef {
     #[serde(default)]
     server_id: Option<String>,
     #[serde(default)]
@@ -344,7 +344,7 @@ struct postmanServerDef {
 }
 
 #[derive(serde::Deserialize)]
-struct postmanEnv {
+struct PostmanEnv {
     #[serde(default)]
     name: Option<String>,
     /// env_var_list is a free-form map of key → value strings.
@@ -352,11 +352,11 @@ struct postmanEnv {
     env_var_list: serde_json::Map<String, serde_json::Value>,
     /// Per-environment server list mapping server_id → URI.
     #[serde(default)]
-    server_list: Vec<postmanServerEntry>,
+    server_list: Vec<PostmanServerEntry>,
 }
 
 #[derive(serde::Deserialize)]
-struct postmanServerEntry {
+struct PostmanServerEntry {
     #[serde(default)]
     server_id: Option<String>,
     #[serde(default)]
@@ -366,22 +366,22 @@ struct postmanServerEntry {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanGlobalParam {
+struct PostmanGlobalParam {
     #[serde(default)]
-    header: postmanParamSection,
+    header: PostmanParamSection,
     #[serde(default)]
-    query: postmanParamSection,
+    query: PostmanParamSection,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanParamSection {
+struct PostmanParamSection {
     #[serde(default)]
-    parameter: Vec<postmanParam>,
+    parameter: Vec<PostmanParam>,
 }
 
 /// A single key/value parameter (header / query / form-data / cookie).
 #[derive(serde::Deserialize)]
-struct postmanParam {
+struct PostmanParam {
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
@@ -400,7 +400,7 @@ struct postmanParam {
     file_name: Option<String>,
 }
 
-impl postmanParam {
+impl PostmanParam {
     fn to_kv(&self) -> KeyValue {
         let mut kv = KeyValue::new(
             self.key.clone().unwrap_or_default(),
@@ -425,7 +425,7 @@ impl postmanParam {
 
 /// A node in the apis array — either a folder or an API.
 #[derive(serde::Deserialize)]
-struct postmanNode {
+struct PostmanNode {
     /// "folder" or "api" (sometimes "http-api").
     #[serde(default)]
     target_type: Option<String>,
@@ -447,60 +447,60 @@ struct postmanNode {
     #[serde(default)]
     server_id: Option<String>,
     #[serde(default)]
-    request: postmanRequest,
+    request: PostmanDocRequest,
     /// Tags array (strings).
     #[serde(default)]
     tags: Vec<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanRequest {
+struct PostmanDocRequest {
     #[serde(default)]
-    body: postmanBody,
+    body: PostmanBody,
     #[serde(default)]
-    header: postmanParamSection,
+    header: PostmanParamSection,
     #[serde(default)]
-    query: postmanQuerySection,
+    query: PostmanQuerySection,
     #[serde(default)]
-    cookie: postmanParamSection,
+    cookie: PostmanParamSection,
     #[serde(default)]
-    restful: postmanParamSection,
+    restful: PostmanParamSection,
     #[serde(default)]
-    auth: postmanAuth,
+    auth: PostmanAuth,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanQuerySection {
+struct PostmanQuerySection {
     #[serde(default)]
-    parameter: Vec<postmanParam>,
+    parameter: Vec<PostmanParam>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanBody {
+struct PostmanBody {
     /// "none" | "form-data" | "urlencoded" | "raw" | "binary"
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
-    parameter: Vec<postmanParam>,
+    parameter: Vec<PostmanParam>,
     #[serde(default)]
     raw: Option<String>,
     /// Visual field descriptions for raw JSON bodies (postman raw_parameter).
     #[serde(default)]
-    raw_parameter: Vec<postmanParam>,
+    raw_parameter: Vec<PostmanParam>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanAuth {
+struct PostmanAuth {
     #[serde(default)]
-    kv: postmanAuthKv,
+    kv: PostmanAuthKv,
     #[serde(default)]
-    bearer: postmanAuthBearer,
+    bearer: PostmanAuthBearer,
     #[serde(default)]
-    basic: postmanAuthBasic,
+    basic: PostmanAuthBasic,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanAuthKv {
+struct PostmanAuthKv {
     #[serde(default)]
     #[allow(dead_code)]
     key: Option<String>,
@@ -513,13 +513,13 @@ struct postmanAuthKv {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanAuthBearer {
+struct PostmanAuthBearer {
     #[serde(default)]
     key: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
-struct postmanAuthBasic {
+struct PostmanAuthBasic {
     #[serde(default)]
     username: Option<String>,
     #[serde(default)]
@@ -533,7 +533,7 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
     // Parse with serde_json::Value first so we can pull the auth `type` field
     // (a Rust keyword) that the typed structs above can't capture directly.
     let root: serde_json::Value = serde_json::from_str(json)?;
-    let doc: postmanDoc = serde_json::from_value(root.clone())?;
+    let doc: PostmanDoc = serde_json::from_value(root.clone())?;
 
     let name = doc.name.unwrap_or_else(|| "Imported postman".to_string());
     let mut project = Project::new(name);
@@ -617,13 +617,13 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
 /// Recursively build the (folders, root_requests) tree from the flat apis
 /// array, using `parent_id` to establish nesting.
 fn build_postman_tree(
-    nodes: &[postmanNode],
+    nodes: &[PostmanNode],
     root: &serde_json::Value,
     server_var_names: &std::collections::BTreeMap<String, String>,
 ) -> (Vec<Folder>, Vec<ApiRequest>) {
     // Index nodes by id for quick lookup, separating folders from APIs.
-    let mut folders: Vec<&postmanNode> = Vec::new();
-    let mut apis: Vec<&postmanNode> = Vec::new();
+    let mut folders: Vec<&PostmanNode> = Vec::new();
+    let mut apis: Vec<&PostmanNode> = Vec::new();
     for node in nodes {
         match node.target_type.as_deref() {
             Some("folder") => folders.push(node),
@@ -654,9 +654,9 @@ fn is_root(parent_id: Option<&str>) -> bool {
 /// Recursively build a folder, collecting its direct API children and
 /// recursing into sub-folders.
 fn build_postman_folder(
-    folder: &postmanNode,
-    all_folders: &[&postmanNode],
-    all_apis: &[&postmanNode],
+    folder: &PostmanNode,
+    all_folders: &[&PostmanNode],
+    all_apis: &[&PostmanNode],
     root: &serde_json::Value,
     server_var_names: &std::collections::BTreeMap<String, String>,
 ) -> Folder {
@@ -691,7 +691,7 @@ fn build_postman_folder(
 }
 
 /// Convert a single postman API node into a Verve ApiRequest.
-fn convert_postman_api(node: &postmanNode, root: &serde_json::Value) -> ApiRequest {
+fn convert_postman_api(node: &PostmanNode, root: &serde_json::Value) -> ApiRequest {
     let method = node
         .method
         .as_deref()
@@ -816,7 +816,7 @@ fn convert_postman_api(node: &postmanNode, root: &serde_json::Value) -> ApiReque
 }
 
 /// Map postman auth type → Verve AuthConfig.
-fn convert_postman_auth(type_str: &str, auth: &postmanAuth) -> AuthConfig {
+fn convert_postman_auth(type_str: &str, auth: &PostmanAuth) -> AuthConfig {
     match type_str {
         "bearer" => AuthConfig {
             auth_type: AuthType::Bearer,

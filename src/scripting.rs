@@ -163,7 +163,7 @@ fn js_to_json(val: &JsValue, ctx: &mut Context) -> Result<serde_json::Value, Str
             .map_err(|e| e.to_string())?
             .as_callable()
             .ok_or("JSON.stringify not callable")?
-            .call(&JsValue::undefined(), &[val.clone()], ctx)
+            .call(&JsValue::undefined(), std::slice::from_ref(val), ctx)
             .map_err(|e| e.to_string())?;
         let s = json_str.to_string(ctx).map(|j| j.to_std_string().unwrap_or_default()).unwrap_or_default();
         serde_json::from_str(&s).map_err(|e| e.to_string())

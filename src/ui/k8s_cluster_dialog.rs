@@ -25,7 +25,7 @@ use crate::ssh::host_store as ssh_host_store;
 
 /// Which tab is active in the dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum DialogTab {
+pub(crate) enum DialogTab {
     #[default]
     ImportKubeconfig,
     ManualEntry,
@@ -72,7 +72,7 @@ pub struct K8sClusterDialogState {
     // so we hide auth fields (credentials come from imported config, can't be edited here)
     is_imported_cluster: bool,
     // --- Tab selection ---
-    pub active_tab: DialogTab,
+    pub(crate) active_tab: DialogTab,
     // --- Common fields ---
     pub name: Entity<InputState>,
     pub namespace: Entity<InputState>,

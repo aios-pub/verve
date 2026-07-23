@@ -62,8 +62,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
     let mut pending_heading: Option<u32> = None;
     let mut link_stack: Vec<String> = Vec::new();
     let mut image_stack: Vec<String> = Vec::new();
-    // When inside an explicit Paragraph, we don't auto-create one at End(Item).
-    let mut in_paragraph: bool = false;
 
     /// Flush accumulated inline text from the top of inline_stack into a Paragraph
     /// block pushed to the current container (list item / blockquote / root).
@@ -99,10 +97,8 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut blockquote_stack,
                     );
                     pending_heading = Some(heading_level(level));
-                    in_paragraph = false;
                 }
                 Tag::Paragraph => {
-                    in_paragraph = true;
                 }
                 Tag::Emphasis => {
                     inline_stack.push(Vec::new());
@@ -123,11 +119,9 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     let ordered = start.is_some();
                     let start_num = start.unwrap_or(1);
                     list_stack.push((ordered, start_num, Vec::new(), Vec::new()));
-                    in_paragraph = false;
                 }
                 Tag::Item => {
                     // Starting a new list item. Reset inline accumulator.
-                    in_paragraph = false;
                 }
                 Tag::BlockQuote(_) => {
                     flush_inlines(
@@ -137,7 +131,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut blockquote_stack,
                     );
                     blockquote_stack.push(Vec::new());
-                    in_paragraph = false;
                 }
                 Tag::CodeBlock(kind) => {
                     flush_inlines(
@@ -152,7 +145,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     };
                     pending_code_lang = Some(lang);
                     pending_code = Some(String::new());
-                    in_paragraph = false;
                 }
                 Tag::Table(alignments) => {
                     flush_inlines(
@@ -168,7 +160,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         in_header: false,
                         alignments,
                     });
-                    in_paragraph = false;
                 }
                 Tag::TableHead => {
                     if let Some(ts) = &mut table_state {
@@ -214,7 +205,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                             node,
                         );
                     }
-                    in_paragraph = false;
                 }
                 TagEnd::Paragraph => {
                     flush_inlines(
@@ -223,7 +213,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                         &mut list_stack,
                         &mut blockquote_stack,
                     );
-                    in_paragraph = false;
                 }
                 TagEnd::Emphasis => {
                     let inner = inline_stack.pop().unwrap_or_default();
@@ -267,7 +256,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                             node,
                         );
                     }
-                    in_paragraph = false;
                 }
                 TagEnd::Item => {
                     // Flush text that appeared directly in the item (no Paragraph wrapper).
@@ -280,7 +268,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     if let Some((_, _, items, current)) = list_stack.last_mut() {
                         items.push(std::mem::take(current));
                     }
-                    in_paragraph = false;
                 }
                 TagEnd::BlockQuote(_) => {
                     flush_inlines(
@@ -292,7 +279,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                     let inner = blockquote_stack.pop().unwrap_or_default();
                     let node = MdNode::Blockquote(inner);
                     push_block(&mut blocks, &mut list_stack, &mut blockquote_stack, node);
-                    in_paragraph = false;
                 }
                 TagEnd::CodeBlock => {
                     if let (Some(lang), Some(code)) = (pending_code_lang.take(), pending_code.take())
@@ -306,7 +292,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                             node,
                         );
                     }
-                    in_paragraph = false;
                 }
                 TagEnd::Table => {
                     if let Some(ts) = table_state.take() {
@@ -322,7 +307,6 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                             node,
                         );
                     }
-                    in_paragraph = false;
                 }
                 TagEnd::TableHead => {
                     if let Some(ts) = &mut table_state {
@@ -377,8 +361,8 @@ pub fn parse_markdown(md: &str) -> Vec<MdNode> {
                 _ => {}
             },
             Event::Text(text) => {
-                if pending_code.is_some() {
-                    pending_code.as_mut().unwrap().push_str(&text);
+                if let Some(code) = &mut pending_code {
+                    code.push_str(&text);
                 } else {
                     inline_stack
                         .last_mut()

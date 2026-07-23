@@ -242,8 +242,8 @@ fn strip_block_prefix(line: &str) -> &str {
     let s = s.strip_prefix("# ").unwrap_or(s);
     // Strip "1. ", "2. ", ... prefix (digits followed by ". ").
     let trimmed = s.trim_start_matches(|c: char| c.is_ascii_digit());
-    let s = if trimmed.starts_with(". ") {
-        &trimmed[2..]
+    let s = if let Some(stripped) = trimmed.strip_prefix(". ") {
+        stripped
     } else {
         s
     };

@@ -3314,7 +3314,7 @@ impl VerveApp {
                     .child(
                         div()
                             .text_color(theme.primary)
-                            .child(IconName::LayoutDashboard),
+                            .child(vicon(DOCKER_ICON)),
                     )
                     .child(
                         div()
@@ -3445,7 +3445,7 @@ impl VerveApp {
                     .child(
                         div()
                             .text_color(theme.primary)
-                            .child(IconName::Globe),
+                            .child(vicon(K8S_ICON)),
                     )
                     .child(
                         div()

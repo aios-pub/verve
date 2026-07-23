@@ -70,7 +70,11 @@ struct Finished {
 /// env; folder/request variables are applied per-request by the UI).
 pub fn effective_vars(project: &Project) -> BTreeMap<String, String> {
     use crate::state::models::effective_variables;
+    let mut system = BTreeMap::new();
+    let remote_cfg = crate::state::persistence::load_remote_config();
+    system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
     effective_variables(
+        &system,
         &project.global_variables,
         project.active_env_variables(),
         &[],

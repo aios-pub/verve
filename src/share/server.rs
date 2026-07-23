@@ -1,10 +1,11 @@
-//! HTTP server hosting shared API documentation.
+//! HTTP server hosting shared API documentation and Mock responses.
 //!
 //! A `smol` + `TcpListener` responder (no extra dependencies), shared by two run
 //! modes through a single [`ServerState`] + [`ProjectProvider`] abstraction:
 //!
 //! - **Desktop** (embedded): binds `127.0.0.1:<port>`, projects come from GPUI
 //!   state via a closure, configs from `shares.json`. Started by `VerveApp`.
+//!   Also serves Mock responses for configured rules.
 //! - **Cloud** (`verve-server` binary): binds `0.0.0.0:<port>`, projects + shares
 //!   come from the file-backed [`crate::share::cloud::CloudStore`], and an admin
 //!   UI at `/admin` lets operators upload projects and manage shares.
@@ -15,18 +16,23 @@
 //!    otherwise the client is redirected to `/s/<id>/password`.
 //! 3. **Scope** — `Request` scope only ever serves the target request's doc;
 //!    `Folder` scope only serves that folder's subtree.
+//!
+//! Non-share routes (anything not matching `/`, `/health`, `/admin*`, `/api*`, `/s/*`)
+//! fall through to the Mock handler, which matches against configured MockRule entries.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 use smol::io::{AsyncReadExt, AsyncWriteExt};
 use smol::net::{TcpListener, TcpStream};
 
+use crate::http::variable::substitute;
+use crate::mock::{rule_matches_for, SharedRules, RuleEntry};
 use crate::share::html;
 use crate::share::models::{now_ts, ShareConfig};
 use crate::state::models::Project;
 
-/// Default share-server port (mock server uses 3059).
+/// Default share-server port (both docs and mock served on this port).
 pub const DEFAULT_PORT: u16 = 3097;
 
 /// The server's data sources: a config store plus a project resolver. Both the
@@ -45,6 +51,9 @@ pub struct ServerState {
     pub auth_token: Option<String>,
     /// When set, share ids are prefixed with this tenant namespace on lookup.
     pub tenant_id: Option<String>,
+    /// Mock rules (hot-swappable). When set, non-share routes are matched against
+    /// these rules and return configured mock responses.
+    pub mock_rules: Option<SharedRules>,
 }
 
 /// Abstracts project resolution so the same router works for desktop (closure
@@ -99,11 +108,12 @@ pub fn start_desktop<F>(
     port: u16,
     configs: Arc<RwLock<Vec<ShareConfig>>>,
     project_provider: F,
+    mock_rules: Option<SharedRules>,
 ) -> ShareServer
 where
     F: Fn(&str) -> Option<Project> + Send + Sync + 'static,
 {
-    start_desktop_with_config("127.0.0.1".to_string(), port, None, None, configs, project_provider)
+    start_desktop_with_config("127.0.0.1".to_string(), port, None, None, configs, project_provider, mock_rules)
 }
 
 /// Start the desktop server with full configuration: custom bind host,
@@ -116,6 +126,7 @@ pub fn start_desktop_with_config<F>(
     tenant_id: Option<String>,
     configs: Arc<RwLock<Vec<ShareConfig>>>,
     project_provider: F,
+    mock_rules: Option<SharedRules>,
 ) -> ShareServer
 where
     F: Fn(&str) -> Option<Project> + Send + Sync + 'static,
@@ -126,6 +137,7 @@ where
         cloud: None,
         auth_token,
         tenant_id,
+        mock_rules,
     });
     start_with_state(host, port, state)
 }
@@ -137,6 +149,7 @@ pub fn start_cloud(
     port: u16,
     store: Arc<crate::share::cloud::CloudStore>,
     auth_token: Option<String>,
+    mock_rules: Option<SharedRules>,
 ) -> ShareServer {
     let configs = Arc::new(RwLock::new(store.shares()));
     let state = Arc::new(ServerState {
@@ -145,6 +158,7 @@ pub fn start_cloud(
         cloud: Some(store),
         auth_token,
         tenant_id: None,
+        mock_rules,
     });
     start_with_state(host, port, state)
 }
@@ -191,9 +205,33 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) {
         }
     };
 
-    let resp = route(&req, &state);
-    let _ = stream.write_all(&resp).await;
-    let _ = stream.flush().await;
+    match route(&req, &state) {
+        RouteOutcome::Immediate(resp) => {
+            let _ = stream.write_all(&resp).await;
+            let _ = stream.flush().await;
+        }
+        RouteOutcome::Mock(mock) => {
+            // Apply configured delay.
+            if mock.delay_ms > 0 {
+                smol::Timer::after(std::time::Duration::from_millis(mock.delay_ms)).await;
+            }
+            let _ = stream.write_all(&mock.bytes).await;
+            let _ = stream.flush().await;
+        }
+    }
+}
+
+/// Outcome of routing: either an immediate response, or a mock response that
+/// may have a delay applied before sending.
+enum RouteOutcome {
+    Immediate(Vec<u8>),
+    Mock(MockResponse),
+}
+
+/// A pre-built mock response ready to send (delay applied by caller).
+struct MockResponse {
+    bytes: Vec<u8>,
+    delay_ms: u64,
 }
 
 /// A minimal parsed HTTP request (enough for our routes + password POST).
@@ -230,8 +268,12 @@ fn parse_request(raw: &str) -> Result<ParsedRequest, &'static str> {
 }
 
 /// Build the full HTTP/1.1 response (status line + headers + body).
-fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
-    let path = req.path.split('?').next().unwrap_or(&req.path);
+fn route(req: &ParsedRequest, state: &ServerState) -> RouteOutcome {
+    let path_raw = &req.path;
+    let (path, query_str) = match path_raw.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (path_raw.as_str(), ""),
+    };
 
     // ---- Bearer-token auth for admin/API routes (when configured) --------
     if path == "/admin" || path.starts_with("/admin/") || path.starts_with("/api/") {
@@ -239,7 +281,7 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             let authz = req.headers.get("authorization").cloned().unwrap_or_default();
             let provided = authz.strip_prefix("Bearer ").unwrap_or("").trim();
             if provided != expected {
-                return response(401, "application/json", b"{\"error\":\"unauthorized\"}");
+                return RouteOutcome::Immediate(response(401, "application/json", b"{\"error\":\"unauthorized\"}"));
             }
         }
         if path.starts_with("/admin/") || path == "/admin" {
@@ -251,20 +293,20 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
     if path == "/" {
         // A friendly landing page: cloud mode shows the admin link, desktop
         // mode shows a plain "server running" notice.
-        return response_bytes(
+        return RouteOutcome::Immediate(response_bytes(
             200,
             "text/html; charset=utf-8",
             landing_html(state).into_bytes(),
-        );
+        ));
     }
     if path == "/health" {
-        return response(200, "application/json", b"{\"status\":\"ok\"}");
+        return RouteOutcome::Immediate(response(200, "application/json", b"{\"status\":\"ok\"}"));
     }
 
     // ---- /s/<id>/... -------------------------------------------------------
     let rest = match path.strip_prefix("/s/") {
         Some(r) => r,
-        None => return response(404, "text/plain", b"Not Found"),
+        None => return handle_mock(req, state, query_str),
     };
     let (id, sub) = match rest.split_once('/') {
         Some((id, sub)) => (id, Some(sub)),
@@ -291,22 +333,22 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
         .and_then(|guard| guard.iter().find(|c| c.id == lookup_id || c.id == id).cloned());
 
     let Some(cfg) = cfg else {
-        return response(404, "text/html; charset=utf-8", NOT_FOUND_HTML.as_bytes());
+        return RouteOutcome::Immediate(response(404, "text/html; charset=utf-8", NOT_FOUND_HTML.as_bytes()));
     };
 
     // ---- Strict enforcement: expiration -----------------------------------
     let now = now_ts();
     if !cfg.is_valid_at(now) {
-        return response(
+        return RouteOutcome::Immediate(response(
             410,
             "text/html; charset=utf-8",
             expired_html(&cfg).as_bytes(),
-        );
+        ));
     }
 
     // ---- /s/<id>/password (GET form + POST verify) ------------------------
     if sub == Some("password") {
-        return handle_password(&cfg, req);
+        return wrap_immediate(handle_password(&cfg, req));
     }
 
     // ---- Strict enforcement: password -------------------------------------
@@ -318,7 +360,7 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             out.push_str("HTTP/1.1 302 Found\r\n");
             out.push_str(&format!("Location: /s/{}/password\r\n", cfg.id));
             out.push_str("Content-Length: 0\r\n\r\n");
-            return out.into_bytes();
+            return RouteOutcome::Immediate(out.into_bytes());
         }
     }
 
@@ -326,16 +368,16 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
     let project = match state.provider.get_project(&cfg.project_id) {
         Some(p) => p,
         None => {
-            return response(
+            return RouteOutcome::Immediate(response(
                 410,
                 "text/html; charset=utf-8",
                 project_gone_html(&cfg).as_bytes(),
-            );
+            ));
         }
     };
 
     // ---- Route by sub-path -------------------------------------------------
-    match sub {
+    let resp = match sub {
         None => {
             // Record a visit (best-effort, ignore lock errors).
             record_visit(&state.configs, &cfg.id);
@@ -373,9 +415,8 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             let request_id = &other[4..];
             // Strict scope enforcement: only serve docs within the share's scope.
             if !in_scope(&cfg, &project, request_id) {
-                return response(403, "text/plain", b"Forbidden: out of share scope");
-            }
-            if let Some((_, req)) = project.find_request(request_id) {
+                response(403, "text/plain", b"Forbidden: out of share scope")
+            } else if let Some((_, req)) = project.find_request(request_id) {
                 let fragment = html::render_request_fragment(req, &cfg.field_display);
                 response_bytes(200, "text/html; charset=utf-8", fragment.into_bytes())
             } else {
@@ -388,7 +429,107 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             response_bytes(200, "application/json", json.into_bytes())
         }
         Some(_) => response(404, "text/plain", b"Not Found"),
+    };
+    RouteOutcome::Immediate(resp)
+}
+
+/// Helper: wrap a plain Vec<u8> response into Immediate.
+fn wrap_immediate(bytes: Vec<u8>) -> RouteOutcome {
+    RouteOutcome::Immediate(bytes)
+}
+
+// ===========================================================================
+// Mock handler
+// ===========================================================================
+
+/// Handle non-share routes: match against mock rules, return configured response.
+fn handle_mock(req: &ParsedRequest, state: &ServerState, query_str: &str) -> RouteOutcome {
+    let Some(mock_rules) = &state.mock_rules else {
+        return RouteOutcome::Immediate(response(404, "text/plain", b"Not Found"));
+    };
+
+    // Parse query parameters.
+    let mut query = HashMap::new();
+    if !query_str.is_empty() {
+        for pair in query_str.split('&') {
+            let (k, v) = match pair.find('=') {
+                Some(i) => (&pair[..i], &pair[i+1..]),
+                None => (pair, ""),
+            };
+            if !k.is_empty() {
+                query.insert(crate::mock::url_decode(k).to_ascii_lowercase(), crate::mock::url_decode(v));
+            }
+        }
     }
+
+    // Build the request structure expected by rule_matches.
+    struct MockReq<'a> {
+        method: String,
+        path: String,
+        query: HashMap<String, String>,
+        headers: &'a HashMap<String, String>,
+    }
+
+    impl<'a> crate::mock::MockRequestLike for MockReq<'a> {
+        fn method(&self) -> &str { &self.method }
+        fn path(&self) -> &str { &self.path }
+        fn query(&self) -> &HashMap<String, String> { &self.query }
+        fn headers(&self) -> &HashMap<String, String> { self.headers }
+    }
+
+    let mock_req = MockReq {
+        method: req.method.to_ascii_uppercase(),
+        path: req.path.split('?').next().unwrap_or(&req.path).to_string(),
+        query,
+        headers: &req.headers,
+    };
+
+    // Get current rules snapshot.
+    let rules = mock_rules.read().map(|g| g.clone()).unwrap_or_default();
+
+    // Find matching entry.
+    let entry = rules.iter().find(|e| crate::mock::rule_matches_for(e, &mock_req));
+
+    let Some(entry) = entry else {
+        let body = format!("No mock rule matched {} {}\n", req.method, req.path);
+        return RouteOutcome::Immediate(response(404, "text/plain", body.as_bytes()));
+    };
+
+    let rule = &entry.rule;
+
+    // Process templates if enabled.
+    let mut body_bytes = rule.body.as_bytes().to_vec();
+    let mut out_headers = rule.headers.clone();
+
+    if rule.enable_templates {
+        let mut vars: BTreeMap<String, String> = BTreeMap::new();
+        vars.insert("mock.request.path".into(), mock_req.path.clone());
+        vars.insert("mock.request.method".into(), mock_req.method.clone());
+        for (k, v) in &mock_req.query {
+            vars.insert(format!("mock.request.query.{k}"), v.clone());
+        }
+        for (k, v) in mock_req.headers {
+            vars.insert(format!("mock.request.header.{k}"), v.clone());
+        }
+        let body_str = substitute(&rule.body, &vars);
+        body_bytes = body_str.into_bytes();
+        for h in out_headers.iter_mut() {
+            if h.enabled {
+                h.value = substitute(&h.value, &vars);
+            }
+        }
+    }
+
+    // Build response bytes.
+    let resp = response_bytes(rule.status, "application/json", body_bytes);
+    // Note: we don't handle custom headers here for simplicity (response_bytes
+    // always returns Content-Type: application/json; if custom headers are needed
+    // we'd build the response manually). For v1 this matches previous mock.rs behavior.
+
+    RouteOutcome::Mock(MockResponse {
+        bytes: resp,
+        delay_ms: rule.delay_ms,
+    })
 }
 
 // ===========================================================================
@@ -396,9 +537,9 @@ fn route(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
 // ===========================================================================
 
 /// Route admin requests. Only reachable when `state.cloud` is set (cloud mode).
-fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
+fn route_admin(req: &ParsedRequest, state: &ServerState) -> RouteOutcome {
     let Some(store) = state.cloud.clone() else {
-        return response(404, "text/plain", b"admin disabled (desktop mode)");
+        return RouteOutcome::Immediate(response(404, "text/plain", b"admin disabled (desktop mode)"));
     };
     let path = req.path.split('?').next().unwrap_or(&req.path);
 
@@ -406,7 +547,7 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
         // ---- Dashboard ----
         ("GET", "/admin") => {
             let html = admin_html(&store);
-            response_bytes(200, "text/html; charset=utf-8", html.into_bytes())
+            RouteOutcome::Immediate(response_bytes(200, "text/html; charset=utf-8", html.into_bytes()))
         }
 
         // ---- Upload a project (POST body = raw project JSON) ----
@@ -417,22 +558,22 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             let project = match serde_json::from_str::<Project>(&req.body) {
                 Ok(p) => p,
                 Err(e) => {
-                    return response_bytes(
+                    return RouteOutcome::Immediate(response_bytes(
                         400,
                         "application/json",
                         format!(r#"{{"error":"invalid project json: {e}"}}"#).into_bytes(),
-                    );
+                    ));
                 }
             };
             let id = project.id.clone();
             let name = project.name.clone();
             store.upsert_project(project);
             log::info!("admin: uploaded project {id} ({name})");
-            response_bytes(
+            RouteOutcome::Immediate(response_bytes(
                 200,
                 "application/json",
                 format!(r#"{{"id":"{id}","name":"{name}"}}"#).into_bytes(),
-            )
+            ))
         }
 
         // ---- Delete a project ----
@@ -440,7 +581,7 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             let id = p.trim_start_matches("/admin/api/projects/");
             store.delete_project(id);
             log::info!("admin: deleted project {id}");
-            response_bytes(200, "application/json", b"{\"ok\":true}".to_vec())
+            RouteOutcome::Immediate(response_bytes(200, "application/json", b"{\"ok\":true}".to_vec()))
         }
 
         // ---- Create a share (POST form-encoded: project_id, scope, ...) ----
@@ -453,11 +594,11 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
             let password = form_field(&req.body, "password");
 
             if store.get_project(&project_id).is_none() {
-                return response_bytes(
+                return RouteOutcome::Immediate(response_bytes(
                     400,
                     "application/json",
                     format!(r#"{{"error":"project not found: {project_id}"}}"#).into_bytes(),
-                );
+                ));
             }
             let project_name = store
                 .get_project(&project_id)
@@ -477,11 +618,11 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
                 *guard = store.shares();
             }
             log::info!("admin: created share {id} for project {project_id}");
-            response_bytes(
+            RouteOutcome::Immediate(response_bytes(
                 200,
                 "application/json",
                 format!(r#"{{"id":"{id}"}}"#).into_bytes(),
-            )
+            ))
         }
 
         // ---- Delete a share ----
@@ -492,10 +633,10 @@ fn route_admin(req: &ParsedRequest, state: &ServerState) -> Vec<u8> {
                 *guard = store.shares();
             }
             log::info!("admin: deleted share {id}");
-            response_bytes(200, "application/json", b"{\"ok\":true}".to_vec())
+            RouteOutcome::Immediate(response_bytes(200, "application/json", b"{\"ok\":true}".to_vec()))
         }
 
-        _ => response(404, "text/plain", b"Not Found"),
+        _ => RouteOutcome::Immediate(response(404, "text/plain", b"Not Found")),
     }
 }
 

@@ -5,6 +5,7 @@ pub mod autotest_panel;
 pub mod bootstrap_dialog;
 pub mod console_panel;
 pub mod docker_host_dialog;
+pub mod mock_console_panel;
 pub mod docker_panel;
 pub mod env_panel;
 pub mod environments_view;

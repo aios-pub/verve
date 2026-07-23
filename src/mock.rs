@@ -1,7 +1,8 @@
-//! Local Mock server.
+//! Mock rule management and matching logic.
 //!
-//! A minimal HTTP/1.1 responder that serves per-request [`MockRule`]s from the
-//! active project. Listens on `127.0.0.1:<port>` (default [`DEFAULT_PORT`]).
+//! The actual HTTP serving is handled by the unified share server in
+//! `src/share/server.rs`, which serves both docs and mock responses on the
+//! same port (default 3097).
 //!
 //! Matching dimensions (in priority order):
 //! 1. HTTP method (if `match_method` is set on a rule it must equal the request)
@@ -11,35 +12,31 @@
 //!
 //! When multiple rules could match, the highest-priority one (Exact > Prefix > Regex,
 //! then earliest in declaration order) wins.
-//!
-//! Dynamic `{{...}}` template substitution is added in the next iteration.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use regex::Regex;
-use smol::io::{AsyncReadExt, AsyncWriteExt};
-use smol::net::{TcpListener, TcpStream};
 
-use crate::http::variable::substitute;
 use crate::state::models::{KeyValue, MockRule, PathPattern, Project, RequestMethod};
 
-/// Default Mock server port.
-pub const DEFAULT_PORT: u16 = 3059;
+/// Default Mock server port (now unified with share server port 3097).
+pub const DEFAULT_PORT: u16 = crate::share::server::DEFAULT_PORT;
 
-/// One parsed incoming HTTP request (request line + headers + query).
-#[derive(Debug)]
-struct IncomingRequest {
-    method: String,
-    path: String,
-    query: HashMap<String, String>,
-    headers: HashMap<String, String>,
+/// Trait abstracting over request representations for rule matching, so the
+/// same matching logic works for both the standalone legacy server and the
+/// integrated share server.
+pub trait MockRequestLike {
+    fn method(&self) -> &str;
+    fn path(&self) -> &str;
+    fn query(&self) -> &HashMap<String, String>;
+    fn headers(&self) -> &HashMap<String, String>;
 }
 
 /// A single rule entry with priority pre-computed so we can sort candidates.
 #[derive(Clone)]
 pub struct RuleEntry {
-    rule: MockRule,
+    pub(crate) rule: MockRule,
     /// Lower = higher priority. Exact=0, Prefix=1, Regex=2.
     priority: u8,
     /// The pre-resolved match value (the Exact/Prefix/Regex pattern string).
@@ -213,201 +210,9 @@ pub fn current_rules(shared: &SharedRules) -> Arc<Vec<RuleEntry>> {
     shared.read().map(|g| g.clone()).unwrap_or_default()
 }
 
-/// Run the Mock server. Reads rules from `shared` on every request, so the rule
-/// set can be hot-swapped via [`swap_rules`] without restarting the listener.
-pub fn serve(port: u16, shared: SharedRules) -> smol::Task<()> {
-    smol::spawn(async move {
-        let listener = match TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("mock server bind failed on :{port}: {e}");
-                return;
-            }
-        };
-        log::info!("verve mock server listening on http://127.0.0.1:{port}");
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let rules = shared.read().map(|g| g.clone()).unwrap_or_default();
-            smol::spawn(handle(stream, rules)).detach();
-        }
-    })
-}
-
-async fn handle(mut stream: TcpStream, rules: Arc<Vec<RuleEntry>>) {
-    // Read up to 64KB so we capture the header block (and small bodies if any).
-    let mut buf = Vec::with_capacity(8192);
-    let mut tmp = [0u8; 8192];
-    let mut headers_done = false;
-    loop {
-        let n = match stream.read(&mut tmp).await {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => return,
-        };
-        buf.extend_from_slice(&tmp[..n]);
-        // Stop reading once we've seen header end.
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            headers_done = true;
-            break;
-        }
-        if buf.len() > 65536 {
-            break;
-        }
-    }
-    let _ = headers_done;
-    let req = match parse_request(&buf) {
-        Some(r) => r,
-        None => {
-            let _ = write_response(&mut stream, 400, &[KeyValue::new("Content-Type", "text/plain")], b"Bad Request", 0).await;
-            return;
-        }
-    };
-
-    // Find best-matching rule.
-    let entry = rules.iter().find(|e| rule_matches(e, &req));
-
-    let entry = match entry {
-        Some(e) => e,
-        None => {
-            let body = format!("No mock rule matched {} {}\n", req.method, req.path);
-            let _ = write_response(
-                &mut stream,
-                404,
-                &[KeyValue::new("Content-Type", "text/plain")],
-                body.as_bytes(),
-                0,
-            )
-            .await;
-            return;
-        }
-    };
-    let rule = &entry.rule;
-
-    if rule.delay_ms > 0 {
-        smol::Timer::after(std::time::Duration::from_millis(rule.delay_ms)).await;
-    }
-
-    // Build a template variable map from the incoming request when templates
-    // are enabled:
-    //   mock.request.path       → request path
-    //   mock.request.method     → HTTP method
-    //   mock.request.query.<k>  → query param value
-    //   mock.request.header.<k> → header value (lowercase keys)
-    // These are merged on top of the project env variables (passed in via the
-    // request headers? not here — we don't have project access; pure request-scope).
-    let mut body_bytes = rule.body.as_bytes().to_vec();
-    let mut rendered_headers = rule.headers.clone();
-    if rule.enable_templates {
-        let mut vars: BTreeMap<String, String> = BTreeMap::new();
-        vars.insert("mock.request.path".into(), req.path.clone());
-        vars.insert("mock.request.method".into(), req.method.clone());
-        for (k, v) in &req.query {
-            vars.insert(format!("mock.request.query.{k}"), v.clone());
-        }
-        for (k, v) in &req.headers {
-            vars.insert(format!("mock.request.header.{k}"), v.clone());
-        }
-        let body_str = substitute(&rule.body, &vars);
-        body_bytes = body_str.into_bytes();
-        for h in rendered_headers.iter_mut() {
-            if h.enabled {
-                h.value = substitute(&h.value, &vars);
-            }
-        }
-    }
-
-    let _ = write_response(&mut stream, rule.status, &rendered_headers, &body_bytes, 0).await;
-}
-
-fn rule_matches(entry: &RuleEntry, req: &IncomingRequest) -> bool {
-    // Method.
-    if let Some(m) = &entry.rule.match_method {
-        if req.method.to_ascii_uppercase() != m.as_str() {
-            return false;
-        }
-    }
-    // Path.
-    let path_match = match &entry.rule.match_path {
-        PathPattern::Exact(s) => req.path == *s,
-        PathPattern::Prefix(s) => req.path.starts_with(s.as_str()),
-        PathPattern::Regex(_) => entry.regex.as_ref().map(|r| r.is_match(&req.path)).unwrap_or(false),
-    };
-    if !path_match {
-        return false;
-    }
-    // Query.
-    for kv in &entry.rule.match_query {
-        if !kv.enabled || kv.key.is_empty() {
-            continue;
-        }
-        let present = req.query.get(&kv.key.to_ascii_lowercase());
-        match present {
-            Some(v) if !kv.value.is_empty() && v != &kv.value => return false,
-            None => return false,
-            _ => {}
-        }
-    }
-    // Headers.
-    for kv in &entry.rule.match_headers {
-        if !kv.enabled || kv.key.is_empty() {
-            continue;
-        }
-        let present = req.headers.get(&kv.key.to_ascii_lowercase());
-        match present {
-            Some(v) if !kv.value.is_empty() && v != &kv.value => return false,
-            None => return false,
-            _ => {}
-        }
-    }
-    true
-}
-
-/// Parse a raw HTTP/1.1 request (request line + headers). Bodies are ignored.
-fn parse_request(buf: &[u8]) -> Option<IncomingRequest> {
-    let text = String::from_utf8_lossy(buf);
-    let mut lines = text.lines();
-    let request_line = lines.next()?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next()?.to_string();
-    let raw_target = parts.next()?.to_string();
-    // Split target into path + query.
-    let (path, query) = match raw_target.find('?') {
-        Some(i) => (raw_target[..i].to_string(), &raw_target[i + 1..]),
-        None => (raw_target, ""),
-    };
-    let mut query_map = HashMap::new();
-    if !query.is_empty() {
-        for pair in query.split('&') {
-            let (k, v) = match pair.find('=') {
-                Some(i) => (&pair[..i], &pair[i + 1..]),
-                None => (pair, ""),
-            };
-            if !k.is_empty() {
-                query_map.insert(url_decode(k).to_ascii_lowercase(), url_decode(v));
-            }
-        }
-    }
-    let mut headers = HashMap::new();
-    for line in lines {
-        if line.is_empty() {
-            break;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-        }
-    }
-    Some(IncomingRequest {
-        method,
-        path,
-        query: query_map,
-        headers,
-    })
-}
-
-fn url_decode(s: &str) -> String {
+/// Percent-decode a URL component (query param / path segment). Minimal impl
+/// sufficient for mock match keys.
+pub(crate) fn url_decode(s: &str) -> String {
     // Minimal percent decode — sufficient for mock match keys (JSON tokens, simple
     // ids). Full urlencoding is overkill here.
     let bytes = s.as_bytes();
@@ -434,41 +239,47 @@ fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-async fn write_response(
-    stream: &mut TcpStream,
-    status: u16,
-    headers: &[KeyValue],
-    body: &[u8],
-    _extra: u64,
-) -> std::io::Result<()> {
-    let status_text = match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        400 => "Bad Request",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "OK",
-    };
-    let mut out = format!("HTTP/1.1 {status} {status_text}\r\n");
-    let mut has_content_type = false;
-    for h in headers {
-        if h.enabled {
-            if h.key.eq_ignore_ascii_case("content-type") {
-                has_content_type = true;
-            }
-            out.push_str(&format!("{}: {}\r\n", h.key, h.value));
+pub(crate) fn rule_matches_for(entry: &RuleEntry, req: &dyn MockRequestLike) -> bool {
+    // Method.
+    if let Some(m) = &entry.rule.match_method {
+        if req.method().to_ascii_uppercase() != m.as_str() {
+            return false;
         }
     }
-    if !has_content_type {
-        out.push_str("Content-Type: application/json\r\n");
+    // Path.
+    let path_match = match &entry.rule.match_path {
+        PathPattern::Exact(s) => req.path() == *s,
+        PathPattern::Prefix(s) => req.path().starts_with(s.as_str()),
+        PathPattern::Regex(_) => entry.regex.as_ref().map(|r| r.is_match(req.path())).unwrap_or(false),
+    };
+    if !path_match {
+        return false;
     }
-    out.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    out.push_str("Connection: close\r\n\r\n");
-    stream.write_all(out.as_bytes()).await?;
-    stream.write_all(body).await?;
-    stream.flush().await?;
-    Ok(())
+    // Query.
+    for kv in &entry.rule.match_query {
+        if !kv.enabled || kv.key.is_empty() {
+            continue;
+        }
+        let present = req.query().get(&kv.key.to_ascii_lowercase());
+        match present {
+            Some(v) if !kv.value.is_empty() && v != &kv.value => return false,
+            None => return false,
+            _ => {}
+        }
+    }
+    // Headers.
+    for kv in &entry.rule.match_headers {
+        if !kv.enabled || kv.key.is_empty() {
+            continue;
+        }
+        let present = req.headers().get(&kv.key.to_ascii_lowercase());
+        match present {
+            Some(v) if !kv.value.is_empty() && v != &kv.value => return false,
+            None => return false,
+            _ => {}
+        }
+    }
+    true
 }
 
 #[cfg(test)]

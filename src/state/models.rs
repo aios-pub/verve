@@ -1201,6 +1201,30 @@ impl Project {
         out
     }
 
+    /// Mutable version of [`iter_all_requests`], yielding mutable references to
+    /// every request in the project.
+    pub fn iter_all_requests_mut(&mut self) -> Vec<(String, &mut ApiRequest)> {
+        let mut out: Vec<(String, &mut ApiRequest)> = Vec::new();
+        for req in &mut self.requests {
+            out.push((String::new(), req));
+        }
+        fn walk<'a>(folders: &'a mut [Folder], prefix: &str, out: &mut Vec<(String, &'a mut ApiRequest)>) {
+            for folder in folders {
+                let path = if prefix.is_empty() {
+                    folder.name.clone()
+                } else {
+                    format!("{prefix} > {}", folder.name)
+                };
+                for req in &mut folder.requests {
+                    out.push((path.clone(), req));
+                }
+                walk(&mut folder.folders, &path, out);
+            }
+        }
+        walk(&mut self.folders, "", &mut out);
+        out
+    }
+
     /// Collect variables along a folder-id chain (root → parent), deepest last.
     pub fn folder_variables_chain(&self, chain: &[String]) -> Vec<&[KeyValue]> {
         let mut out = Vec::new();
@@ -1610,17 +1634,24 @@ pub fn new_id() -> String {
 }
 
 /// Build a `BTreeMap` of the effective variables for a single request, applying
-/// the scope priority: global < environment < folder chain < request.
+/// the scope priority: system < global < environment < folder chain < request.
+/// System variables (like `mock_server`) have lowest priority and can be
+/// overridden by user-defined variables.
 ///
 /// `folder_vars` is the already-flattened variables of the request's ancestor
 /// folders (root → parent), built by [`Project::folder_variables_chain`].
 pub fn effective_variables(
+    system: &BTreeMap<String, String>,
     global: &[KeyValue],
     env: &[KeyValue],
     folder_vars: &[KeyValue],
     request_vars: &[KeyValue],
 ) -> BTreeMap<String, String> {
     let mut map: BTreeMap<String, String> = BTreeMap::new();
+    // System variables have lowest priority.
+    for (k, v) in system {
+        map.insert(k.clone(), v.clone());
+    }
     let push = |map: &mut BTreeMap<String, String>, vars: &[KeyValue]| {
         for kv in vars {
             if kv.enabled && !kv.key.trim().is_empty() {

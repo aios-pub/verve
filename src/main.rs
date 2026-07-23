@@ -85,21 +85,6 @@ fn main() {
 fn launch_main_app(cx: &mut App) {
     let app_state = state::AppState::init(cx);
 
-    let initial: Vec<verve::mock::RuleEntry> = app_state
-        .read(cx)
-        .active_project()
-        .map(|p| {
-            Arc::try_unwrap(verve::mock::rule_map(p))
-                .unwrap_or_else(|arc| (*arc).clone())
-        })
-        .unwrap_or_default();
-    let shared = verve::mock::shared_rules(initial);
-    let shared_for_state = shared.clone();
-    app_state.update(cx, move |s, _| {
-        s.mock_rules = Some(shared_for_state);
-    });
-    verve::mock::serve(verve::mock::DEFAULT_PORT, shared).detach();
-
     #[cfg(target_os = "macos")]
     cx.bind_keys([
         KeyBinding::new("cmd-enter", ui::request_panel::SendRequest, None),

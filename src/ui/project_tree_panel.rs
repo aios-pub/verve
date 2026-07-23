@@ -28,6 +28,13 @@ fn request_node(id: &str) -> String {
     format!("request:{id}")
 }
 
+/// Events emitted by the project tree panel.
+#[derive(Clone, Debug)]
+pub enum TreeEvent {
+    /// User clicked "Share" on a request: (request_id, request_name)
+    ShareRequest(String, String),
+}
+
 /// The payload carried during a tree drag. Implements `Render` so GPUI can
 /// show a floating preview under the cursor.
 #[derive(Clone, Debug)]
@@ -1710,7 +1717,11 @@ impl ProjectTreePanel {
 
         match action {
             TreeAction::Share(_) => {
-                self.show_info("分享", "分享链接生成功能开发中。", window, cx);
+                // Share the selected request's documentation.
+                if let Some((id, name)) = req_id.and_then(|id| req_snapshot.as_ref().map(|r| (id, r.name.clone()))) {
+                    // Emit event up to VerveApp to open the share dialog.
+                    cx.emit(crate::ui::project_tree_panel::TreeEvent::ShareRequest(id, name));
+                }
             }
             TreeAction::CopyAsCurl(_) => {
                 if let Some(r) = req_snapshot {
@@ -1985,4 +1996,5 @@ impl Focusable for ProjectTreePanel {
     }
 }
 
+impl EventEmitter<TreeEvent> for ProjectTreePanel {}
 impl EventEmitter<()> for ProjectTreePanel {}

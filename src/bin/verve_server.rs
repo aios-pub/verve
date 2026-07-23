@@ -121,7 +121,8 @@ fn main() {
     }
 
     // Start the server in cloud mode (binds the host, serves /admin).
-    let _server = server::start_cloud(host.clone(), port, store, auth_token);
+    // Mock support in cloud mode is not enabled by default (pass None for rules).
+    let _server = server::start_cloud(host.clone(), port, store, auth_token, None);
 
     log::info!("verve-server listening on http://{host}:{port}");
     log::info!("admin UI:  http://{host}:{port}/admin");

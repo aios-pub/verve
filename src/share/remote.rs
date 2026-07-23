@@ -70,6 +70,17 @@ pub fn share_url(cfg: &RemoteConfig, id: &str) -> Option<String> {
     remote_base_url(cfg).map(|base| format!("{}/s/{}", base, id))
 }
 
+/// Build the mock server base URL for the given configuration:
+/// - Remote mode (public_host set): returns the configured remote URL
+/// - Local/LAN mode: returns http://<host>:<port>, normalizing 0.0.0.0 to 127.0.0.1
+pub fn mock_server_url(cfg: &RemoteConfig) -> String {
+    if let Some(base) = remote_base_url(cfg) {
+        return base;
+    }
+    let host = if cfg.host == "0.0.0.0" { "127.0.0.1" } else { cfg.host.as_str() };
+    format!("http://{}:{}", host, cfg.port)
+}
+
 /// Upload a project to the remote server, then create a share there.
 ///
 /// Returns the id of the created share (the server may return a different id

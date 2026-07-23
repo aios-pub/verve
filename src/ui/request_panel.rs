@@ -97,6 +97,18 @@ pub struct RequestPanel {
     pub body_type_select: Entity<SelectState<Vec<String>>>,
     pub pre_script_editor: Entity<InputState>,
     pub tests_editor: Entity<InputState>,
+    // --- mock fields
+    pub mock_enabled: bool,
+    pub mock_status_input: Entity<InputState>,
+    pub mock_delay_input: Entity<InputState>,
+    pub mock_body_editor: Entity<InputState>,
+    pub mock_headers_rows: Vec<KvRow>,
+    pub mock_match_method_select: Entity<SelectState<Vec<String>>>,
+    pub mock_path_pattern_select: Entity<SelectState<Vec<String>>>,
+    pub mock_match_path_input: Entity<InputState>,
+    pub mock_enable_templates: bool,
+    pub mock_match_query_rows: Vec<KvRow>,
+    pub mock_match_header_rows: Vec<KvRow>,
     // --- auth fields
     pub auth_type_select: Entity<SelectState<Vec<String>>>,
     pub auth_target_select: Entity<SelectState<Vec<String>>>,
@@ -232,6 +244,40 @@ impl RequestPanel {
                 "// 后执行脚本：response.{status,body,json,headers,time} · apt.assert(cond,msg)",
             )
         });
+        // Mock fields.
+        let mock_status_input = cx.new(|cx| InputState::new(window, cx).placeholder("200").default_value("200"));
+        let mock_delay_input = cx.new(|cx| InputState::new(window, cx).placeholder("0").default_value("0"));
+        let mock_body_editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor(RawLanguage::Json.highlight())
+                .placeholder("{}")
+                .default_value("{}")
+                .multi_line(true)
+                .rows(8)
+        });
+        let method_options: Vec<String> = RequestMethod::all()
+            .iter()
+            .map(|m| m.to_string())
+            .chain(std::iter::once("不限制".to_string()))
+            .collect();
+        let mock_match_method_select = cx.new(|cx| {
+            SelectState::new(
+                method_options,
+                Some(gpui_component::IndexPath::new(7)), // 默认选"不限制"（第8个，索引7）
+                window,
+                cx,
+            )
+        });
+        let path_pattern_options: Vec<String> = vec!["精确".to_string(), "前缀".to_string(), "正则".to_string()];
+        let mock_path_pattern_select = cx.new(|cx| {
+            SelectState::new(
+                path_pattern_options,
+                Some(gpui_component::IndexPath::default()),
+                window,
+                cx,
+            )
+        });
+        let mock_match_path_input = cx.new(|cx| InputState::new(window, cx).placeholder("/api/path"));
         // Auth fields.
         let auth_type_options: Vec<String> = AuthType::all()
             .iter()
@@ -288,6 +334,17 @@ impl RequestPanel {
             body_type_select,
             pre_script_editor,
             tests_editor,
+            mock_enabled: false,
+            mock_status_input,
+            mock_delay_input,
+            mock_body_editor,
+            mock_headers_rows: Vec::new(),
+            mock_match_method_select,
+            mock_path_pattern_select,
+            mock_match_path_input,
+            mock_enable_templates: false,
+            mock_match_query_rows: Vec::new(),
+            mock_match_header_rows: Vec::new(),
             auth_type_select,
             auth_target_select,
             auth_token,
@@ -334,6 +391,10 @@ impl RequestPanel {
         subs.push(cx.subscribe(&panel.body_editor.clone(), Self::on_input_blur));
         subs.push(cx.subscribe(&panel.pre_script_editor.clone(), Self::on_input_blur));
         subs.push(cx.subscribe(&panel.tests_editor.clone(), Self::on_input_blur));
+        subs.push(cx.subscribe(&panel.mock_status_input.clone(), Self::on_input_blur));
+        subs.push(cx.subscribe(&panel.mock_delay_input.clone(), Self::on_input_blur));
+        subs.push(cx.subscribe(&panel.mock_body_editor.clone(), Self::on_input_blur));
+        subs.push(cx.subscribe(&panel.mock_match_path_input.clone(), Self::on_input_blur));
         subs.push(cx.subscribe(&panel.auth_token.clone(), Self::on_input_blur));
         subs.push(cx.subscribe(&panel.auth_username.clone(), Self::on_input_blur));
         subs.push(cx.subscribe(&panel.auth_password.clone(), Self::on_input_blur));
@@ -574,6 +635,58 @@ impl RequestPanel {
                     .update(cx, |s, cx| s.set_value(r.auth.key.clone(), window, cx));
                 self.auth_value
                     .update(cx, |s, cx| s.set_value(r.auth.value.clone(), window, cx));
+                // Load mock rule data.
+                if let Some(mock) = &r.mock {
+                    self.mock_enabled = mock.enabled;
+                    self.mock_status_input.update(cx, |s, cx| s.set_value(mock.status.to_string(), window, cx));
+                    self.mock_delay_input.update(cx, |s, cx| s.set_value(mock.delay_ms.to_string(), window, cx));
+                    self.mock_body_editor.update(cx, |s, cx| s.set_value(mock.body.clone(), window, cx));
+                    self.mock_headers_rows = kv_table::rows_from_pairs(&mock.headers, window, cx);
+                    // Match method: "不限制" is index 7, others match their position in RequestMethod::all().
+                    let method_idx = match &mock.match_method {
+                        Some(m) => RequestMethod::all().iter().position(|x| x == m).unwrap_or(7),
+                        None => 7,
+                    };
+                    self.mock_match_method_select.update(cx, |s, cx| {
+                        s.set_selected_value(&RequestMethod::all().get(method_idx).map(|m| m.to_string()).unwrap_or_else(|| "不限制".to_string()), window, cx)
+                    });
+                    // Path pattern: 0=Exact, 1=Prefix, 2=Regex.
+                    let (pattern_idx, pattern_str) = match &mock.match_path {
+                        crate::state::models::PathPattern::Exact(s) => (0, s.clone()),
+                        crate::state::models::PathPattern::Prefix(s) => (1, s.clone()),
+                        crate::state::models::PathPattern::Regex(s) => (2, s.clone()),
+                    };
+                    let pattern_str_val = match pattern_idx {
+                        0 => "精确",
+                        1 => "前缀",
+                        _ => "正则",
+                    }.to_string();
+                    self.mock_path_pattern_select.update(cx, |s, cx| {
+                        s.set_selected_value(&pattern_str_val, window, cx)
+                    });
+                    self.mock_match_path_input.update(cx, |s, cx| s.set_value(pattern_str, window, cx));
+                    self.mock_enable_templates = mock.enable_templates;
+                    self.mock_match_query_rows = kv_table::rows_from_pairs(&mock.match_query, window, cx);
+                    self.mock_match_header_rows = kv_table::rows_from_pairs(&mock.match_headers, window, cx);
+                } else {
+                    self.mock_enabled = false;
+                    self.mock_status_input.update(cx, |s, cx| s.set_value("200".to_string(), window, cx));
+                    self.mock_delay_input.update(cx, |s, cx| s.set_value("0".to_string(), window, cx));
+                    self.mock_body_editor.update(cx, |s, cx| s.set_value("{}".to_string(), window, cx));
+                    self.mock_headers_rows = kv_table::rows_from_pairs(&[crate::state::models::KeyValue::new("Content-Type", "application/json")], window, cx);
+                    self.mock_match_method_select.update(cx, |s, cx| {
+                        s.set_selected_value(&"不限制".to_string(), window, cx)
+                    });
+                    self.mock_path_pattern_select.update(cx, |s, cx| {
+                        s.set_selected_value(&"精确".to_string(), window, cx)
+                    });
+                    // Auto-extract path from request URL if available.
+                    let auto_path = crate::mock::path_of(&r.url).unwrap_or_else(|| "/".into());
+                    self.mock_match_path_input.update(cx, |s, cx| s.set_value(auto_path, window, cx));
+                    self.mock_enable_templates = false;
+                    self.mock_match_query_rows = Vec::new();
+                    self.mock_match_header_rows = Vec::new();
+                }
             }
             None => {
                 self.url
@@ -585,6 +698,10 @@ impl RequestPanel {
                 self.path_rows = Vec::new();
                 self.cookie_rows = Vec::new();
                 self.body_rows = Vec::new();
+                self.mock_enabled = false;
+                self.mock_headers_rows = Vec::new();
+                self.mock_match_query_rows = Vec::new();
+                self.mock_match_header_rows = Vec::new();
             }
         }
         cx.notify();
@@ -744,6 +861,39 @@ impl RequestPanel {
                     req.auth = auth;
                     req.pre_script = pre_script;
                     req.tests_script = tests_script;
+                    // Save mock rule.
+                    let mock_status = self.mock_status_input.read(cx).value().parse::<u16>().unwrap_or(200);
+                    let mock_delay = self.mock_delay_input.read(cx).value().parse::<u64>().unwrap_or(0);
+                    let mock_body = self.mock_body_editor.read(cx).text().to_string();
+                    let mock_headers = kv_table::pairs_from_rows(&self.mock_headers_rows, cx);
+                    let selected_method_str = self.mock_match_method_select.read(cx).selected_value().cloned().unwrap_or_else(|| "不限制".to_string());
+                    let match_method = if selected_method_str == "不限制" {
+                        None
+                    } else {
+                        RequestMethod::parse(&selected_method_str)
+                    };
+                    let selected_pattern_str = self.mock_path_pattern_select.read(cx).selected_value().cloned().unwrap_or_else(|| "精确".to_string());
+                    let match_path_str = self.mock_match_path_input.read(cx).value().to_string();
+                    let match_path = match selected_pattern_str.as_str() {
+                        "前缀" => crate::state::models::PathPattern::Prefix(match_path_str),
+                        "正则" => crate::state::models::PathPattern::Regex(match_path_str),
+                        _ => crate::state::models::PathPattern::Exact(match_path_str),
+                    };
+                    let match_query = kv_table::pairs_from_rows(&self.mock_match_query_rows, cx);
+                    let match_headers = kv_table::pairs_from_rows(&self.mock_match_header_rows, cx);
+                    let mock_rule = crate::state::models::MockRule {
+                        enabled: self.mock_enabled,
+                        status: mock_status,
+                        headers: mock_headers,
+                        body: mock_body,
+                        delay_ms: mock_delay,
+                        match_method,
+                        match_path,
+                        match_query,
+                        match_headers,
+                        enable_templates: self.mock_enable_templates,
+                    };
+                    req.mock = Some(mock_rule);
                 }
             }
             s.dirty = true;
@@ -791,8 +941,12 @@ impl RequestPanel {
             env.iter().map(|kv| kv.key.clone()).collect::<Vec<_>>()
         );
         let req_vars = req.variables.clone();
+        // System variables: mock_server address (local/remote based on config)
+        let mut system = BTreeMap::new();
+        let remote_cfg = crate::state::persistence::load_remote_config();
+        system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
         let mut map =
-            crate::state::models::effective_variables(&global, &env, &folder_vars, &req_vars);
+            crate::state::models::effective_variables(&system, &global, &env, &folder_vars, &req_vars);
         log::info!(
             "EFFECTIVE_VARS: final map keys={:?}",
             map.keys().collect::<Vec<_>>()
@@ -995,7 +1149,12 @@ impl RequestPanel {
                 .flatten()
                 .cloned()
                 .collect();
+            // System variables: mock_server address
+            let mut system = BTreeMap::new();
+            let remote_cfg = crate::state::persistence::load_remote_config();
+            system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
             let mut vars = crate::state::models::effective_variables(
+                &system,
                 &project.global_variables,
                 project.active_env_variables(),
                 &folder_vars,
@@ -2326,7 +2485,7 @@ fn tab_label(
 }
 
 impl RequestPanel {
-    fn render_active_tab(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         match self.active_tab {
             ReqTab::Headers => self
@@ -2545,17 +2704,7 @@ impl RequestPanel {
                 )
                 .into_any_element(),
             ReqTab::Mock => {
-                v_flex()
-                    .size_full()
-                    .p_3()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Mock 规则：开启后本地 Mock 服务将按方法/路径/查询/请求头匹配并返回自定义响应。详细编辑（匹配条件、动态模板、一键生成）将在下一版本提供。"),
-                    )
-                    .into_any_element()
+                self.render_mock_tab(&theme, cx)
             }
             ReqTab::Curl => {
                 let curl = self.generate_curl(cx);
@@ -2614,6 +2763,463 @@ impl RequestPanel {
                     .into_any_element()
             }
         }
+    }
+
+    /// Render the Mock configuration tab.
+    fn render_mock_tab(
+        &mut self,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = theme.clone();
+
+        // 如果没有选中任何接口，显示全局引导页面
+        if self.request_id.is_none() {
+            return v_flex()
+                .size_full()
+                .p_6()
+                .gap_4()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(24.))
+                        .child("🧪")
+                )
+                .child(
+                    div()
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Mock 服务")
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(theme.muted_foreground)
+                        .text_center()
+                        .max_w(px(400.))
+                        .child("本地运行的接口模拟服务，支持自定义状态码、延迟、响应内容，帮助你快速开发和测试异常场景。")
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .p_4()
+                        .w(px(400.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.muted)
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("快速开始")
+                        )
+                        .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("1. 在左侧接口树中选择一个接口"))
+                        .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("2. 开启Mock开关，配置状态码、延迟、响应体"))
+                        .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("3. 直接在URL中使用 {{mock_server}}/api/path，系统会自动替换为当前Mock服务地址（本地/远程）"))
+                        .child(div().text_size(px(12.)).text_color(theme.muted_foreground).child("💡 点击左侧活动栏的Mock图标，可以一键为所有接口生成规则、批量模拟异常场景"))
+                )
+                .into_any_element();
+        }
+
+        let enabled = self.mock_enabled;
+        let ent = cx.entity();
+        let ent_toggle = ent.clone();
+        let ent_copy = ent.clone();
+        let ent_del1 = ent.clone();
+        let ent_add1 = ent.clone();
+        let ent_del2 = ent.clone();
+        let ent_add2 = ent.clone();
+        let ent_del3 = ent.clone();
+        let ent_add3 = ent.clone();
+        let ent_template = ent.clone();
+        let remote_cfg = crate::state::persistence::load_remote_config();
+        let copy_url = crate::share::remote::mock_server_url(&remote_cfg);
+        let is_remote = crate::share::remote::is_cloud_mode(&remote_cfg);
+
+        v_flex()
+            .size_full()
+            .gap_3()
+            .p_2()
+            // 全局Mock引导卡片
+            .child(
+                v_flex()
+                    .w_full()
+                    .p_3()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.primary.opacity(0.3))
+                    .bg(theme.primary.opacity(0.05))
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("💡 Mock 服务使用指南")
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(if is_remote {
+                                format!("当前使用远程Mock服务：{}，开启规则后，你可以：", copy_url)
+                            } else {
+                                format!("本地Mock服务运行在 {}，开启规则后，你可以：", copy_url)
+                            })
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .px_2()
+                            .child(div().text_size(px(12.)).child("1. 将前端/测试用例的API基础地址替换为上面的服务地址"))
+                            .child(div().text_size(px(12.)).child("2. 配置状态码、延迟、响应体模拟各种异常场景"))
+                            .child(div().text_size(px(12.)).child("3. 在左侧Mock活动栏可以一键生成所有规则、批量切换异常场景"))
+                    )
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("mock-enable-toggle")
+                                    .w(px(36.))
+                                    .h(px(20.))
+                                    .rounded(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .px(px(2.))
+                                    .cursor_pointer()
+                                    .when(enabled, |d| d.bg(theme.primary).justify_end())
+                                    .when(!enabled, |d| d.bg(theme.muted_foreground.opacity(0.4)).justify_start())
+                                    .child(
+                                        div()
+                                            .w(px(16.))
+                                            .h(px(16.))
+                                            .rounded_full()
+                                            .bg(theme.background),
+                                    )
+                                    .on_click(move |_, _w, cx: &mut App| {
+                                        let _ = ent_toggle.update(cx, |this, cx| {
+                                            this.mock_enabled = !this.mock_enabled;
+                                            this.commit_to_model(cx);
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("启用 Mock"),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child("服务地址:"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .child(copy_url.clone()),
+                            )
+                            .child(
+                                Button::new("copy-mock-url")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Copy)
+                                    .tooltip("复制服务地址")
+                                    .on_click(move |_, window, cx: &mut App| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_url.clone()));
+                                        window.push_notification(
+                                            gpui_component::notification::Notification::new()
+                                                .title("已复制")
+                                                .message("Mock服务地址已复制到剪贴板")
+                                                .autohide(true),
+                                            cx,
+                                        );
+                                    }),
+                            ),
+                    ),
+            )
+            .when(enabled, |c| {
+                c.child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .w(px(120.))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("响应状态码"),
+                                        )
+                                        .child(Input::new(&self.mock_status_input).small()),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .w(px(120.))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("响应延迟(ms)"),
+                                        )
+                                        .child(Input::new(&self.mock_delay_input).small()),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .w(px(160.))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("匹配方法"),
+                                        )
+                                        .child(Select::new(&self.mock_match_method_select).small().appearance(true)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("路径匹配模式"),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .w(px(100.))
+                                                        .child(Select::new(&self.mock_path_pattern_select).small().appearance(true)),
+                                                )
+                                                .child(Input::new(&self.mock_match_path_input).small().flex_1()),
+                                        ),
+                                ),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(theme.border))
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("响应头"),
+                                )
+                                .child(
+                                    crate::ui::kv_table::KvTable::new(
+                                        "mock-headers",
+                                        self.mock_headers_rows.clone(),
+                                        crate::ui::kv_table::KvHandlers {
+                                            on_toggle: Arc::new(|_, _, _, _| {}),
+                                            on_delete: Arc::new(move |i, _, cx| {
+                                                let _ = ent_del1.update(cx, |this, cx| {
+                                                    this.mock_headers_rows.remove(i);
+                                                    this.commit_to_model(cx);
+                                                    cx.notify();
+                                                });
+                                            }),
+                                            on_add: Arc::new(move |window, cx| {
+                                                let _ = ent_add1.update(cx, |this, cx| {
+                                                    this.mock_headers_rows.push(KvRow::empty(window, cx));
+                                                    this.commit_to_model(cx);
+                                                    cx.notify();
+                                                });
+                                            }),
+                                            on_type_change: Arc::new(|_, _, _, _| {}),
+                                            on_required_toggle: Arc::new(|_, _, _, _| {}),
+                                            on_file_pick: Arc::new(|_, _, _| {}),
+                                        },
+                                    )
+                                ),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(theme.border))
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .flex_1()
+                                .min_h_0()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("响应体"),
+                                )
+                                .child(
+                                    Input::new(&self.mock_body_editor)
+                                        .flex_1()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_size(theme.mono_font_size),
+                                ),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(theme.border))
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id("mock-template-toggle")
+                                                .w(px(28.))
+                                                .h(px(16.))
+                                                .rounded(px(8.))
+                                                .flex()
+                                                .items_center()
+                                                .px(px(2.))
+                                                .cursor_pointer()
+                                                .when(self.mock_enable_templates, |d| d.bg(theme.primary).justify_end())
+                                                .when(!self.mock_enable_templates, |d| d.bg(theme.muted_foreground.opacity(0.4)).justify_start())
+                                                .child(
+                                                    div()
+                                                        .w(px(12.))
+                                                        .h(px(12.))
+                                                        .rounded_full()
+                                                        .bg(theme.background),
+                                                )
+                                                .on_click(move |_, _w, cx: &mut App| {
+                                                    let _ = ent_template.update(cx, |this, cx| {
+                                                        this.mock_enable_templates = !this.mock_enable_templates;
+                                                        this.commit_to_model(cx);
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(13.))
+                                                .child("启用动态模板"),
+                                        ),
+                                )
+                                .when(self.mock_enable_templates, |c| {
+                                    c.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child("可用变量: {{mock.request.path}} · {{mock.request.method}} · {{mock.request.query.参数名}} · {{mock.request.header.请求头名}}"),
+                                    )
+                                }),
+                        )
+                        .child(div().h(px(1.)).w_full().bg(theme.border))
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("高级匹配条件（可选）"),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("必须匹配的查询参数"),
+                                        )
+                                        .child(
+                                            crate::ui::kv_table::KvTable::new(
+                                                "mock-match-query",
+                                                self.mock_match_query_rows.clone(),
+                                                crate::ui::kv_table::KvHandlers {
+                                                    on_toggle: Arc::new(|_, _, _, _| {}),
+                                                    on_delete: Arc::new(move |i, _, cx| {
+                                                        let _ = ent_del2.update(cx, |this, cx| {
+                                                            this.mock_match_query_rows.remove(i);
+                                                            this.commit_to_model(cx);
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                                    on_add: Arc::new(move |window, cx| {
+                                                        let _ = ent_add2.update(cx, |this, cx| {
+                                                            this.mock_match_query_rows.push(KvRow::empty(window, cx));
+                                                            this.commit_to_model(cx);
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                                    on_type_change: Arc::new(|_, _, _, _| {}),
+                                                    on_required_toggle: Arc::new(|_, _, _, _| {}),
+                                                    on_file_pick: Arc::new(|_, _, _| {}),
+                                                },
+                                            )
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child("必须匹配的请求头"),
+                                        )
+                                        .child(
+                                            crate::ui::kv_table::KvTable::new(
+                                                "mock-match-headers",
+                                                self.mock_match_header_rows.clone(),
+                                                crate::ui::kv_table::KvHandlers {
+                                                    on_toggle: Arc::new(|_, _, _, _| {}),
+                                                    on_delete: Arc::new(move |i, _, cx| {
+                                                        let _ = ent_del3.update(cx, |this, cx| {
+                                                            this.mock_match_header_rows.remove(i);
+                                                            this.commit_to_model(cx);
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                                    on_add: Arc::new(move |window, cx| {
+                                                        let _ = ent_add3.update(cx, |this, cx| {
+                                                            this.mock_match_header_rows.push(KvRow::empty(window, cx));
+                                                            this.commit_to_model(cx);
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                                    on_type_change: Arc::new(|_, _, _, _| {}),
+                                                    on_required_toggle: Arc::new(|_, _, _, _| {}),
+                                                    on_file_pick: Arc::new(|_, _, _| {}),
+                                                },
+                                            )
+                                        ),
+                                ),
+                        ),
+                )
+            })
+            .when(!enabled, |c| {
+                c.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("💡 开启后，本地Mock服务会按照上方配置返回模拟响应，支持自定义状态码、延迟、响应内容，方便你测试前端异常处理逻辑。"),
+                )
+            })
+            .into_any_element()
     }
 
     /// Render the 认证 (Auth) tab: a type selector + per-type inputs.

@@ -27,6 +27,7 @@ use crate::share::models::{ShareConfig, ShareScope};
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
 use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
+use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::hosts_panel::HostsPanel;
 use crate::ui::notes_panel::NotesPanel;
 use crate::ui::project_manage_panel::ProjectManagePanel;
@@ -50,6 +51,8 @@ pub struct VerveApp {
     pub request: Entity<RequestPanel>,
     pub response: Entity<ResponsePanel>,
     pub console: Entity<ConsolePanel>,
+    /// Mock service console panel.
+    pub mock_console: Entity<MockConsolePanel>,
     /// Git version-control state (gix/gitoxide-backed).
     pub git: Entity<GitState>,
     /// Project-management sidebar panel (Git status / history / branches).
@@ -335,6 +338,7 @@ impl VerveApp {
         let request = cx.new(|cx| RequestPanel::new(state.clone(), window, cx));
         let response = cx.new(|cx| ResponsePanel::new(state.clone(), window, cx));
         let console = cx.new(|cx| ConsolePanel::new(state.clone(), cx));
+        let mock_console = cx.new(|cx| MockConsolePanel::new(state.clone(), cx));
 
         // Environment switcher.
         let env_names: Vec<String> = state
@@ -454,7 +458,24 @@ impl VerveApp {
         let active_ws_id = crate::state::persistence::load_workspaces_index().active;
         let tenant_id = remote_cfg.multi_tenant.then(|| active_ws_id.clone().unwrap_or_default());
         let share_configs = server::config_store(crate::share::persist::load_shares());
-        let share_server = if remote_cfg.enabled || share_configs.read().map(|c| !c.is_empty()).unwrap_or(false) {
+
+        // Build initial mock rules from active project.
+        let initial_mock: Vec<crate::mock::RuleEntry> = state.read(cx)
+            .active_project()
+            .map(|p| {
+                std::sync::Arc::try_unwrap(crate::mock::rule_map(p))
+                    .unwrap_or_else(|arc| (*arc).clone())
+            })
+            .unwrap_or_default();
+        let mock_shared = crate::mock::shared_rules(initial_mock);
+        let mock_shared_for_state = mock_shared.clone();
+        state.update(cx, move |s, _| {
+            s.mock_rules = Some(mock_shared_for_state);
+        });
+
+        // Only start local server when not in pure cloud/remote mode (public_host configured).
+        let is_cloud_mode = crate::share::remote::is_cloud_mode(&remote_cfg);
+        let share_server = if !is_cloud_mode {
             Some(server::start_desktop_with_config(
                 remote_cfg.host.clone(),
                 remote_cfg.port,
@@ -465,6 +486,7 @@ impl VerveApp {
                     let data = crate::state::persistence::load_or_default();
                     data.projects.iter().find(|p| p.id == project_id).cloned()
                 },
+                Some(mock_shared),
             ))
         } else {
             None
@@ -476,6 +498,7 @@ impl VerveApp {
             request,
             response,
             console,
+            mock_console,
             git,
             project_manage,
             share,
@@ -759,6 +782,34 @@ impl VerveApp {
             },
         );
 
+        // Subscribe to mock console events (GenerateAll).
+        let mock_console_handle = app.mock_console.clone();
+        let sub_mock = cx.subscribe(
+            &mock_console_handle,
+            |this, _src, ev: &MockConsoleEvent, cx| match ev {
+                MockConsoleEvent::GenerateAll => {
+                    this.generate_mocks(cx);
+                }
+            },
+        );
+
+        // Subscribe to tree events (share request).
+        let tree_handle = app.tree.clone();
+        let sub_tree = cx.subscribe(
+            &tree_handle,
+            |this, _src, ev: &crate::ui::project_tree_panel::TreeEvent, _cx| {
+                match ev {
+                    crate::ui::project_tree_panel::TreeEvent::ShareRequest(id, name) => {
+                        this.pending_share = Some((
+                            crate::share::models::ShareScope::Request,
+                            Some(id.clone()),
+                            Some(name.clone()),
+                        ));
+                    }
+                }
+            },
+        );
+
         app._subs = vec![
             sub_edited,
             sub_env,
@@ -767,6 +818,8 @@ impl VerveApp {
             sub_manage,
             sub_share,
             sub_console,
+            sub_mock,
+            sub_tree,
         ];
 
         // Silent startup update check: query GitHub for the latest release
@@ -1449,6 +1502,26 @@ impl VerveApp {
             app.notify_workspace(cx);
         });
         log::info!("mock: generated defaults for {total} request(s)");
+
+        // Show friendly success notification with next steps.
+        let remote_cfg = crate::state::persistence::load_remote_config();
+        let mock_url = crate::share::remote::mock_server_url(&remote_cfg);
+        let total_copy = total;
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |_this, window, cx| {
+                window.push_notification(
+                    gpui_component::notification::Notification::new()
+                        .title("Mock 规则生成成功")
+                        .message(format!(
+                            "✅ 已为 {} 个接口生成默认Mock规则\n\n👉 下一步：在URL中使用 {{{{mock_server}}}} 变量，或直接将API基础地址替换为 {} 即可调用\n📝 可在接口详情的Mock标签页自定义状态码/延迟/响应体",
+                            total_copy, mock_url
+                        ))
+                        .autohide(false),
+                    cx,
+                );
+            });
+        })
+        .detach();
     }
 
     /// Export the active project to a chosen file (Markdown or JSON).
@@ -1710,36 +1783,8 @@ impl Render for VerveApp {
         if self.active_view != self.home_view && self.hidden_rails.contains(self.active_view.name()) {
             self.active_view = self.home_view;
         }
-        // Lazily start the share server when the first share config appears
-        // (created via the share dialog). The configs store is shared mutably,
-        // so a running server picks up new/updated configs automatically — this
-        // only starts the TCP listener once.
-        if self.share_server.is_none() {
-            let has_shares = self
-                .share_configs
-                .read()
-                .map(|g| !g.is_empty())
-                .unwrap_or(false);
-            if has_shares {
-                let configs = self.share_configs.clone();
-                let remote_cfg = crate::state::persistence::load_remote_config();
-                let tenant_id = remote_cfg.multi_tenant.then(|| {
-                    self.active_workspace_id_cache.clone().unwrap_or_default()
-                });
-                self.share_server = Some(server::start_desktop_with_config(
-                    remote_cfg.host.clone(),
-                    remote_cfg.port,
-                    remote_cfg.auth_token.clone(),
-                    tenant_id,
-                    configs,
-                    |project_id| {
-                        let data = crate::state::persistence::load_or_default();
-                        data.projects.iter().find(|p| p.id == project_id).cloned()
-                    },
-                ));
-                log::info!("share server started lazily on {}:{}", remote_cfg.host, remote_cfg.port);
-            }
-        }
+        // Note: unified share+mock server is started eagerly in constructor for local mode,
+        // no lazy start needed anymore.
         if self.pending_switcher_refresh {
             self.pending_switcher_refresh = false;
             self.refresh_switchers(_window, cx);
@@ -1910,9 +1955,9 @@ impl Render for VerveApp {
         // default, or the history list for the History view. ProjectManage is
         // NOT handled here — it takes over the whole body (see below).
         let side_left: gpui::AnyElement = match self.active_view {
-            SideView::Api | SideView::Mock => tree.into_any_element(),
+            SideView::Api => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor => {
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor | SideView::Mock => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -1984,7 +2029,7 @@ impl Render for VerveApp {
         // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor
+            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor | SideView::Mock
         );
 
         v_flex()
@@ -2018,6 +2063,7 @@ impl Render for VerveApp {
                             SideView::Notes => self.notes.clone().into_any_element(),
                             SideView::JsonFormat => self.json.clone().into_any_element(),
                             SideView::PdfEditor => self.pdf.clone().into_any_element(),
+                            SideView::Mock => self.mock_console.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
                         body.child(
@@ -2754,7 +2800,7 @@ impl VerveApp {
                     .ghost()
                     .small()
                     .icon(vicon(SHARE))
-                    .tooltip("分享当前项目文档")
+                    .tooltip("分享API文档")
                     .on_click(cx.listener(
                         |this, _ev, window, cx| {
                             this.open_share_dialog(

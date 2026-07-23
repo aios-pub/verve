@@ -25,6 +25,7 @@ pub const PREFIX: &str = "icons/verve/";
 
 pub const SHARE: &str = "icons/verve/share-2.svg";
 pub const DOCS: &str = "icons/verve/file-text.svg";
+pub const LOCATE: &str = "icons/verve/locate-fixed.svg";
 pub const HISTORY: &str = "icons/verve/history.svg";
 pub const BRACES: &str = "icons/verve/braces.svg";
 pub const KANBAN: &str = "icons/verve/kanban.svg";

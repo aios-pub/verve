@@ -11,6 +11,7 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::WindowExt as _;
+use gpui_component::Icon;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
@@ -2102,7 +2103,7 @@ impl Render for RequestPanel {
                             Button::new("locate")
                                 .ghost()
                                 .xsmall()
-                                .icon(IconName::Search)
+                                .icon(Icon::from(IconName::Redo).path(crate::assets::LOCATE))
                                 .tooltip("在树中定位")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.state.update(cx, |_, cx| {
@@ -2117,7 +2118,7 @@ impl Render for RequestPanel {
                             Button::new("share-request")
                                 .ghost()
                                 .xsmall()
-                                .icon(IconName::BookOpen)
+                                .icon(Icon::from(IconName::Redo).path(crate::assets::SHARE))
                                 .tooltip("分享当前接口文档")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(id) = this.request_id.clone() {

@@ -2030,11 +2030,111 @@ impl Render for RequestPanel {
 
         let active_tab = self.active_tab;
 
+        // Read open tabs for the tab bar.
+        let open_tabs: Vec<(String, String, RequestMethod)> = {
+            let st = self.state.read(cx);
+            st.open_request_ids
+                .iter()
+                .filter_map(|id| {
+                    st.active_project()
+                        .and_then(|p| p.find_request(id))
+                        .map(|(_, r)| (r.id.clone(), r.name.clone(), r.method))
+                })
+                .collect()
+        };
+        let active_tab_id = self.state.read(cx).active_tab_id.clone();
+        let has_tabs = !open_tabs.is_empty();
+
         v_flex()
             .size_full()
             .min_h_0()
             .overflow_hidden()
             .bg(theme.background)
+            // Open-tabs bar: always visible when any tabs are open (Apifox-style).
+            .when(has_tabs, |this| {
+                this.child(
+                    h_flex()
+                        .id("request-tab-bar")
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(2.))
+                        .px(px(6.))
+                        .py(px(4.))
+                        .h(px(34.))
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .bg(theme.tab_bar)
+                        .children(open_tabs.iter().enumerate().map(|(i, (id, name, method))| {
+                            let is_active = active_tab_id.as_deref() == Some(id);
+                            let method_color = crate::ui::method_colors::badge_color(*method, cx);
+                            let method_label = method.badge_label();
+                            let display_name = if name.chars().count() > 14 {
+                                let truncated: String = name.chars().take(14).collect();
+                                format!("{}…", truncated)
+                            } else {
+                                name.clone()
+                            };
+                            let id_focus = id.clone();
+                            let id_close = id.clone();
+                            let panel_entity = cx.entity();
+                            h_flex()
+                                .id(("req-tab", i))
+                                .items_center()
+                                .gap(px(6.))
+                                .px(px(8.))
+                                .py(px(3.))
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .when(is_active, |d| {
+                                    d.bg(theme.background)
+                                        .border_1()
+                                        .border_color(theme.border)
+                                })
+                                .when(!is_active, |d| {
+                                    d.text_color(theme.muted_foreground)
+                                        .hover(|s| s.bg(theme.accent.opacity(0.15)))
+                                })
+                                // Colored method badge.
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(method_color)
+                                        .child(method_label),
+                                )
+                                // Tab name.
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .when(is_active, |d| d.text_color(theme.foreground))
+                                        .child(display_name),
+                                )
+                                // Close button.
+                                .child(
+                                    Button::new(("req-tab-close", i))
+                                        .ghost()
+                                        .xsmall()
+                                        .label("×")
+                                        .text_size(px(14.))
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            let id_close_clone = id_close.clone();
+                                            let _ = panel_entity.update(cx, move |this, cx| {
+                                                this.state.update(cx, |s, cx| {
+                                                    s.close_tab(&id_close_clone, cx);
+                                                });
+                                                cx.notify();
+                                            });
+                                        })),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    // Click on the tab body (not close button) focuses it.
+                                    this.state.update(cx, |s, cx| {
+                                        s.set_active_tab(&id_focus, cx);
+                                    });
+                                }))
+                        })),
+                )
+            })
             // Folder detail view takes over the whole center column.
             .when(has_folder, |this| this.child(self.render_folder_detail(cx)))
             .when(!has_request && !has_folder, |this| {
@@ -2367,15 +2467,24 @@ impl Render for RequestPanel {
                                 })),
                         ),
                 )
-                .child(
+                .child({
+                    // Compute non-empty row counts for count badges.
+                    let hdr_count = self.headers_rows.iter().filter(|r| r.has_content(cx)).count();
+                    let qry_count = self.params_rows.iter().filter(|r| r.has_content(cx)).count();
+                    let path_count = self.path_rows.iter().filter(|r| r.has_content(cx)).count();
+                    let body_count = if self.body_type != BodyType::None { 1 } else { 0 };
+                    let auth_count = if self.auth_type != AuthType::None { 1 } else { 0 };
+                    let cookie_count = self.cookie_rows.iter().filter(|r| r.has_content(cx)).count();
                     // Tab strip
                     h_flex()
                         .px_3()
+                        .py(px(4.))
                         .gap_1()
                         .border_b_1()
                         .border_color(theme.border)
                         .child(tab_label(
                             "Header",
+                            Some(hdr_count),
                             active_tab == ReqTab::Headers,
                             ReqTab::Headers,
                             &theme,
@@ -2383,6 +2492,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Query",
+                            Some(qry_count),
                             active_tab == ReqTab::Query,
                             ReqTab::Query,
                             &theme,
@@ -2390,6 +2500,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Path",
+                            Some(path_count),
                             active_tab == ReqTab::Path,
                             ReqTab::Path,
                             &theme,
@@ -2397,6 +2508,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Body",
+                            Some(body_count),
                             active_tab == ReqTab::Body,
                             ReqTab::Body,
                             &theme,
@@ -2404,6 +2516,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "认证",
+                            Some(auth_count),
                             active_tab == ReqTab::Auth,
                             ReqTab::Auth,
                             &theme,
@@ -2411,6 +2524,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Cookie",
+                            Some(cookie_count),
                             active_tab == ReqTab::Cookie,
                             ReqTab::Cookie,
                             &theme,
@@ -2418,6 +2532,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "预执行操作",
+                            None,
                             active_tab == ReqTab::PreRequest,
                             ReqTab::PreRequest,
                             &theme,
@@ -2425,6 +2540,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "后执行操作",
+                            None,
                             active_tab == ReqTab::PostRequest,
                             ReqTab::PostRequest,
                             &theme,
@@ -2432,6 +2548,7 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Curl",
+                            None,
                             active_tab == ReqTab::Curl,
                             ReqTab::Curl,
                             &theme,
@@ -2439,12 +2556,13 @@ impl Render for RequestPanel {
                         ))
                         .child(tab_label(
                             "Mock",
+                            None,
                             active_tab == ReqTab::Mock,
                             ReqTab::Mock,
                             &theme,
                             cx,
-                        )),
-                )
+                        ))
+                })
                 .child(
                     div()
                         .flex_1()
@@ -2456,29 +2574,60 @@ impl Render for RequestPanel {
     }
 }
 
-/// Build a clickable tab label.
+/// Build a clickable tab label with an optional count badge.
 fn tab_label(
     label: &'static str,
+    count: Option<usize>,
     is_active: bool,
     tab: ReqTab,
     theme: &gpui_component::Theme,
     cx: &mut Context<RequestPanel>,
 ) -> impl IntoElement {
+    let has_count = count.map(|c| c > 0).unwrap_or(false);
     div()
         .id(label.to_string())
-        .px_3()
-        .py_2()
+        .px_2()
+        .py_1p5()
+        .rounded_sm()
+        .gap_1()
         .text_sm()
+        .items_center()
         .text_color(if is_active {
-            theme.foreground
+            theme.primary
         } else {
             theme.muted_foreground
         })
         .when(is_active, |this| {
-            this.border_b_2().border_color(theme.primary)
+            this.font_weight(FontWeight::SEMIBOLD)
+                .bg(theme.accent.opacity(0.15))
         })
-        .hover(|this| this.bg(theme.accent.opacity(0.5)))
-        .child(label.to_string())
+        .when(!is_active, |this| this.hover(|s| s.bg(theme.accent.opacity(0.1))))
+        .child(
+            h_flex()
+                .items_center()
+                .gap_1()
+                .child(label.to_string())
+                .when(has_count, |c| {
+                    c.child(
+                        div()
+                            .text_size(px(10.))
+                            .px(px(4.))
+                            .py(px(0.))
+                            .rounded_full()
+                            .bg(if is_active {
+                                theme.primary.opacity(0.2)
+                            } else {
+                                theme.muted
+                            })
+                            .text_color(if is_active {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .child(count.unwrap().to_string()),
+                    )
+                }),
+        )
         .on_click(cx.listener(move |this, _, _, cx| {
             this.active_tab = tab;
             cx.notify();
@@ -4006,9 +4155,7 @@ impl RequestPanel {
                                         .on_click(move |_, _window, cx: &mut App| {
                                             let _ = view.update(cx, |this, cx| {
                                                 this.state.update(cx, |s, cx| {
-                                                    s.selected_folder = None;
-                                                    s.selected_request = Some(id_for_open.clone());
-                                                    cx.emit(crate::state::AppEvent::SelectionChanged);
+                                                    s.open_or_focus_tab(&id_for_open, cx);
                                                 });
                                             });
                                         });

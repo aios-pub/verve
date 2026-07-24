@@ -667,6 +667,8 @@ impl VerveApp {
                                 s.data.active_project_id = s.data.projects.get(idx).map(|p| p.id.clone());
                                 s.selected_request = None;
                                 s.selected_folder = None;
+                                s.open_request_ids.clear();
+                                s.active_tab_id = None;
                                 cx.emit(AppEvent::WorkspaceChanged);
                                 cx.emit(AppEvent::SelectionChanged);
                             }
@@ -751,6 +753,8 @@ impl VerveApp {
                                 s.active_project = idx;
                                 s.selected_request = None;
                                 s.selected_folder = None;
+                                s.open_request_ids.clear();
+                                s.active_tab_id = None;
                                 cx.emit(AppEvent::WorkspaceChanged);
                             });
                         }
@@ -765,10 +769,9 @@ impl VerveApp {
                         .unwrap_or(false);
                     if exists {
                         this.active_view = SideView::Api;
+                        let req_id_emit = req_id.clone();
                         this.state.update(cx, |s, cx| {
-                            s.selected_request = Some(req_id.clone());
-                            s.selected_folder = None;
-                            cx.emit(AppEvent::SelectionChanged);
+                            s.open_or_focus_tab(&req_id_emit, cx);
                             cx.emit(AppEvent::LocateActive);
                         });
                         // Collapse the bottom dock so the request/response is visible.
@@ -971,6 +974,8 @@ impl VerveApp {
                                     s.active_project = s.data.projects.len() - 1;
                                     s.selected_request = None;
                                     s.selected_folder = None;
+                                    s.open_request_ids.clear();
+                                    s.active_tab_id = None;
                                     s.notify_workspace(cx);
                                 });
                             }
@@ -1330,6 +1335,8 @@ impl VerveApp {
                                                                     }
                                                                     s.selected_request = None;
                                                                     s.selected_folder = None;
+                                                                    s.open_request_ids.clear();
+                                                                    s.active_tab_id = None;
                                                                     s.notify_workspace(cx);
                                                                 }
                                                             });
@@ -1403,6 +1410,8 @@ impl VerveApp {
                                     }
                                     s.selected_request = None;
                                     s.selected_folder = None;
+                                    s.open_request_ids.clear();
+                                    s.active_tab_id = None;
                                     s.notify_workspace(cx);
                                 }
                             });
@@ -2760,6 +2769,8 @@ impl VerveApp {
                                                             s.data.active_project_id = s.data.projects.get(idx).map(|p| p.id.clone());
                                                             s.selected_request = None;
                                                             s.selected_folder = None;
+                                                            s.open_request_ids.clear();
+                                                            s.active_tab_id = None;
                                                             cx.emit(AppEvent::WorkspaceChanged);
                                                             cx.emit(AppEvent::SelectionChanged);
                                                         }

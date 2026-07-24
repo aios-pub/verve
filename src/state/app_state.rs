@@ -50,6 +50,10 @@ pub struct AppState {
     /// Mutually exclusive with `selected_request` (clicking a request clears
     /// this, and vice-versa).
     pub selected_folder: Option<String>,
+    /// Ordered list of request ids currently open as editor tabs.
+    pub open_request_ids: Vec<String>,
+    /// Which open tab is currently focused (the one loaded into the editor).
+    pub active_tab_id: Option<String>,
     /// Pending request id that is currently sending (drives the Send button spinner).
     pub sending: Option<String>,
     /// Dirty flag; cleared on persist.
@@ -85,6 +89,8 @@ impl AppState {
             active_workspace_id,
             selected_request: None,
             selected_folder: None,
+            open_request_ids: Vec::new(),
+            active_tab_id: None,
             sending: None,
             dirty: false,
             save_timer: None,
@@ -108,6 +114,57 @@ impl AppState {
         self.data.projects.get_mut(self.active_project)
     }
 
+    /// Open a request as a tab: if already open, focus it; otherwise append.
+    /// Keeps `selected_request` in sync with the active tab for backward
+    /// compatibility (response panel, console, stress test, etc. all read it).
+    pub fn open_or_focus_tab(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.selected_folder = None;
+        let is_new = !self.open_request_ids.contains(&id.to_string());
+        if is_new {
+            self.open_request_ids.push(id.to_string());
+        }
+        let already_active = self.active_tab_id.as_deref() == Some(id);
+        self.active_tab_id = Some(id.to_string());
+        self.selected_request = Some(id.to_string());
+        if is_new || !already_active {
+            cx.emit(AppEvent::SelectionChanged);
+        }
+    }
+
+    /// Close an open tab and activate a neighbor if it was the active one.
+    pub fn close_tab(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(pos) = self.open_request_ids.iter().position(|x| x == id) {
+            self.open_request_ids.remove(pos);
+            if self.active_tab_id.as_deref() == Some(id) {
+                // Switch to neighbor: previous if it exists, else next.
+                if pos > 0 {
+                    self.active_tab_id = self.open_request_ids.get(pos - 1).cloned();
+                } else {
+                    self.active_tab_id = self.open_request_ids.get(0).cloned();
+                }
+                self.selected_request = self.active_tab_id.clone();
+            }
+        }
+        // If no tabs remain, clear selection entirely.
+        if self.open_request_ids.is_empty() {
+            self.active_tab_id = None;
+            self.selected_request = None;
+        }
+        cx.emit(AppEvent::SelectionChanged);
+    }
+
+    /// Activate an already-open tab by id (does not add it if missing).
+    pub fn set_active_tab(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.open_request_ids.iter().any(|x| x == id) {
+            if self.active_tab_id.as_deref() != Some(id) {
+                self.active_tab_id = Some(id.to_string());
+                self.selected_request = Some(id.to_string());
+                self.selected_folder = None;
+                cx.emit(AppEvent::SelectionChanged);
+            }
+        }
+    }
+
     /// Reload `workspace.json` from disk into `self.data`, resetting selection.
     /// Called after a workspace branch switch (git checkout rewrites
     /// `workspace.json` to the target workspace's content).
@@ -121,6 +178,8 @@ impl AppState {
             .unwrap_or_else(|| self.data.projects.len().saturating_sub(1));
         self.selected_request = None;
         self.selected_folder = None;
+        self.open_request_ids.clear();
+        self.active_tab_id = None;
         self.sending = None;
         self.dirty = false;
     }

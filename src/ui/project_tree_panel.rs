@@ -140,9 +140,10 @@ impl ProjectTreePanel {
         let node = item.id.to_string();
         if let Some(req_id) = parse_request_id(&node) {
             let req_id = req_id.to_string();
-            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
-                self.on_select_request(req_id, cx);
-            }
+            // Always call on_select_request; open_or_focus_tab is idempotent:
+            // if the tab is already open and active it's a no-op, if open but
+            // not active it focuses, if not open it opens.
+            self.on_select_request(req_id, cx);
         } else if let Some(fid) = parse_folder_id(&node) {
             let fid = fid.to_string();
             if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
@@ -199,9 +200,7 @@ impl ProjectTreePanel {
 
     fn on_select_request(&mut self, request_id: String, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
-            s.selected_request = Some(request_id);
-            s.selected_folder = None;
-            cx.emit(AppEvent::SelectionChanged);
+            s.open_or_focus_tab(&request_id, cx);
         });
     }
 
@@ -211,6 +210,7 @@ impl ProjectTreePanel {
         self.state.update(cx, |s, cx| {
             s.selected_folder = Some(folder_id);
             s.selected_request = None;
+            s.active_tab_id = None;
             cx.emit(AppEvent::SelectionChanged);
         });
     }
@@ -1183,10 +1183,8 @@ fn picker_card(
                             None => project.requests.push(req),
                         }
                     }
-                    s.selected_request = Some(req_id);
-                    s.selected_folder = None;
                     s.notify_workspace(cx);
-                    cx.emit(AppEvent::SelectionChanged);
+                    s.open_or_focus_tab(&req_id, cx);
                 });
             }
             // Close the popover after creating the request.
@@ -1571,10 +1569,8 @@ impl ProjectTreePanel {
                     None => project.requests.push(req),
                 }
             }
-            s.selected_request = Some(req_id);
-            s.selected_folder = None;
             s.notify_workspace(cx);
-            cx.emit(AppEvent::SelectionChanged);
+            s.open_or_focus_tab(&req_id, cx);
         });
     }
 
@@ -1669,24 +1665,27 @@ impl ProjectTreePanel {
 
     pub fn delete_node(&mut self, node: String, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
-            let mut changed = false;
+            let mut needs_emit = false;
             if let Some(project) = s.active_project_mut() {
                 if let Some(id) = node.strip_prefix("request:") {
                     remove_request(&mut project.folders, &mut project.requests, id);
-                    if s.selected_request.as_deref() == Some(id) {
+                    // Remove the deleted request from open tabs and close the tab if active.
+                    if s.open_request_ids.iter().any(|x| x == id) {
+                        s.close_tab(id, cx); // close_tab emits SelectionChanged itself
+                    } else if s.selected_request.as_deref() == Some(id) {
                         s.selected_request = None;
-                        changed = true;
+                        needs_emit = true;
                     }
                 } else if let Some(id) = node.strip_prefix("folder:") {
                     remove_folder(&mut project.folders, id);
                     if s.selected_folder.as_deref() == Some(id) {
                         s.selected_folder = None;
-                        changed = true;
+                        needs_emit = true;
                     }
                 }
             }
             s.notify_workspace(cx);
-            if changed {
+            if needs_emit {
                 cx.emit(AppEvent::SelectionChanged);
             }
         });
@@ -1694,14 +1693,16 @@ impl ProjectTreePanel {
 
     pub fn duplicate_request(&mut self, id: String, cx: &mut Context<Self>) {
         self.state.update(cx, |s, cx| {
+            let mut opened: Option<String> = None;
             if let Some(project) = s.active_project_mut() {
                 if let Some(new_id) = duplicate_request_in_place(&mut project.folders, &mut project.requests, &id) {
-                    s.selected_request = Some(new_id);
-                    s.selected_folder = None;
-                    cx.emit(AppEvent::SelectionChanged);
+                    opened = Some(new_id);
                 }
             }
             s.notify_workspace(cx);
+            if let Some(new_id) = opened {
+                s.open_or_focus_tab(&new_id, cx);
+            }
         });
     }
 

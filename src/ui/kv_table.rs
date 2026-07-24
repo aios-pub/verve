@@ -81,6 +81,11 @@ impl KvRow {
             description: self.description.read(cx).value().to_string(),
         }
     }
+
+    /// Returns true if this row has a non-empty key (used for count badges).
+    pub fn has_content(&self, cx: &App) -> bool {
+        !self.key.read(cx).value().trim().is_empty()
+    }
 }
 
 /// Row-level callbacks bound by the owner with `cx.listener`. Each takes the

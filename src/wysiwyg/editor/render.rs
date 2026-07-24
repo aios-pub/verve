@@ -5,6 +5,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
+use gpui_component::Sizable as _;
+use gpui_component::button::ButtonVariants as _;
 
 use super::{Editor, InfoDialogKind, workspace::workspace_panel_width_for_viewport};
 use crate::wysiwyg::app_menu::dispatch_menu_action_for_editor;
@@ -2096,8 +2098,8 @@ impl Render for Editor {
             main_content.child(workspace_panel)
         } else if self.show_chrome {
             // Workspace drawer is closed but chrome is on (side-view mode):
-            // show a thin expand strip so the user can reopen the outline,
-            // mirroring the Notes panel's collapsed-list affordance.
+            // show a thin expand strip (same pattern as the Notes panel's
+            // collapsed-list strip) so the user can reopen the outline.
             main_content.child(
                 div()
                     .w(px(28.))
@@ -2107,30 +2109,16 @@ impl Render for Editor {
                     .border_color(theme.colors.separator_color)
                     .bg(theme.colors.editor_background.opacity(0.5))
                     .items_center()
-                    .justify_center()
                     .pt(px(8.))
                     .child(
-                        div()
-                            .id("editor-outline-expand")
-                            .w(px(28.))
-                            .h(px(28.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.colors.selection.opacity(0.3)))
-                            .child(
-                                div()
-                                    .text_size(px(16.))
-                                    .text_color(theme.colors.text_placeholder)
-                                    .child("☰"),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.toggle_workspace_drawer(window, cx);
-                                }),
-                            ),
+                        gpui_component::button::Button::new("editor-outline-expand")
+                            .ghost()
+                            .xsmall()
+                            .icon(gpui_component::IconName::PanelLeftOpen)
+                            .tooltip(strings.workspace_tab_outline.clone())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_workspace_drawer(window, cx);
+                            })),
                     ),
             )
         } else {

@@ -865,7 +865,28 @@ impl VerveApp {
         // bothering the user on every launch).
         app.startup_update_check(cx);
 
+        // Consume any .md files pending open (from argv or macOS "open file"
+        // events). Route them to the Markdown editor panel.
+        app.open_pending_markdown_files(cx);
+
         app
+    }
+
+    /// Drains the `PendingMarkdownFiles` global (set in main.rs from argv and
+    /// macOS open-file events) and opens each in the Markdown editor.
+    fn open_pending_markdown_files(&mut self, cx: &mut Context<Self>) {
+        let paths = cx
+            .try_global::<crate::PendingMarkdownFiles>()
+            .and_then(|g| g.0.lock().ok().map(|mut g| std::mem::take(&mut *g)))
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return;
+        }
+        self.active_view = SideView::MarkdownEditor;
+        for path in paths {
+            let _ = self.markdown.update(cx, |p, cx| p.open_path(&path, cx));
+        }
+        cx.notify();
     }
 }
 

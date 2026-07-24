@@ -13,6 +13,7 @@ use gpui::{img, *};
 use gpui_component::button::*;
 use gpui_component::*;
 
+use verve::PendingMarkdownFiles;
 use verve::assets::VerveAssets;
 use verve::state::persistence;
 use verve::ui::VerveApp;
@@ -30,8 +31,49 @@ fn main() {
 
     let app = gpui_platform::application().with_assets(VerveAssets::new());
 
+    // Collect .md file paths from argv (e.g. `verve path/to/note.md`).
+    let initial_md_files: Vec<std::path::PathBuf> = std::env::args()
+        .skip(1)
+        .filter(|a| {
+            let lower = a.to_ascii_lowercase();
+            lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
+        })
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    // Shared pending-files list: populated from argv at launch and from macOS
+    // "open file" events while running. Consumed by VerveApp.
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(initial_md_files.clone()))
+        as std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>;
+
+    // macOS "open file" (Finder double-click, drag onto dock icon): the OS
+    // delivers file:// URLs. Registered on the Application before run().
+    {
+        let pending = pending.clone();
+        app.on_open_urls(move |urls| {
+            for url in &urls {
+                if let Ok(parsed) = url::Url::parse(url) {
+                    if let Ok(path) = parsed.to_file_path() {
+                        let lower = path.to_string_lossy().to_ascii_lowercase();
+                        if lower.ends_with(".md")
+                            || lower.ends_with(".markdown")
+                            || lower.ends_with(".txt")
+                        {
+                            if let Ok(mut guard) = pending.lock() {
+                                guard.push(path);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     app.run(move |cx| {
         gpui_component::init(cx);
+
+        // Stash the pending-files global so VerveApp can consume it.
+        cx.set_global(PendingMarkdownFiles(pending.clone()));
 
         ui::themes::load_builtin_themes(cx);
         gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);

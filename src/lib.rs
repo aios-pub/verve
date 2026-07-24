@@ -5,6 +5,14 @@
 // `rust_i18n::set_locale("en")`.
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
+/// Shared list of .md file paths pending open in the Markdown editor.
+/// Populated from argv at launch (main.rs) and from macOS "open file" events
+/// (`cx.on_open_urls`). Consumed by `VerveApp::open_pending_markdown_files`.
+#[derive(Clone)]
+pub struct PendingMarkdownFiles(pub std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>);
+
+impl gpui::Global for PendingMarkdownFiles {}
+
 pub mod assets;
 pub mod autotest;
 pub mod docker;

@@ -34,7 +34,11 @@ impl Editor {
 
         let mut left_items: Vec<AnyElement> = Vec::new();
 
-        if prefs.show_sidebar_toggle {
+        // The sidebar (workspace drawer) toggle in the status bar is only shown
+        // when the editor owns its window (standalone). In the embedded
+        // side-view mode the host title bar provides its own outline toggle, so
+        // a second one here would be redundant.
+        if prefs.show_sidebar_toggle && self.owns_window {
             left_items.push(render_sidebar_toggle(
                 &mut self.status_bar,
                 self.workspace.is_open,

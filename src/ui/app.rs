@@ -5,17 +5,20 @@ use gpui::{img, *};
 
 // Actions for keybindings (PRD §6).
 actions!(verve, [SaveWorkspace, NewRequest]);
+use crate::assets::{
+    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
+    K8S as K8S_ICON, KANBAN, NOTEBOOK, REFRESH_CW, SERVER, SHARE,
+};
+use gpui_component::Size::Medium;
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     popover::Popover,
-    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
-    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-    WindowExt as _,
+    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
+    v_flex,
 };
-use gpui_component::Size::Medium;
-use crate::assets::{BRACES, BRACES_JSON, DOCS, DOCKER as DOCKER_ICON, EXPORT, FILE_PDF, HISTORY, K8S as K8S_ICON, KANBAN, IMPORT, NOTEBOOK, REFRESH_CW, SERVER, SHARE};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 fn vicon(path: &'static str) -> Icon {
@@ -26,24 +29,24 @@ use crate::git::GitState;
 use crate::share::models::{ShareConfig, ShareScope};
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
+use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
-use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
+use crate::ui::docker_panel::DockerPanel;
 use crate::ui::hosts_panel::HostsPanel;
+use crate::ui::json_panel::JsonPanel;
+use crate::ui::k8s_panel::{K8sPanel, View as K8sView};
+use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::notes_panel::NotesPanel;
+use crate::ui::pdf_panel::PdfPanel;
 use crate::ui::project_manage_panel::ProjectManagePanel;
 use crate::ui::project_tree_panel::ProjectTreePanel;
+use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::request_panel::RequestPanel;
 use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
-use crate::ui::autotest_panel::AutoTestPanel;
-use crate::ui::docker_panel::DockerPanel;
-use crate::ui::k8s_panel::{K8sPanel, View as K8sView};
-use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
-use crate::ui::json_panel::JsonPanel;
-use crate::ui::pdf_panel::PdfPanel;
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -402,7 +405,9 @@ impl VerveApp {
                 }
             }
             let cfg = crate::state::persistence::load_git_config();
-            let sync_minutes = cfg.sync_interval_minutes.unwrap_or(crate::state::persistence::DEFAULT_SYNC_INTERVAL_MINUTES);
+            let sync_minutes = cfg
+                .sync_interval_minutes
+                .unwrap_or(crate::state::persistence::DEFAULT_SYNC_INTERVAL_MINUTES);
             let has_remote = cfg.remote.is_some();
             git.update(cx, |g, cx| {
                 g.load_config(
@@ -420,7 +425,10 @@ impl VerveApp {
                 }
                 // Auto-sync on the configured interval: commit dirty changes +
                 // push/pull so work is versioned without manual intervention.
-                g.start_auto_sync(cx, std::time::Duration::from_secs((sync_minutes as u64) * 60));
+                g.start_auto_sync(
+                    cx,
+                    std::time::Duration::from_secs((sync_minutes as u64) * 60),
+                );
             });
         }
         // Reload workspace data from the now-correct branch.
@@ -456,11 +464,14 @@ impl VerveApp {
         });
         let share_port = remote_cfg.port;
         let active_ws_id = crate::state::persistence::load_workspaces_index().active;
-        let tenant_id = remote_cfg.multi_tenant.then(|| active_ws_id.clone().unwrap_or_default());
+        let tenant_id = remote_cfg
+            .multi_tenant
+            .then(|| active_ws_id.clone().unwrap_or_default());
         let share_configs = server::config_store(crate::share::persist::load_shares());
 
         // Build initial mock rules from active project.
-        let initial_mock: Vec<crate::mock::RuleEntry> = state.read(cx)
+        let initial_mock: Vec<crate::mock::RuleEntry> = state
+            .read(cx)
             .active_project()
             .map(|p| {
                 std::sync::Arc::try_unwrap(crate::mock::rule_map(p))
@@ -549,11 +560,13 @@ impl VerveApp {
             update_check_result: None,
             rail_order: {
                 let saved = crate::state::persistence::load_rail_order();
-                let default: Vec<String> = SideView::ALL.iter().map(|v| v.name().to_string()).collect();
+                let default: Vec<String> =
+                    SideView::ALL.iter().map(|v| v.name().to_string()).collect();
                 match saved {
                     None => default,
                     Some(mut order) => {
-                        let existing: std::collections::HashSet<_> = order.iter().cloned().collect();
+                        let existing: std::collections::HashSet<_> =
+                            order.iter().cloned().collect();
                         // Append new default items missing from saved order
                         for name in &default {
                             if !existing.contains(name) {
@@ -561,7 +574,8 @@ impl VerveApp {
                             }
                         }
                         // Remove items no longer in defaults
-                        let default_set: std::collections::HashSet<_> = default.into_iter().collect();
+                        let default_set: std::collections::HashSet<_> =
+                            default.into_iter().collect();
                         order.retain(|n| default_set.contains(n));
                         order
                     }
@@ -664,7 +678,8 @@ impl VerveApp {
                         if let Some(idx) = s.data.projects.iter().position(|p| p.name == name) {
                             if s.active_project != idx {
                                 s.active_project = idx;
-                                s.data.active_project_id = s.data.projects.get(idx).map(|p| p.id.clone());
+                                s.data.active_project_id =
+                                    s.data.projects.get(idx).map(|p| p.id.clone());
                                 s.selected_request = None;
                                 s.selected_folder = None;
                                 s.open_request_ids.clear();
@@ -779,7 +794,9 @@ impl VerveApp {
                     }
                     cx.notify();
                 }
-                ConsoleEvent::OpenRequest { request_id: None, .. } => {
+                ConsoleEvent::OpenRequest {
+                    request_id: None, ..
+                } => {
                     // Legacy entries without a request id: nothing to navigate to.
                 }
             },
@@ -800,15 +817,13 @@ impl VerveApp {
         let tree_handle = app.tree.clone();
         let sub_tree = cx.subscribe(
             &tree_handle,
-            |this, _src, ev: &crate::ui::project_tree_panel::TreeEvent, _cx| {
-                match ev {
-                    crate::ui::project_tree_panel::TreeEvent::ShareRequest(id, name) => {
-                        this.pending_share = Some((
-                            crate::share::models::ShareScope::Request,
-                            Some(id.clone()),
-                            Some(name.clone()),
-                        ));
-                    }
+            |this, _src, ev: &crate::ui::project_tree_panel::TreeEvent, _cx| match ev {
+                crate::ui::project_tree_panel::TreeEvent::ShareRequest(id, name) => {
+                    this.pending_share = Some((
+                        crate::share::models::ShareScope::Request,
+                        Some(id.clone()),
+                        Some(name.clone()),
+                    ));
                 }
             },
         );
@@ -1482,7 +1497,9 @@ impl VerveApp {
         let idx = app.active_project;
         let mut s = app.data.clone();
         let _ = app;
-        let Some(p) = s.projects.get_mut(idx) else { return };
+        let Some(p) = s.projects.get_mut(idx) else {
+            return;
+        };
         let generated = crate::mock::generate_missing(p);
         if generated.is_empty() {
             return;
@@ -1495,7 +1512,10 @@ impl VerveApp {
                 r.mock = Some(m);
             }
         }
-        fn walk(folders: &mut [crate::state::models::Folder], map: &mut std::collections::HashMap<String, crate::state::models::MockRule>) {
+        fn walk(
+            folders: &mut [crate::state::models::Folder],
+            map: &mut std::collections::HashMap<String, crate::state::models::MockRule>,
+        ) {
             for r in folders.iter_mut().flat_map(|f| f.requests.iter_mut()) {
                 if let Some(m) = map.remove(&r.id) {
                     r.mock = Some(m);
@@ -1549,10 +1569,12 @@ impl VerveApp {
                 Ok(s) => s,
                 Err(_) => return,
             },
-            crate::export::Format::PostmanV2_1 => match crate::export::project_to_postman_v2_1(&project) {
-                Ok(s) => s,
-                Err(_) => return,
-            },
+            crate::export::Format::PostmanV2_1 => {
+                match crate::export::project_to_postman_v2_1(&project) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                }
+            }
             crate::export::Format::Swagger => match crate::export::project_to_swagger(&project) {
                 Ok(s) => s,
                 Err(_) => return,
@@ -1620,7 +1642,8 @@ impl VerveApp {
                     // ---- Cloud mode: push to remote server over HTTP ----
                     // Resolve the project to upload.
                     let project_id_str = cfg.project_id.clone();
-                    let project = state.read(cx)
+                    let project = state
+                        .read(cx)
                         .data
                         .projects
                         .iter()
@@ -1648,32 +1671,43 @@ impl VerveApp {
                             &remote_cfg_clone,
                             &project,
                             &cfg_for_push,
-                        ).await;
-                        let _ = window_handle.update(cx, |_this, window, cx| {
-                            match result {
-                                Ok(remote_id) => {
-                                    let url = crate::share::remote::share_url(&remote_cfg_clone, &remote_id)
+                        )
+                        .await;
+                        let _ = window_handle.update(cx, |_this, window, cx| match result {
+                            Ok(remote_id) => {
+                                let url =
+                                    crate::share::remote::share_url(&remote_cfg_clone, &remote_id)
                                         .unwrap_or_default();
-                                    show_share_result_dialog(window, cx, cfg_for_result, url);
-                                }
-                                Err(e) => {
-                                    let err_msg = format!("推送到远程服务失败：{e}");
-                                    log::error!("{}", err_msg);
-                                    window.open_dialog(cx, move |dialog, _window, cx| {
-                                        let msg = err_msg.clone();
-                                        dialog.title("分享失败").content(move |c, _, _| {
-                                            c.child(div().p_4().w(px(400.)).text_sm().child(msg.clone()))
+                                show_share_result_dialog(window, cx, cfg_for_result, url);
+                            }
+                            Err(e) => {
+                                let err_msg = format!("推送到远程服务失败：{e}");
+                                log::error!("{}", err_msg);
+                                window.open_dialog(cx, move |dialog, _window, cx| {
+                                    let msg = err_msg.clone();
+                                    dialog
+                                        .title("分享失败")
+                                        .content(move |c, _, _| {
+                                            c.child(
+                                                div()
+                                                    .p_4()
+                                                    .w(px(400.))
+                                                    .text_sm()
+                                                    .child(msg.clone()),
+                                            )
                                         })
                                         .footer(
                                             Button::new("share-error-close")
-                                                .primary().small().label("关闭")
+                                                .primary()
+                                                .small()
+                                                .label("关闭")
                                                 .on_click(|_, w, cx| w.close_dialog(cx)),
                                         )
-                                    });
-                                }
+                                });
                             }
                         });
-                    }).detach();
+                    })
+                    .detach();
                     return;
                 }
 
@@ -1722,7 +1756,9 @@ impl VerveApp {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import collection (Apipost / Postman v2.1 / Swagger / OpenAPI 3 JSON)".into()),
+            prompt: Some(
+                "Import collection (Apipost / Postman v2.1 / Swagger / OpenAPI 3 JSON)".into(),
+            ),
         });
         let state = self.state.clone();
         cx.spawn(async move |this, cx| {
@@ -1789,7 +1825,8 @@ impl Render for VerveApp {
             }
         }
         // Safety: if the active view was just hidden, fall back to home.
-        if self.active_view != self.home_view && self.hidden_rails.contains(self.active_view.name()) {
+        if self.active_view != self.home_view && self.hidden_rails.contains(self.active_view.name())
+        {
             self.active_view = self.home_view;
         }
         // Note: unified share+mock server is started eagerly in constructor for local mode,
@@ -1966,7 +2003,19 @@ impl Render for VerveApp {
         let side_left: gpui::AnyElement = match self.active_view {
             SideView::Api => tree.into_any_element(),
             SideView::History => console.clone().into_any_element(),
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor | SideView::Mock => {
+            SideView::ProjectManage
+            | SideView::Share
+            | SideView::AutoTest
+            | SideView::Stress
+            | SideView::Proxy
+            | SideView::K8s
+            | SideView::Docker
+            | SideView::Ssh
+            | SideView::Hosts
+            | SideView::Notes
+            | SideView::JsonFormat
+            | SideView::PdfEditor
+            | SideView::Mock => {
                 tree.into_any_element() // unused (exclusive branch)
             }
         };
@@ -2032,13 +2081,36 @@ impl Render for VerveApp {
         // replace the entire workbench (rail + tree + request/response).
         let _exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor
+            SideView::ProjectManage
+                | SideView::Share
+                | SideView::AutoTest
+                | SideView::Stress
+                | SideView::Proxy
+                | SideView::K8s
+                | SideView::Docker
+                | SideView::Ssh
+                | SideView::Hosts
+                | SideView::Notes
+                | SideView::JsonFormat
+                | SideView::PdfEditor
         );
 
         // Exclusive views: rail + title bar visible, body taken over by the panel.
         let exclusive_view = matches!(
             self.active_view,
-            SideView::ProjectManage | SideView::Share | SideView::AutoTest | SideView::Stress | SideView::Proxy | SideView::K8s | SideView::Docker | SideView::Ssh | SideView::Hosts | SideView::Notes | SideView::JsonFormat | SideView::PdfEditor | SideView::Mock
+            SideView::ProjectManage
+                | SideView::Share
+                | SideView::AutoTest
+                | SideView::Stress
+                | SideView::Proxy
+                | SideView::K8s
+                | SideView::Docker
+                | SideView::Ssh
+                | SideView::Hosts
+                | SideView::Notes
+                | SideView::JsonFormat
+                | SideView::PdfEditor
+                | SideView::Mock
         );
 
         v_flex()
@@ -2193,7 +2265,12 @@ impl VerveApp {
 
     /// Reorder rail_order so that `dragged` moves to just before `target`.
     /// If target is None, move to end of list.
-    fn apply_rail_drop(&mut self, dragged_name: &str, target_name: Option<&str>, cx: &mut Context<Self>) {
+    fn apply_rail_drop(
+        &mut self,
+        dragged_name: &str,
+        target_name: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
         let mut order = self.rail_order.clone();
         // Don't drop on top of yourself.
         order.retain(|n| n != dragged_name);
@@ -3145,31 +3222,27 @@ impl VerveApp {
                     .tooltip("导出项目"),
             )
             .p(px(4.))
-            .child(
-                v_flex()
-                    .w(px(200.))
-                    .gap(px(2.))
-                    .children(crate::export::Format::ALL.iter().map(|&f| {
-                        let ent = cx.entity();
-                        div()
-                            .id(format!("export-fmt-{}", f.label()))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.muted))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(format!("{} (.{})", f.label(), f.extension())),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.export_popover_open = false;
-                                this.export_project(f, cx);
-                            }))
-                    })),
-            )
+            .child(v_flex().w(px(200.)).gap(px(2.)).children(
+                crate::export::Format::ALL.iter().map(|&f| {
+                    let ent = cx.entity();
+                    div()
+                        .id(format!("export-fmt-{}", f.label()))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.muted))
+                        .child(div().text_sm().text_color(theme.foreground).child(format!(
+                            "{} (.{})",
+                            f.label(),
+                            f.extension()
+                        )))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.export_popover_open = false;
+                            this.export_project(f, cx);
+                        }))
+                }),
+            ))
     }
 
     /// Language switcher — shared by every title-bar variant.
@@ -3217,7 +3290,8 @@ impl VerveApp {
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 rust_i18n::set_locale("zh-CN");
-                                let mut l = crate::state::persistence::load_layout().unwrap_or_default();
+                                let mut l =
+                                    crate::state::persistence::load_layout().unwrap_or_default();
                                 l.locale = Some("zh-CN".into());
                                 let _ = crate::state::persistence::save_layout(&l);
                                 this.lang_popover_open = false;
@@ -3244,7 +3318,8 @@ impl VerveApp {
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 rust_i18n::set_locale("en");
-                                let mut l = crate::state::persistence::load_layout().unwrap_or_default();
+                                let mut l =
+                                    crate::state::persistence::load_layout().unwrap_or_default();
                                 l.locale = Some("en".into());
                                 let _ = crate::state::persistence::save_layout(&l);
                                 this.lang_popover_open = false;
@@ -3333,7 +3408,11 @@ impl VerveApp {
         let docker = self.docker.clone();
         let (host_count, active_host, cur_view) = {
             let r = self.docker.read(cx);
-            (r.host_count(), r.active_host_name(), r.current_view().to_string())
+            (
+                r.host_count(),
+                r.active_host_name(),
+                r.current_view().to_string(),
+            )
         };
         let cur_view: &str = &cur_view;
 
@@ -3359,11 +3438,7 @@ impl VerveApp {
                 h_flex()
                     .gap(px(6.))
                     .items_center()
-                    .child(
-                        div()
-                            .text_color(theme.primary)
-                            .child(vicon(DOCKER_ICON)),
-                    )
+                    .child(div().text_color(theme.primary).child(vicon(DOCKER_ICON)))
                     .child(
                         div()
                             .text_sm()
@@ -3489,11 +3564,7 @@ impl VerveApp {
                 h_flex()
                     .gap(px(6.))
                     .items_center()
-                    .child(
-                        div()
-                            .text_color(theme.primary)
-                            .child(vicon(K8S_ICON)),
-                    )
+                    .child(div().text_color(theme.primary).child(vicon(K8S_ICON)))
                     .child(
                         div()
                             .text_sm()
@@ -3608,14 +3679,13 @@ impl VerveApp {
         let notes = self.notes.clone();
 
         // Snapshot note count and current view mode.
-        let (note_count, is_source, list_collapsed) = {
+        let (note_count, list_collapsed) = {
             let r = notes.read(cx);
-            (r.note_count(), r.is_source_mode(), r.is_list_collapsed())
+            (r.note_count(), r.is_list_collapsed())
         };
 
         let notes_import = notes.clone();
         let notes_export = notes.clone();
-        let notes_toggle = notes.clone();
         let notes_collapse = notes.clone();
 
         h_flex()
@@ -3676,7 +3746,9 @@ impl VerveApp {
                             .rounded(px(4.))
                             .bg(theme.accent.opacity(0.2))
                             .text_color(theme.foreground)
-                            .child(rust_i18n::t!("notes.note_count", count = note_count).to_string()),
+                            .child(
+                                rust_i18n::t!("notes.note_count", count = note_count).to_string(),
+                            ),
                     ),
             )
             .child(div().flex_1())
@@ -3706,35 +3778,6 @@ impl VerveApp {
                         });
                     })),
             )
-            // Live / Source segmented toggle.
-            .child({
-                let notes_toggle_live = notes_toggle.clone();
-                let notes_toggle_source = notes_toggle;
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("notes-mode-live")
-                            .small()
-                            .selected(!is_source)
-                            .label(rust_i18n::t!("notes.live_view").to_string())
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                let _ = notes_toggle_live.update(cx, |p, cx| {
-                                    p.set_view_mode("live", cx);
-                                });
-                            })),
-                    )
-                    .child(
-                        Button::new("notes-mode-source")
-                            .small()
-                            .selected(is_source)
-                            .label(rust_i18n::t!("notes.source_view").to_string())
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                let _ = notes_toggle_source.update(cx, |p, cx| {
-                                    p.set_view_mode("source", cx);
-                                });
-                            })),
-                    )
-            })
             .child(self.render_lang_picker(cx))
     }
 }
@@ -3905,9 +3948,7 @@ fn show_share_result_dialog(
         .iter()
         .any(|m| matches!(m, crate::share::models::ShareMethod::ExportHtml))
     {
-        if let Ok(export_dir) =
-            crate::state::persistence::data_dir().map(|d| d.join("exports"))
-        {
+        if let Ok(export_dir) = crate::state::persistence::data_dir().map(|d| d.join("exports")) {
             let _ = std::fs::create_dir_all(&export_dir);
             let project = crate::state::persistence::load_or_default()
                 .projects
@@ -3981,9 +4022,9 @@ fn show_share_result_dialog(
                                         .small()
                                         .label("复制")
                                         .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(
-                                                gpui::ClipboardItem::new_string(url_copy.clone()),
-                                            );
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                url_copy.clone(),
+                                            ));
                                         }),
                                 ),
                         )
@@ -4044,11 +4085,7 @@ impl VerveApp {
                 h_flex()
                     .gap(px(6.))
                     .items_center()
-                    .child(
-                        div()
-                            .text_color(theme.primary)
-                            .child(vicon(BRACES_JSON)),
-                    )
+                    .child(div().text_color(theme.primary).child(vicon(BRACES_JSON)))
                     .child(
                         div()
                             .text_sm()
@@ -4124,11 +4161,7 @@ impl VerveApp {
                 h_flex()
                     .gap(px(6.))
                     .items_center()
-                    .child(
-                        div()
-                            .text_color(theme.primary)
-                            .child(vicon(FILE_PDF)),
-                    )
+                    .child(div().text_color(theme.primary).child(vicon(FILE_PDF)))
                     .child(
                         div()
                             .text_sm()

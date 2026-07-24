@@ -1,254 +1,22 @@
-//! Notepad panel — markdown notes with live render/source modes, slash command palette, and nested sub-documents.
+//! Notepad panel — markdown notes with a WYSIWYG block editor, search, and nested sub-documents.
 
+use gpui::actions;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui::actions;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::popover::Popover;
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, Selectable as _};
+use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 
-use crate::notes::{self, children_of, count_descendants, create_child_note, delete_note_cascade, has_children, push_recent_command, Note, NotesStore};
+use crate::notes::{
+    self, Note, NotesStore, children_of, count_descendants, create_child_note, delete_note_cascade,
+    has_children,
+};
 use crate::state::{AppEvent, AppState};
-use crate::ui::markdown_view;
-
-actions!(verve, [ToggleViewMode]);
-
-// ---------------------------------------------------------------------------
-// Slash command catalog
-// ---------------------------------------------------------------------------
-
-/// A single slash command in the palette.
-#[derive(Clone)]
-struct SlashCommandDef {
-    id: &'static str,
-    label: &'static str,
-    desc: &'static str,
-    icon: IconName,
-    /// Edits the InputState to apply this command. Called inside
-    /// `editor.update(..., |ed, cx| apply(ed, window, cx))` so `cx` is
-    /// `&mut Context<InputState>`.
-    apply: fn(&mut InputState, &mut Window, &mut Context<InputState>),
-}
-
-/// All slash commands, display order.
-fn all_slash_commands() -> &'static [SlashCommandDef] {
-    &[
-        SlashCommandDef {
-            id: "bold",
-            label: "Bold",
-            desc: "Bold text with ** **",
-            icon: IconName::Asterisk,
-            apply: |ed, w, cx| wrap_selection(ed, "**", "**", "bold text", w, cx),
-        },
-        SlashCommandDef {
-            id: "italic",
-            label: "Italic",
-            desc: "Italic text with * *",
-            icon: IconName::ALargeSmall,
-            apply: |ed, w, cx| wrap_selection(ed, "*", "*", "italic text", w, cx),
-        },
-        SlashCommandDef {
-            id: "strikethrough",
-            label: "Strikethrough",
-            desc: "Strike text with ~~ ~~",
-            icon: IconName::Minus,
-            apply: |ed, w, cx| wrap_selection(ed, "~~", "~~", "strikethrough", w, cx),
-        },
-        SlashCommandDef {
-            id: "code",
-            label: "Inline Code",
-            desc: "Inline code with ` `",
-            icon: IconName::SquareTerminal,
-            apply: |ed, w, cx| wrap_selection(ed, "`", "`", "code", w, cx),
-        },
-        SlashCommandDef {
-            id: "link",
-            label: "Link",
-            desc: "Insert a hyperlink",
-            icon: IconName::ExternalLink,
-            apply: insert_link,
-        },
-        SlashCommandDef {
-            id: "h1",
-            label: "Heading 1",
-            desc: "Large section heading",
-            icon: IconName::BookOpen,
-            apply: |ed, w, cx| set_line_prefix(ed, "# ", w, cx),
-        },
-        SlashCommandDef {
-            id: "h2",
-            label: "Heading 2",
-            desc: "Medium section heading",
-            icon: IconName::BookOpen,
-            apply: |ed, w, cx| set_line_prefix(ed, "## ", w, cx),
-        },
-        SlashCommandDef {
-            id: "h3",
-            label: "Heading 3",
-            desc: "Small section heading",
-            icon: IconName::BookOpen,
-            apply: |ed, w, cx| set_line_prefix(ed, "### ", w, cx),
-        },
-        SlashCommandDef {
-            id: "bullet_list",
-            label: "Bullet List",
-            desc: "Create a bulleted list item",
-            icon: IconName::Ellipsis,
-            apply: |ed, w, cx| set_line_prefix(ed, "- ", w, cx),
-        },
-        SlashCommandDef {
-            id: "numbered_list",
-            label: "Numbered List",
-            desc: "Create a numbered list item",
-            icon: IconName::SortAscending,
-            apply: |ed, w, cx| set_line_prefix(ed, "1. ", w, cx),
-        },
-        SlashCommandDef {
-            id: "task_list",
-            label: "Task List",
-            desc: "Add a checkbox task item",
-            icon: IconName::CircleCheck,
-            apply: |ed, w, cx| set_line_prefix(ed, "- [ ] ", w, cx),
-        },
-        SlashCommandDef {
-            id: "blockquote",
-            label: "Quote",
-            desc: "Insert a blockquote line",
-            icon: IconName::Frame,
-            apply: |ed, w, cx| set_line_prefix(ed, "> ", w, cx),
-        },
-        SlashCommandDef {
-            id: "code_block",
-            label: "Code Block",
-            desc: "Insert a fenced code block",
-            icon: IconName::SquareTerminal,
-            apply: |ed, w, cx| insert_block(ed, "\n```\n", "\n```\n", "code", w, cx),
-        },
-        SlashCommandDef {
-            id: "hr",
-            label: "Divider",
-            desc: "Insert a horizontal rule",
-            icon: IconName::Dash,
-            apply: |ed, w, cx| insert_block(ed, "\n---\n", "", "", w, cx),
-        },
-        SlashCommandDef {
-            id: "table",
-            label: "Table",
-            desc: "Insert a 3×3 table",
-            icon: IconName::GalleryVerticalEnd,
-            apply: |ed, w, cx| {
-                insert_block(
-                    ed,
-                    "\n| Column A | Column B | Column C |\n| --- | --- | --- |\n|  |  |  |\n",
-                    "",
-                    "",
-                    w,
-                    cx,
-                )
-            },
-        },
-        SlashCommandDef {
-            id: "image",
-            label: "Image",
-            desc: "Insert an image",
-            icon: IconName::Eye,
-            apply: |ed, w, cx| insert_block(ed, "![", "](url)", "alt", w, cx),
-        },
-    ]
-}
-
-fn wrap_selection(
-    ed: &mut InputState,
-    before: &str,
-    after: &str,
-    placeholder: &str,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) {
-    let sel = ed.selected_value().to_string();
-    let replacement = if sel.is_empty() {
-        format!("{}{}{}", before, placeholder, after)
-    } else {
-        format!("{}{}{}", before, sel, after)
-    };
-    ed.replace(replacement, window, cx);
-}
-
-fn insert_block(
-    ed: &mut InputState,
-    open: &str,
-    close: &str,
-    placeholder: &str,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) {
-    let text = if placeholder.is_empty() {
-        format!("{}{}", open, close)
-    } else {
-        format!("{}{}{}", open, placeholder, close)
-    };
-    ed.insert(text, window, cx);
-}
-
-fn insert_link(ed: &mut InputState, window: &mut Window, cx: &mut Context<InputState>) {
-    let sel = ed.selected_value().to_string();
-    let text = if sel.is_empty() {
-        "[link text](url)".to_string()
-    } else {
-        format!("[{}](url)", sel)
-    };
-    ed.replace(text, window, cx);
-}
-
-fn set_line_prefix(
-    ed: &mut InputState,
-    prefix: &str,
-    window: &mut Window,
-    cx: &mut Context<InputState>,
-) {
-    let value = ed.value().to_string();
-    let cursor = ed.cursor();
-
-    let line_start = value[..cursor].rfind('\n').map(|p| p + 1).unwrap_or(0);
-    let line_end = value[cursor..]
-        .find('\n')
-        .map(|p| cursor + p)
-        .unwrap_or(value.len());
-
-    let line = &value[line_start..line_end];
-    let stripped = strip_block_prefix(line);
-
-    let new_line = format!("{}{}", prefix, stripped);
-    let new_value = format!("{}{}{}", &value[..line_start], new_line, &value[line_end..]);
-    ed.set_value(new_value, window, cx);
-}
-
-/// Strip any known markdown block prefix (heading, list marker, quote) from a line.
-fn strip_block_prefix(line: &str) -> &str {
-    let s = line.trim_start();
-    let s = s.strip_prefix("- [ ] ").unwrap_or(s);
-    let s = s.strip_prefix("- [x] ").unwrap_or(s);
-    let s = s.strip_prefix("- ").unwrap_or(s);
-    let s = s.strip_prefix("* ").unwrap_or(s);
-    let s = s.strip_prefix("> ").unwrap_or(s);
-    let s = s.strip_prefix("###### ").unwrap_or(s);
-    let s = s.strip_prefix("##### ").unwrap_or(s);
-    let s = s.strip_prefix("#### ").unwrap_or(s);
-    let s = s.strip_prefix("### ").unwrap_or(s);
-    let s = s.strip_prefix("## ").unwrap_or(s);
-    let s = s.strip_prefix("# ").unwrap_or(s);
-    // Strip "1. ", "2. ", ... prefix (digits followed by ". ").
-    let trimmed = s.trim_start_matches(|c: char| c.is_ascii_digit());
-    let s = if let Some(stripped) = trimmed.strip_prefix(". ") {
-        stripped
-    } else {
-        s
-    };
-    s.trim_start_matches(' ')
-}
 
 // ---------------------------------------------------------------------------
 // The panel
@@ -257,7 +25,7 @@ fn strip_block_prefix(line: &str) -> &str {
 pub struct NotesPanel {
     state: Entity<AppState>,
     store: NotesStore,
-    editor: Entity<InputState>,
+    editor: Entity<crate::wysiwyg::editor::Editor>,
     search: Entity<InputState>,
     title_input: Entity<InputState>,
     editing_title_id: Option<String>,
@@ -266,14 +34,6 @@ pub struct NotesPanel {
     _subs: Vec<Subscription>,
     // Nested-notes tree state.
     tree: Entity<TreeState>,
-    // Slash palette state
-    slash_open: bool,
-    slash_query: String,
-    slash_selected: usize,
-    slash_trigger_pos: usize,
-    /// When set, execute this command at the start of render (deferred so we
-    /// have `&mut Window` access which subscribe callbacks don't provide).
-    pending_slash_execute: Option<&'static str>,
     /// When true, reload editor content from active note on next render (which
     /// has &mut Window access — used by tree selection observer).
     editor_needs_reload: bool,
@@ -296,11 +56,18 @@ impl NotesPanel {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = crate::state::persistence::load_notes();
 
-        let editor = cx.new(|cx| {
-            let mut input = InputState::new(window, cx).multi_line(true);
-            input.set_value(String::new(), window, cx);
-            input
-        });
+        let initial_content = store
+            .active_note
+            .as_ref()
+            .and_then(|id| store.notes.iter().find(|n| &n.id == id))
+            .map(|n| n.content.clone())
+            .unwrap_or_default();
+
+        // The WYSIWYG block editor (ported from velotype). Content is loaded as
+        // Markdown and edited as rendered blocks; `markdown()` serializes it
+        // back out on save.
+        let editor =
+            cx.new(|cx| crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None));
 
         let search = cx.new(|cx| {
             let mut input = InputState::new(window, cx);
@@ -316,17 +83,12 @@ impl NotesPanel {
 
         let tree = cx.new(|cx| TreeState::new(cx));
 
-        let initial_content = store
-            .active_note
-            .as_ref()
-            .and_then(|id| store.notes.iter().find(|n| &n.id == id))
-            .map(|n| n.content.clone())
-            .unwrap_or_default();
-        editor.update(cx, |e, cx| {
-            e.set_value(initial_content, window, cx);
+        // Observe the editor for changes so we can debounce-save the serialized
+        // Markdown back into `Note.content`. The editor emits `cx.notify()` on
+        // every edit (and on undo/redo/mode switch), which fires this observer.
+        let editor_sub = cx.observe(&editor, |this, _editor, cx| {
+            this.schedule_save(cx);
         });
-
-        let editor_sub = cx.subscribe(&editor, Self::on_editor_event);
         let search_sub = cx.subscribe(&search, Self::on_search_event);
         let title_sub = cx.subscribe(&title_input, Self::on_title_event);
         let tree_sub = cx.observe(&tree, Self::on_tree_notify);
@@ -342,11 +104,6 @@ impl NotesPanel {
             pending_delete: None,
             save_timer: None,
             _subs: vec![editor_sub, search_sub, title_sub, tree_sub],
-            slash_open: false,
-            slash_query: String::new(),
-            slash_selected: 0,
-            slash_trigger_pos: 0,
-            pending_slash_execute: None,
             editor_needs_reload: false,
             export_popover_open: false,
             list_collapsed: false,
@@ -357,192 +114,6 @@ impl NotesPanel {
     }
 
     // -- editor change subscription ------------------------------------------
-
-    fn on_editor_event(
-        &mut self,
-        _: Entity<InputState>,
-        event: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            InputEvent::Change => {
-                if self.slash_open {
-                    self.update_slash_query_from_editor(cx);
-                } else {
-                    // Detect a `/` typed at word boundary → open palette.
-                    let info: Option<(String, usize)> = self.editor.read_with(cx, |ed, _cx| {
-                        let val = ed.value().to_string();
-                        let cursor = ed.cursor();
-                        Some((val, cursor))
-                    });
-                    let should_open = info
-                        .as_ref()
-                        .map(|(val, cursor)| {
-                            if *cursor == 0 {
-                                return false;
-                            }
-                            if val[..*cursor].chars().next_back() != Some('/') {
-                                return false;
-                            }
-                            let prev_char = if *cursor >= 2 {
-                                val[..*cursor - 1].chars().next_back()
-                            } else {
-                                None
-                            };
-                            matches!(
-                                prev_char,
-                                None | Some(' ') | Some('\n') | Some('\t') | Some('\r')
-                            )
-                        })
-                        .unwrap_or(false);
-                    if should_open {
-                        let pos = info.map(|(_, c)| c.saturating_sub(1)).unwrap_or(0);
-                        self.slash_open = true;
-                        self.slash_query.clear();
-                        self.slash_selected = 0;
-                        self.slash_trigger_pos = pos;
-                    }
-                }
-                self.schedule_save(cx);
-                cx.notify();
-            }
-            InputEvent::PressEnter { .. } => {
-                if self.slash_open {
-                    self.queue_selected_command(cx);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Read editor text after `/` to update the filter query; close if invalid.
-    fn update_slash_query_from_editor(&mut self, cx: &mut Context<Self>) {
-        let info = self.editor.update(cx, |ed, _cx| {
-            let val = ed.value().to_string();
-            let cursor = ed.cursor();
-            if cursor <= self.slash_trigger_pos {
-                return None;
-            }
-            if val[self.slash_trigger_pos..].chars().next() != Some('/') {
-                return None;
-            }
-            Some((val, cursor))
-        });
-        let Some((val, cursor)) = info else {
-            self.close_slash_palette();
-            cx.notify();
-            return;
-        };
-        let query = val[self.slash_trigger_pos + 1..cursor].to_string();
-        if query.chars().any(|c| c.is_whitespace()) {
-            self.close_slash_palette();
-            cx.notify();
-            return;
-        }
-        self.slash_query = query;
-        self.slash_selected = 0;
-    }
-
-    fn close_slash_palette(&mut self) {
-        self.slash_open = false;
-        self.slash_query.clear();
-        self.slash_selected = 0;
-        self.pending_slash_execute = None;
-    }
-
-    /// Queue the selected command to run during render (where we have &mut Window).
-    fn queue_selected_command(&mut self, cx: &mut Context<Self>) {
-        let filtered = self.filtered_command_defs();
-        if filtered.is_empty() {
-            self.close_slash_palette();
-            cx.notify();
-            return;
-        }
-        let cmd = filtered[self.slash_selected.min(filtered.len() - 1)];
-        self.pending_slash_execute = Some(cmd.id);
-        cx.notify();
-    }
-
-    /// Execute a queued command: delete the `/query` trigger, apply the
-    /// command, record recency, close palette. Called from render where we have Window.
-    fn run_pending_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cmd_id) = self.pending_slash_execute.take() else {
-            return;
-        };
-        // 1) Delete the `/<query>` substring from the editor.
-        self.editor.update(cx, |ed, cx| {
-            let val = ed.value().to_string();
-            let cursor = ed.cursor();
-            let delete_end = cursor;
-            let delete_start = self.slash_trigger_pos;
-            let new_val = format!("{}{}", &val[..delete_start], &val[delete_end..]);
-            ed.set_value(new_val, window, cx);
-        });
-        // 2) Find the command def and apply it (apply takes &mut Context<InputState>
-        //    which editor.update provides).
-        let apply_fn = all_slash_commands()
-            .iter()
-            .find(|c| c.id == cmd_id)
-            .map(|c| c.apply);
-        if let Some(apply) = apply_fn {
-            self.editor.update(cx, |ed, cx| apply(ed, window, cx));
-        }
-        // 3) Record in recent commands and persist.
-        push_recent_command(&mut self.store.recent_commands, cmd_id);
-        let _ = crate::state::persistence::save_notes(&self.store);
-        self.close_slash_palette();
-        self.schedule_save(cx);
-    }
-
-    fn move_slash_selection(&mut self, delta: i32, cx: &mut Context<Self>) {
-        if !self.slash_open {
-            return;
-        }
-        let filtered = self.filtered_command_defs();
-        let n = filtered.len() as i32;
-        if n == 0 {
-            return;
-        }
-        let current = self.slash_selected as i32;
-        let new_idx = (current + delta).rem_euclid(n);
-        self.slash_selected = new_idx as usize;
-        cx.notify();
-    }
-
-    /// Return the filtered command defs (matching query), split into
-    /// (recent_matches, all_matches) — both as static references.
-    fn filtered_command_defs(&self) -> Vec<&'static SlashCommandDef> {
-        let cmds = all_slash_commands();
-        let query = self.slash_query.to_lowercase();
-        // Build a score-ordered list: recent matches first, then alphabetic.
-        let mut recent_matched: Vec<&'static SlashCommandDef> = Vec::new();
-        let mut other_matched: Vec<&'static SlashCommandDef> = Vec::new();
-
-        for cmd in cmds {
-            if !query.is_empty()
-                && !cmd.label.to_lowercase().contains(&query)
-                && !cmd.id.to_lowercase().contains(&query)
-            {
-                continue;
-            }
-            if self.store.recent_commands.iter().any(|r| r == cmd.id) {
-                recent_matched.push(cmd);
-            } else {
-                other_matched.push(cmd);
-            }
-        }
-        // Sort recent list by recent order.
-        recent_matched.sort_by_key(|c| {
-            self.store
-                .recent_commands
-                .iter()
-                .position(|r| r == c.id)
-                .unwrap_or(usize::MAX)
-        });
-        let mut result = recent_matched;
-        result.extend(other_matched);
-        result
-    }
 
     // -- other callbacks -----------------------------------------------------
 
@@ -570,7 +141,6 @@ impl NotesPanel {
                 if self.editing_title_id.is_some() {
                     self.commit_title_edit(cx);
                 }
-                self.close_slash_palette();
                 self.save_current(cx);
                 self.store.active_note = Some(note_id);
                 // Mark that editor needs reloading with the new note's content.
@@ -653,10 +223,9 @@ impl NotesPanel {
             self.new_note(window, cx);
             return;
         };
-        self.close_slash_palette();
         let new_id = create_child_note(&mut self.store, &parent_id, String::new());
         self.editor.update(cx, |e, cx| {
-            e.set_value(String::new(), window, cx);
+            e.set_content("", cx);
         });
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
@@ -724,7 +293,7 @@ impl NotesPanel {
     }
 
     fn save_current(&mut self, cx: &mut Context<Self>) {
-        let editor_val = self.editor.read(cx).value().to_string();
+        let editor_val = self.editor.read(cx).markdown(cx);
         if let Some(active_id) = self.store.active_note.clone() {
             notes::update_note_content(&mut self.store, &active_id, editor_val);
             // Write to local disk for crash safety, but do NOT emit Persisted.
@@ -735,12 +304,11 @@ impl NotesPanel {
     }
 
     fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_slash_palette();
         let note = notes::create_note(&mut self.store, String::new());
         let new_id = note.id.clone();
         self.store.active_note = Some(new_id.clone());
         self.editor.update(cx, |e, cx| {
-            e.set_value(String::new(), window, cx);
+            e.set_content("", cx);
         });
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
@@ -756,13 +324,12 @@ impl NotesPanel {
         if self.editing_title_id.is_some() {
             self.commit_title_edit(cx);
         }
-        self.close_slash_palette();
         self.save_current(cx);
         self.store.active_note = Some(id.to_string());
         self.editor_needs_reload = false;
         if let Some(note) = self.store.notes.iter().find(|n| n.id == id) {
             self.editor.update(cx, |e, cx| {
-                e.set_value(note.content.clone(), window, cx);
+                e.set_content(&note.content, cx);
             });
         }
         self.rebuild_tree(cx);
@@ -781,11 +348,11 @@ impl NotesPanel {
         if let Some(note) = self.store.notes.first() {
             self.store.active_note = Some(note.id.clone());
             self.editor.update(cx, |e, cx| {
-                e.set_value(note.content.clone(), window, cx);
+                e.set_content(&note.content, cx);
             });
         } else {
             self.editor.update(cx, |e, cx| {
-                e.set_value(String::new(), window, cx);
+                e.set_content("", cx);
             });
         }
         let _ = crate::state::persistence::save_notes(&self.store);
@@ -794,29 +361,9 @@ impl NotesPanel {
         cx.notify();
     }
 
-    pub fn set_view_mode(&mut self, mode: &str, cx: &mut Context<Self>) {
-        self.store.view_mode = mode.to_string();
-        let _ = crate::state::persistence::save_notes(&self.store);
-        cx.notify();
-    }
-
-    fn toggle_view_mode(&mut self, _: &ToggleViewMode, cx: &mut Context<Self>) {
-        let new_mode = if self.store.view_mode == "source" {
-            "live"
-        } else {
-            "source"
-        };
-        self.set_view_mode(new_mode, cx);
-    }
-
     /// Number of notes in the store (used for the title-bar badge).
     pub fn note_count(&self) -> usize {
         self.store.notes.len()
-    }
-
-    /// Whether the editor is currently in source (raw markdown) mode.
-    pub fn is_source_mode(&self) -> bool {
-        self.store.view_mode == "source"
     }
 
     /// Toggle whether the note list sidebar is collapsed (hidden).
@@ -870,10 +417,9 @@ impl NotesPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.close_slash_palette();
         let new_id = create_child_note(&mut self.store, parent_id, String::new());
         self.editor.update(cx, |e, cx| {
-            e.set_value(String::new(), window, cx);
+            e.set_content("", cx);
         });
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
@@ -1652,278 +1198,55 @@ impl NotesPanel {
             .into_any_element()
     }
 
-    /// Render the slash palette overlay as a deferred popover.
-    fn render_slash_palette(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let view = cx.entity();
-        let filtered = self.filtered_command_defs();
-
-        let mut items: Vec<AnyElement> = Vec::new();
-
-        if filtered.is_empty() {
-            items.push(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(12.))
-                    .text_color(theme.muted_foreground)
-                    .child("No matching commands")
-                    .into_any_element(),
-            );
-        } else {
-            // Split recent vs other if there are recent items.
-            let mut shown_recent_header = false;
-            let mut shown_all_header = false;
-            for (idx, cmd) in filtered.iter().enumerate() {
-                let is_recent = self.store.recent_commands.iter().any(|r| r == cmd.id);
-                if is_recent && !shown_recent_header {
-                    items.push(
-                        div()
-                            .px_3()
-                            .pt(px(6.))
-                            .pb(px(2.))
-                            .text_size(px(10.))
-                            .text_color(theme.muted_foreground)
-                            .child("RECENT")
-                            .into_any_element(),
-                    );
-                    shown_recent_header = true;
-                } else if !is_recent && !shown_all_header && shown_recent_header {
-                    items.push(
-                        div()
-                            .px_3()
-                            .pt(px(6.))
-                            .pb(px(2.))
-                            .text_size(px(10.))
-                            .text_color(theme.muted_foreground)
-                            .child("COMMANDS")
-                            .into_any_element(),
-                    );
-                    shown_all_header = true;
-                }
-
-                let selected = idx == self.slash_selected;
-                let cmd_id = cmd.id;
-                let view_for_click = view.clone();
-                items.push(
-                    h_flex()
-                        .w_full()
-                        .px_3()
-                        .py_1()
-                        .gap_2()
-                        .items_center()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(theme.accent.opacity(0.4)))
-                        .when(!selected, |d| d.hover(|d| d.bg(theme.muted)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            move |_ev, _window, cx: &mut App| {
-                                cx.stop_propagation();
-                                let _ = view_for_click.update(cx, |this, cx| {
-                                    // Find this command's id in the current filtered list
-                                    // and set it as selected, then queue execution.
-                                    let filtered = this.filtered_command_defs();
-                                    if let Some(pos) = filtered.iter().position(|c| c.id == cmd_id) {
-                                        this.slash_selected = pos;
-                                    }
-                                    this.queue_selected_command(cx);
-                                });
-                            },
-                        )
-                        .child(
-                            Icon::new(cmd.icon.clone())
-                                .size(px(14.))
-                                .text_color(if selected {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap(px(1.))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_color(theme.foreground)
-                                        .child(cmd.label),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(theme.muted_foreground)
-                                        .truncate()
-                                        .child(cmd.desc),
-                                ),
-                        )
-                        .into_any_element(),
-                );
-            }
-        }
-
-        let palette_left = if self.list_collapsed { px(40.) } else { px(270.) };
-        deferred(
-            div()
-                .id("slash-palette")
-                .absolute()
-                .left(palette_left)
-                .top(px(120.))
-                .w(px(300.))
-                .max_h(px(340.))
-                .overflow_y_scroll()
-                .py_1()
-                .bg(theme.background)
-                .border_1()
-                .border_color(theme.border)
-                .rounded_md()
-                .shadow_md()
-                .children(items)
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.close_slash_palette();
-                    cx.notify();
-                })),
-        )
-        .into_any_element()
-    }
-
     fn render_editor(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let mode = self.store.view_mode.clone();
-        let editor_content = self.editor.read(cx).value().to_string();
 
         let active_id = self.store.active_note.clone();
         let active_note = active_id
             .as_deref()
             .and_then(|id| self.store.notes.iter().find(|n| n.id == id));
 
-        let editing_active =
-            matches!(&self.editing_title_id, Some(eid) if Some(eid.as_str()) == active_id.as_deref());
+        let editing_active = matches!(&self.editing_title_id, Some(eid) if Some(eid.as_str()) == active_id.as_deref());
 
-        // Two modes: "source" (raw markdown editor) and "live" (default, rendered view).
-        // Anything other than "source" (including legacy "split"/"preview"/"edit") is live.
-        let is_source = mode == "source";
-
-        // Build the single content pane.
-        let content: AnyElement = if is_source {
-            // Source mode: monospace markdown editor with slash-command palette.
-            let mut editor_container = div()
-                .w_full()
-                .h_full()
-                .id("notes-editor-scroll")
-                .overflow_y_scroll()
-                .p_3();
-            if self.slash_open {
-                // Intercept Input's own MoveUp/MoveDown/Enter/Escape when palette
-                // is open so arrow keys navigate the palette instead of the
-                // editor, and Enter selects the highlighted command.
-                editor_container = editor_container
-                    .on_action(cx.listener(|this: &mut Self, _: &MoveUp, _, cx| {
-                        this.move_slash_selection(-1, cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &MoveDown, _, cx| {
-                        this.move_slash_selection(1, cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &Enter, _, cx| {
-                        this.queue_selected_command(cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &Escape, _, cx| {
-                        this.close_slash_palette();
-                        cx.notify();
-                        cx.stop_propagation();
-                    }));
-            }
-            editor_container
-                .child(
-                    Input::new(&self.editor)
-                        .w_full()
-                        .h_full()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_size(px(13.)),
-                )
-                .into_any_element()
-        } else {
-            // Live mode: horizontal split — source editor on the left, live
-            // rendered preview on the right, separated by a draggable divider
-            // (h_resizable). Arrow keys/Enter in the editor are intercepted
-            // via on_action when the slash palette is open.
-            use gpui_component::resizable::{h_resizable, resizable_panel};
-
-            let mut left = div()
-                .id("notes-live-editor")
-                .w_full()
-                .h_full()
-                .overflow_y_scroll()
-                .p_3();
-            if self.slash_open {
-                left = left
-                    .on_action(cx.listener(|this: &mut Self, _: &MoveUp, _, cx| {
-                        this.move_slash_selection(-1, cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &MoveDown, _, cx| {
-                        this.move_slash_selection(1, cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &Enter, _, cx| {
-                        this.queue_selected_command(cx);
-                        cx.stop_propagation();
-                    }))
-                    .on_action(cx.listener(|this: &mut Self, _: &Escape, _, cx| {
-                        this.close_slash_palette();
-                        cx.notify();
-                        cx.stop_propagation();
-                    }));
-            }
-            let left = left.child(
-                Input::new(&self.editor)
-                    .w_full()
-                    .h_full()
-                    .font_family(theme.mono_font_family.clone())
-                    .text_size(px(13.)),
-            );
-
-            let right = div()
-                .id("notes-live-preview")
-                .w_full()
-                .h_full()
-                .overflow_y_scroll()
-                .p_4()
-                .child(markdown_view::render_markdown(&editor_content, cx));
-
-            h_resizable("notes-live-split")
-                .child(
-                    resizable_panel()
-                        .size(px(480.))
-                        .size_range(px(200.)..px(2000.))
-                        .child(left),
-                )
-                .child(resizable_panel().child(right))
-                .into_any_element()
-        };
+        // Single WYSIWYG content pane — the embedded block editor renders its
+        // own scrollable block column (velotype's Editor::render). The legacy
+        // source/live split and slash-command palette are gone; the editor has
+        // native Markdown shortcuts (#, -, >, etc.), a right-click formatting
+        // menu, and undo/redo.
+        let content: AnyElement = div()
+            .id("notes-wysiwyg")
+            .w_full()
+            .h_full()
+            .child(self.editor.clone())
+            .into_any_element();
 
         v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
             .child({
-                let mut header =
-                    h_flex().w_full().px_3().py_2().border_b_1().border_color(theme.border).gap_2();
+                let mut header = h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .gap_2();
                 if editing_active {
-                    header = header.child(Input::new(&self.title_input).w_full().small().appearance(false));
+                    header = header.child(
+                        Input::new(&self.title_input)
+                            .w_full()
+                            .small()
+                            .appearance(false),
+                    );
                 } else {
                     let (title_display, current_title) = match &active_note {
                         Some(n) if !n.title.is_empty() => (n.title.clone(), n.title.clone()),
-                        Some(_) => (
-                            rust_i18n::t!("notes.untitled").to_string(),
+                        Some(_) => (rust_i18n::t!("notes.untitled").to_string(), String::new()),
+                        None => (
+                            rust_i18n::t!("notes.empty_editor").to_string(),
                             String::new(),
                         ),
-                        None => (rust_i18n::t!("notes.empty_editor").to_string(), String::new()),
                     };
                     let can_edit = active_note.is_some();
                     let nid = active_id.clone().unwrap_or_default();
@@ -1984,15 +1307,18 @@ impl NotesPanel {
                                                     .cursor_pointer()
                                                     .hover(|s| s.bg(theme.muted))
                                                     .child(
-                                                        div()
-                                                            .text_size(px(12.))
-                                                            .child(rust_i18n::t!("notes.export_md").to_string()),
+                                                        div().text_size(px(12.)).child(
+                                                            rust_i18n::t!("notes.export_md")
+                                                                .to_string(),
+                                                        ),
                                                     )
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(|this, _, window, cx| {
                                                             this.export_popover_open = false;
-                                                            this.export_active_note_as("md", window, cx);
+                                                            this.export_active_note_as(
+                                                                "md", window, cx,
+                                                            );
                                                         }),
                                                     ),
                                             )
@@ -2004,15 +1330,18 @@ impl NotesPanel {
                                                     .cursor_pointer()
                                                     .hover(|s| s.bg(theme.muted))
                                                     .child(
-                                                        div()
-                                                            .text_size(px(12.))
-                                                            .child(rust_i18n::t!("notes.export_pdf").to_string()),
+                                                        div().text_size(px(12.)).child(
+                                                            rust_i18n::t!("notes.export_pdf")
+                                                                .to_string(),
+                                                        ),
                                                     )
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(|this, _, window, cx| {
                                                             this.export_popover_open = false;
-                                                            this.export_active_note_as("pdf", window, cx);
+                                                            this.export_active_note_as(
+                                                                "pdf", window, cx,
+                                                            );
                                                         }),
                                                     ),
                                             ),
@@ -2030,21 +1359,16 @@ impl NotesPanel {
 impl Render for NotesPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Run any deferred slash command BEFORE rendering so the editor has the
-        // updated text (we have &mut Window here).
-        if self.pending_slash_execute.is_some() {
-            self.run_pending_command(window, cx);
-        }
-
         // If the tree selection changed without a Window context (observer),
-        // reload the editor content from the active note here where we have
-        // window access.
+        // reload the editor content from the active note here. The WYSIWYG
+        // editor's `set_content` rebuilds the whole block tree.
         if self.editor_needs_reload {
             self.editor_needs_reload = false;
             if let Some(id) = self.store.active_note.clone() {
                 if let Some(note) = self.store.notes.iter().find(|n| n.id == id) {
                     let content = note.content.clone();
                     self.editor.update(cx, |e, cx| {
-                        e.set_value(content, window, cx);
+                        e.set_content(&content, cx);
                     });
                 }
             }
@@ -2061,9 +1385,7 @@ impl Render for NotesPanel {
                 h_flex()
                     .w_full()
                     .h_full()
-                    .when(!self.list_collapsed, |h| {
-                        h.child(self.render_note_list(cx))
-                    })
+                    .when(!self.list_collapsed, |h| h.child(self.render_note_list(cx)))
                     .when(self.list_collapsed, |h| {
                         // Collapsed: show a thin vertical strip with an expand button.
                         h.child(
@@ -2091,10 +1413,6 @@ impl Render for NotesPanel {
                     })
                     .child(self.render_editor(window, cx)),
             );
-
-        if self.slash_open {
-            root = root.child(self.render_slash_palette(cx));
-        }
 
         if let Some(id) = &self.pending_delete {
             root = root.child(self.render_delete_confirm(id, cx));

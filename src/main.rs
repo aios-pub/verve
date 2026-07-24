@@ -14,13 +14,15 @@ use gpui_component::button::*;
 use gpui_component::*;
 
 use verve::assets::VerveAssets;
+use verve::state::persistence;
 use verve::ui::VerveApp;
 use verve::{mock, state, ui};
-use verve::state::persistence;
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        };
     }
     let _ = env_logger::Builder::from_default_env()
         .format_timestamp_secs()
@@ -38,6 +40,20 @@ fn main() {
         if let Ok(http_client) = reqwest_client::ReqwestClient::user_agent("verve/0.1.0") {
             cx.set_http_client(std::sync::Arc::new(http_client));
         }
+
+        // Register the WYSIWYG editor globals (ported from velotype). The notes
+        // panel's embedded block editor reads colors from `ThemeManager`, UI
+        // strings from `I18nManager`, and the table-header flag from
+        // `EditorSettings`. These are independent from gpui-component's own
+        // theme system.
+        verve::wysiwyg::theme::ThemeManager::init(cx);
+        verve::wysiwyg::i18n::I18nManager::init(cx);
+        verve::wysiwyg::config::EditorSettings::init(cx, true);
+        // Register the WYSIWYG block-editor keybindings (Newline, DeleteBack,
+        // BoldSelection, IndentBlock, ...). These are scoped to the
+        // "BlockEditor" key context so they only fire when a block is focused
+        // and never collide with verve's global bindings.
+        verve::wysiwyg::components::init(cx);
 
         // Apply locale early.
         if let Some(locale) = persistence::load_layout().and_then(|l| l.locale) {
@@ -90,14 +106,12 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("cmd-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("cmd-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("cmd-n", ui::app::NewRequest, None),
-        KeyBinding::new("cmd-e", ui::notes_panel::ToggleViewMode, None),
     ]);
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([
         KeyBinding::new("ctrl-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("ctrl-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("ctrl-n", ui::app::NewRequest, None),
-        KeyBinding::new("ctrl-e", ui::notes_panel::ToggleViewMode, None),
     ]);
 
     let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);

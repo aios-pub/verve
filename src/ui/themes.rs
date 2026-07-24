@@ -71,6 +71,22 @@ pub fn apply_theme(name: &str, cx: &mut gpui::App) {
             theme.light_theme = config;
         }
         gpui_component::Theme::change(mode, None, cx);
+
+        // Keep the WYSIWYG editor's theme in sync with verve's mode. The editor
+        // (ported from velotype) reads colors from its own ThemeManager global,
+        // which is separate from gpui-component's theme. Map dark → velotype,
+        // light → velotype-light.
+        let wysiwyg_theme_id = if mode.is_dark() {
+            "velotype"
+        } else {
+            "velotype-light"
+        };
+        if let Some(manager) = cx.try_global::<crate::wysiwyg::theme::ThemeManager>() {
+            let mut manager = crate::wysiwyg::theme::ThemeManager::clone(manager);
+            manager.set_theme_by_id(wysiwyg_theme_id);
+            cx.set_global(manager);
+        }
+
         cx.refresh_windows();
     }
 }

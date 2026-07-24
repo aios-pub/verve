@@ -1648,6 +1648,18 @@ impl Block {
                 .on_action(cx.listener(Self::on_italic_selection))
                 .on_action(cx.listener(Self::on_underline_selection))
                 .on_action(cx.listener(Self::on_code_selection))
+                .on_action(cx.listener(Self::on_heading1))
+                .on_action(cx.listener(Self::on_heading2))
+                .on_action(cx.listener(Self::on_heading3))
+                .on_action(cx.listener(Self::on_heading4))
+                .on_action(cx.listener(Self::on_heading5))
+                .on_action(cx.listener(Self::on_heading6))
+                .on_action(cx.listener(Self::on_convert_to_paragraph))
+                .on_action(cx.listener(Self::on_convert_to_code_block))
+                .on_action(cx.listener(Self::on_convert_to_bulleted_list))
+                .on_action(cx.listener(Self::on_convert_to_numbered_list))
+                .on_action(cx.listener(Self::on_convert_to_task_list))
+                .on_action(cx.listener(Self::on_convert_to_quote))
         }
     }
 }

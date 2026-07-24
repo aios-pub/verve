@@ -13,11 +13,13 @@ use super::{
 };
 use crate::wysiwyg::components::markdown::paste::should_split_plain_multiline_paste;
 use crate::wysiwyg::components::{
-    BlockDown, BlockUp, BoldSelection, CodeSelection, Copy, Cut, Delete, DeleteBack,
-    DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Home, IndentBlock,
-    ItalicSelection, MoveLeft, MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd,
-    SelectHome, SelectLeft, SelectRight, UnderlineSelection, WordDeleteBack, WordDeleteForward,
-    WordMoveLeft, WordMoveRight, WordSelectLeft, WordSelectRight,
+    BlockDown, BlockUp, BoldSelection, CodeSelection, ConvertToBulletedList, ConvertToCodeBlock,
+    ConvertToNumberedList, ConvertToParagraph, ConvertToQuote, ConvertToTaskList, Copy, Cut,
+    Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
+    Heading2, Heading3, Heading4, Heading5, Heading6, Home, IndentBlock, ItalicSelection, MoveLeft,
+    MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft,
+    SelectRight, UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft,
+    WordMoveRight, WordSelectLeft, WordSelectRight,
 };
 
 impl Block {
@@ -633,6 +635,75 @@ impl Block {
         if self.can_outdent_list_nesting() {
             cx.emit(BlockEvent::RequestOutdent);
         }
+    }
+
+    // -- block-kind formatting shortcuts (cmd-1..6, cmd-0, cmd-shift-*) -----
+
+    pub(crate) fn on_heading1(&mut self, _: &Heading1, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(1, cx);
+    }
+    pub(crate) fn on_heading2(&mut self, _: &Heading2, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(2, cx);
+    }
+    pub(crate) fn on_heading3(&mut self, _: &Heading3, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(3, cx);
+    }
+    pub(crate) fn on_heading4(&mut self, _: &Heading4, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(4, cx);
+    }
+    pub(crate) fn on_heading5(&mut self, _: &Heading5, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(5, cx);
+    }
+    pub(crate) fn on_heading6(&mut self, _: &Heading6, _w: &mut Window, cx: &mut Context<Self>) {
+        self.convert_to_heading(6, cx);
+    }
+    pub(crate) fn on_convert_to_paragraph(
+        &mut self,
+        _: &ConvertToParagraph,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_to_paragraph(cx);
+    }
+    pub(crate) fn on_convert_to_code_block(
+        &mut self,
+        _: &ConvertToCodeBlock,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.enter_code_block(None, cx);
+    }
+    pub(crate) fn on_convert_to_bulleted_list(
+        &mut self,
+        _: &ConvertToBulletedList,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_to_bulleted_list(cx);
+    }
+    pub(crate) fn on_convert_to_numbered_list(
+        &mut self,
+        _: &ConvertToNumberedList,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_to_numbered_list(cx);
+    }
+    pub(crate) fn on_convert_to_task_list(
+        &mut self,
+        _: &ConvertToTaskList,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_to_task_list(cx);
+    }
+    pub(crate) fn on_convert_to_quote(
+        &mut self,
+        _: &ConvertToQuote,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.convert_to_quote(cx);
     }
 
     pub(crate) fn on_block_key_down(

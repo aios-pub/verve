@@ -1778,6 +1778,82 @@ impl Block {
         self.mark_changed(cx);
     }
 
+    /// Turns this block into an ATX heading of the given level, preserving the
+    /// existing inline title content. Used by the heading keyboard shortcuts.
+    pub(crate) fn convert_to_heading(&mut self, level: u8, cx: &mut Context<Self>) {
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::Heading { level };
+        self.record.raw_fallback = None;
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.selected_range = self.selected_range.start.min(self.visible_len())
+            ..self.selected_range.end.min(self.visible_len());
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
+    /// Turns this block into a bulleted list item, preserving the inline title.
+    pub(crate) fn convert_to_bulleted_list(&mut self, cx: &mut Context<Self>) {
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::BulletedListItem;
+        self.record.raw_fallback = None;
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.selected_range = self.selected_range.start.min(self.visible_len())
+            ..self.selected_range.end.min(self.visible_len());
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
+    /// Turns this block into a numbered list item, preserving the inline title.
+    pub(crate) fn convert_to_numbered_list(&mut self, cx: &mut Context<Self>) {
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::NumberedListItem;
+        self.record.raw_fallback = None;
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.selected_range = self.selected_range.start.min(self.visible_len())
+            ..self.selected_range.end.min(self.visible_len());
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
+    /// Turns this block into a task list item (unchecked), preserving the title.
+    pub(crate) fn convert_to_task_list(&mut self, cx: &mut Context<Self>) {
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::TaskListItem { checked: false };
+        self.record.raw_fallback = None;
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.selected_range = self.selected_range.start.min(self.visible_len())
+            ..self.selected_range.end.min(self.visible_len());
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
+    /// Turns this block into a blockquote, preserving the inline title.
+    pub(crate) fn convert_to_quote(&mut self, cx: &mut Context<Self>) {
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.clear_inline_projection();
+        self.record.kind = BlockKind::Quote;
+        self.record.raw_fallback = None;
+        self.quote_reparse_requested = false;
+        self.sync_edit_mode_from_kind();
+        self.sync_render_cache();
+        self.selected_range = self.selected_range.start.min(self.visible_len())
+            ..self.selected_range.end.min(self.visible_len());
+        cx.emit(BlockEvent::Changed);
+        cx.notify();
+    }
+
     pub(crate) fn convert_to_separator(&mut self, cx: &mut Context<Self>) {
         self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
         self.make_separator();

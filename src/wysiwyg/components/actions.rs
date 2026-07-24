@@ -114,7 +114,7 @@ pub struct OpenRecentFile {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ShortcutCategory {
+pub enum ShortcutCategory {
     File,
     Edit,
     Navigation,
@@ -125,7 +125,7 @@ pub(crate) enum ShortcutCategory {
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ShortcutCommand {
+pub enum ShortcutCommand {
     Newline,
     DeleteBack,
     Delete,
@@ -188,12 +188,12 @@ pub(crate) enum ShortcutCommand {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ShortcutDefinition {
-    pub(crate) command: ShortcutCommand,
-    pub(crate) id: &'static str,
-    pub(crate) category: ShortcutCategory,
-    pub(crate) default_keys: &'static [&'static str],
-    pub(crate) context: Option<&'static str>,
+pub struct ShortcutDefinition {
+    pub command: ShortcutCommand,
+    pub id: &'static str,
+    pub category: ShortcutCategory,
+    pub default_keys: &'static [&'static str],
+    pub context: Option<&'static str>,
 }
 
 const BLOCK_CONTEXT: Option<&str> = Some("BlockEditor");
@@ -634,11 +634,83 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     },
 ];
 
-pub(crate) fn shortcut_definitions() -> &'static [ShortcutDefinition] {
+pub fn shortcut_definitions() -> &'static [ShortcutDefinition] {
     SHORTCUT_DEFINITIONS
 }
 
-pub(crate) fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
+/// Human-readable label for a shortcut id, for the Settings → Shortcuts list.
+/// Falls back to the id itself for ids without an explicit label.
+pub fn shortcut_label(id: &str) -> &'static str {
+    match id {
+        "newline" => "New line",
+        "delete_back" => "Delete (back)",
+        "delete" => "Delete (forward)",
+        "word_delete_back" => "Delete word (back)",
+        "word_delete_forward" => "Delete word (forward)",
+        "focus_prev" => "Previous block",
+        "focus_next" => "Next block",
+        "move_left" => "Move left",
+        "move_right" => "Move right",
+        "word_move_left" => "Move word left",
+        "word_move_right" => "Move word right",
+        "home" => "Line start",
+        "end" => "Line end",
+        "block_up" => "Move up",
+        "block_down" => "Move down",
+        "page_up" => "Page up",
+        "page_down" => "Page down",
+        "jump_to_top" => "Jump to document top",
+        "jump_to_bottom" => "Jump to document bottom",
+        "select_left" => "Select left",
+        "select_right" => "Select right",
+        "word_select_left" => "Select word left",
+        "word_select_right" => "Select word right",
+        "select_home" => "Select to line start",
+        "select_end" => "Select to line end",
+        "select_all" => "Select all",
+        "copy" => "Copy",
+        "cut" => "Cut",
+        "paste" => "Paste",
+        "undo" => "Undo",
+        "redo" => "Redo",
+        "bold_selection" => "Bold",
+        "italic_selection" => "Italic",
+        "underline_selection" => "Underline",
+        "code_selection" => "Inline code",
+        "indent_block" => "Indent / nest",
+        "outdent_block" => "Outdent / unnest",
+        "exit_code_block" => "Exit code block",
+        "heading_1" => "Heading 1",
+        "heading_2" => "Heading 2",
+        "heading_3" => "Heading 3",
+        "heading_4" => "Heading 4",
+        "heading_5" => "Heading 5",
+        "heading_6" => "Heading 6",
+        "convert_to_paragraph" => "Convert to paragraph",
+        "convert_to_code_block" => "Convert to code block",
+        "convert_to_bulleted_list" => "Convert to bulleted list",
+        "convert_to_numbered_list" => "Convert to numbered list",
+        "convert_to_task_list" => "Convert to task list",
+        "convert_to_quote" => "Convert to blockquote",
+        "toggle_view_mode" => "Toggle Rendered / Source",
+        "toggle_workspace" => "Toggle outline drawer",
+        _ => "",
+    }
+}
+
+/// Display label for a shortcut category (section heading in Settings).
+pub fn shortcut_category_label(category: ShortcutCategory) -> &'static str {
+    match category {
+        ShortcutCategory::File => "File",
+        ShortcutCategory::Edit => "Edit",
+        ShortcutCategory::Navigation => "Navigation",
+        ShortcutCategory::Formatting => "Formatting",
+        ShortcutCategory::Block => "Block",
+        ShortcutCategory::Other => "Other",
+    }
+}
+
+pub fn normalize_shortcut_keys(keys: &[String]) -> Option<Vec<String>> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
     for key in keys {
@@ -700,7 +772,7 @@ fn shortcuts_conflict(
     left.context == right.context && left_keys.iter().any(|key| right_keys.contains(key))
 }
 
-pub(crate) fn normalize_shortcut_config(
+pub fn normalize_shortcut_config(
     config: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, Vec<String>> {
     let mut effective: BTreeMap<&'static str, (bool, Vec<String>)> = BTreeMap::new();
@@ -752,7 +824,7 @@ pub(crate) fn normalize_shortcut_config(
         .collect()
 }
 
-pub(crate) fn resolved_shortcut_keys(
+pub fn resolved_shortcut_keys(
     config: &BTreeMap<String, Vec<String>>,
     command: ShortcutCommand,
 ) -> Vec<String> {
@@ -767,7 +839,7 @@ pub(crate) fn resolved_shortcut_keys(
         .unwrap_or_else(|| default_keys(*definition))
 }
 
-pub(crate) fn shortcut_conflict_for(
+pub fn shortcut_conflict_for(
     command: ShortcutCommand,
     proposed_keys: &[String],
     config: &BTreeMap<String, Vec<String>>,
@@ -922,14 +994,14 @@ fn remapped_chrome_keys(id: &str) -> &'static [&'static str] {
 
 /// Whether the given action id toggles editor chrome (view mode / workspace
 /// drawer) rather than controlling the app window.
-fn is_editor_chrome_toggle(id: &str) -> bool {
+pub fn is_editor_chrome_toggle(id: &str) -> bool {
     matches!(id, "toggle_view_mode" | "toggle_workspace")
 }
 
 /// Whether the given action id is a viewport-scroll command that velotype
 /// scopes globally but which should still be registered (re-scoped to the
 /// BlockEditor context) in the embedded build.
-fn is_viewport_navigation(id: &str) -> bool {
+pub fn is_viewport_navigation(id: &str) -> bool {
     matches!(
         id,
         "page_up" | "page_down" | "jump_to_top" | "jump_to_bottom"
@@ -946,7 +1018,7 @@ pub fn init(cx: &mut App) {
     install_keybindings(cx, &BTreeMap::new());
 }
 
-pub(crate) fn init_with_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {
+pub fn init_with_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {
     install_keybindings(cx, config);
 }
 

@@ -261,6 +261,11 @@ pub struct PanelLayout {
     /// Whether the notes panel's left-side note tree is collapsed.
     #[serde(default)]
     pub notes_collapsed: bool,
+    /// Custom WYSIWYG editor keyboard shortcuts, keyed by shortcut id (e.g.
+    /// "bold_selection") → list of key strings (e.g. ["cmd-b", "ctrl-b"]).
+    /// Applied at startup via `init_with_keybindings`. Absent = use defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcuts: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 /// Persisted Git integration settings.
@@ -503,6 +508,22 @@ pub fn load_hidden_rails() -> std::collections::HashSet<String> {
 pub fn save_hidden_rails(hidden: &std::collections::HashSet<String>) {
     let mut layout = load_layout().unwrap_or_default();
     layout.hidden_rails = Some(hidden.iter().cloned().collect());
+    let _ = save_layout(&layout);
+}
+
+/// Load custom WYSIWYG shortcut overrides (id → keys). Empty when none set.
+pub fn load_shortcuts() -> std::collections::BTreeMap<String, Vec<String>> {
+    load_layout().and_then(|l| l.shortcuts).unwrap_or_default()
+}
+
+/// Persist custom WYSIWYG shortcut overrides. Applied on next app startup.
+pub fn save_shortcuts(map: &std::collections::BTreeMap<String, Vec<String>>) {
+    let mut layout = load_layout().unwrap_or_default();
+    layout.shortcuts = if map.is_empty() {
+        None
+    } else {
+        Some(map.clone())
+    };
     let _ = save_layout(&layout);
 }
 

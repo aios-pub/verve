@@ -12,9 +12,18 @@ pub(crate) mod mermaid;
 
 pub use actions::*;
 
-/// Registers the WYSIWYG block-editor keybindings.
+/// Registers the WYSIWYG block-editor keybindings with default keys.
 pub fn init(cx: &mut gpui::App) {
     actions::init(cx);
+}
+
+/// Registers the WYSIWYG block-editor keybindings with user overrides from
+/// layout.json. Called at startup by main.rs.
+pub fn init_with_keybindings(
+    cx: &mut gpui::App,
+    config: &std::collections::BTreeMap<String, Vec<String>>,
+) {
+    actions::init_with_keybindings(cx, config);
 }
 pub use block::*;
 #[allow(unused_imports)]

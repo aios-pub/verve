@@ -52,8 +52,11 @@ fn main() {
         // Register the WYSIWYG block-editor keybindings (Newline, DeleteBack,
         // BoldSelection, IndentBlock, ...). These are scoped to the
         // "BlockEditor" key context so they only fire when a block is focused
-        // and never collide with verve's global bindings.
-        verve::wysiwyg::components::init(cx);
+        // and never collide with verve's global bindings. Custom overrides
+        // persisted in layout.json (set via Settings → Shortcuts) are applied
+        // here; they take effect on the next app restart.
+        let shortcut_config = verve::state::persistence::load_shortcuts();
+        verve::wysiwyg::components::init_with_keybindings(cx, &shortcut_config);
 
         // Apply locale early.
         if let Some(locale) = persistence::load_layout().and_then(|l| l.locale) {
@@ -110,12 +113,17 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("cmd-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("cmd-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("cmd-n", ui::app::NewRequest, None),
+        // Open a Markdown file in a new tab of the markdown editor view.
+        KeyBinding::new("cmd-o", ui::app::OpenMarkdownFile, None),
+        KeyBinding::new("cmd-shift-o", ui::app::OpenMarkdownFileNewTab, None),
     ]);
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([
         KeyBinding::new("ctrl-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("ctrl-s", ui::app::SaveWorkspace, None),
         KeyBinding::new("ctrl-n", ui::app::NewRequest, None),
+        KeyBinding::new("ctrl-o", ui::app::OpenMarkdownFile, None),
+        KeyBinding::new("ctrl-shift-o", ui::app::OpenMarkdownFileNewTab, None),
     ]);
 
     let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);

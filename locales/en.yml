@@ -129,6 +129,10 @@ settings:
   general: General
   environments: Environments
   about: About
+  shortcuts: Shortcuts
+  shortcuts_hint: Changes take effect after restarting the app.
+  shortcuts_edit: Edit
+  shortcuts_reset: Reset
   close: Close
   home_view: Home View
   home_view_desc: Choose which module the brand mark "V" opens. The selected module is hidden from the activity rail.

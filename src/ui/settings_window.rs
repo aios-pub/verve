@@ -44,6 +44,8 @@ pub enum SettingsSection {
     Environments,
     /// Remote document-sharing server settings.
     Remote,
+    /// WYSIWYG editor keyboard-shortcut mapping + customization.
+    Shortcuts,
     /// About / version / update check.
     About,
 }
@@ -54,6 +56,7 @@ impl SettingsSection {
             SettingsSection::General => rust_i18n::t!("settings.general").to_string(),
             SettingsSection::Environments => rust_i18n::t!("settings.environments").to_string(),
             SettingsSection::Remote => rust_i18n::t!("settings.remote").to_string(),
+            SettingsSection::Shortcuts => rust_i18n::t!("settings.shortcuts").to_string(),
             SettingsSection::About => rust_i18n::t!("settings.about").to_string(),
         }
     }
@@ -92,6 +95,12 @@ pub struct SettingsWindow {
     pub language_select: Entity<SelectState<Vec<String>>>,
     /// Text input for the publicly-advertised remote service address.
     pub remote_address_input: Entity<InputState>,
+    /// Shortcut id currently being rebound (capture mode), or None.
+    pub editing_shortcut: Option<String>,
+    /// Pending keystroke captured during edit, before confirm.
+    pub pending_keystroke: Option<String>,
+    /// In-memory draft of custom shortcuts (id → keys), saved on confirm.
+    pub shortcut_draft: std::collections::BTreeMap<String, Vec<String>>,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -192,6 +201,9 @@ impl SettingsWindow {
             sync_interval_select,
             language_select,
             remote_address_input,
+            editing_shortcut: None,
+            pending_keystroke: None,
+            shortcut_draft: crate::state::persistence::load_shortcuts(),
             _subs: vec![sub_home, sub_sync, sub_lang, sub_addr],
         }
     }
@@ -315,6 +327,256 @@ impl SettingsWindow {
             });
         })
         .detach();
+    }
+    // -- Shortcuts section --------------------------------------------------
+
+    /// Renders the keyboard-shortcut mapping viewer + editor.
+    fn render_shortcuts_section(
+        &mut self,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use gpui_component::h_flex;
+        use gpui_component::kbd::Kbd;
+        use std::collections::BTreeMap;
+
+        let definitions = crate::wysiwyg::components::shortcut_definitions();
+        let draft = self.shortcut_draft.clone();
+        let editing = self.editing_shortcut.clone();
+        let pending = self.pending_keystroke.clone();
+        let muted = theme.muted_foreground;
+        let accent = theme.accent;
+        let border = theme.border;
+        let fg = theme.foreground;
+
+        // Only show shortcuts that are actually registered (BlockEditor context
+        // + viewport nav + chrome toggles). Skip window-level actions filtered
+        // out by resolved_keybindings.
+        let is_visible = |def: &crate::wysiwyg::components::ShortcutDefinition| {
+            def.context.is_some()
+                || crate::wysiwyg::components::actions::is_viewport_navigation(def.id)
+                || crate::wysiwyg::components::actions::is_editor_chrome_toggle(def.id)
+        };
+
+        // Group by category, preserving definition order.
+        let mut groups: Vec<(
+            crate::wysiwyg::components::ShortcutCategory,
+            Vec<&crate::wysiwyg::components::ShortcutDefinition>,
+        )> = Vec::new();
+        for def in definitions.iter().filter(|d| is_visible(d)) {
+            if let Some((_, items)) = groups.iter_mut().find(|(c, _)| *c == def.category) {
+                items.push(def);
+            } else {
+                groups.push((def.category, vec![def]));
+            }
+        }
+
+        let mut content = v_flex().size_full().gap_6().p_6();
+
+        // Header hint.
+        content = content.child(
+            v_flex().gap_1().child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(rust_i18n::t!("settings.shortcuts_hint").to_string()),
+            ),
+        );
+
+        // Each category group.
+        for (category, items) in &groups {
+            let cat_label = crate::wysiwyg::components::shortcut_category_label(*category);
+            let mut group = v_flex().gap_2();
+            group = group.child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(fg)
+                    .child(cat_label.to_string()),
+            );
+
+            for def in items {
+                let id = def.id;
+                let label = crate::wysiwyg::components::shortcut_label(id);
+                if label.is_empty() {
+                    continue;
+                }
+                let keys: Vec<String> = draft
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| def.default_keys.iter().map(|s| s.to_string()).collect());
+                let is_editing = editing.as_deref() == Some(id);
+                let is_custom = draft.contains_key(id);
+
+                let mut row = h_flex()
+                    .w_full()
+                    .py(px(6.))
+                    .px(px(8.))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .gap(px(12.))
+                    .items_center();
+
+                // Label.
+                row = row.child(div().flex_1().min_w_0().text_sm().child(label.to_string()));
+
+                // Key display or capture input.
+                if is_editing {
+                    let display = pending.as_deref().unwrap_or("按快捷键...");
+                    row = row.child(
+                        div()
+                            .id(gpui::ElementId::Name(
+                                format!("shortcut-capture-{id}").into(),
+                            ))
+                            .px(px(8.))
+                            .py(px(3.))
+                            .rounded_md()
+                            .bg(accent.opacity(0.3))
+                            .text_sm()
+                            .text_color(fg)
+                            .child(display.to_string())
+                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                let ks = &event.keystroke;
+                                // Ignore lone modifier presses.
+                                if matches!(
+                                    ks.key.as_ref(),
+                                    "cmd" | "ctrl" | "alt" | "shift" | "super" | "fn"
+                                ) {
+                                    return;
+                                }
+                                let mut parts: Vec<&str> = Vec::new();
+                                if ks.modifiers.platform {
+                                    parts.push("cmd");
+                                }
+                                if ks.modifiers.control {
+                                    parts.push("ctrl");
+                                }
+                                if ks.modifiers.alt {
+                                    parts.push("alt");
+                                }
+                                if ks.modifiers.shift {
+                                    parts.push("shift");
+                                }
+                                parts.push(ks.key.as_ref());
+                                let combo = parts.join("-");
+                                this.pending_keystroke = Some(combo);
+                                cx.notify();
+                            })),
+                    );
+                } else {
+                    // Show resolved keys as Kbd keycaps.
+                    let mut key_row = h_flex().gap(px(4.));
+                    for k in &keys {
+                        if let Ok(ks) = gpui::Keystroke::parse(k) {
+                            key_row = key_row.child(Kbd::new(ks));
+                        }
+                    }
+                    row = row.child(key_row);
+                }
+
+                // Edit / Confirm / Cancel buttons.
+                let id_owned = id.to_string();
+                let command = def.command;
+                if is_editing {
+                    // Confirm.
+                    let id_c = id_owned.clone();
+                    let pending_c = pending.clone();
+                    row = row.child(
+                        Button::new(gpui::ElementId::Name(
+                            format!("shortcut-confirm-{id_owned}").into(),
+                        ))
+                        .small()
+                        .primary()
+                        .label("✓")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(combo) = pending_c.as_deref() {
+                                let keys = vec![combo.to_string()];
+                                // Validate.
+                                if crate::wysiwyg::components::normalize_shortcut_keys(&keys)
+                                    .is_some()
+                                {
+                                    // Conflict check.
+                                    let conflict =
+                                        crate::wysiwyg::components::shortcut_conflict_for(
+                                            command,
+                                            &keys,
+                                            &this.shortcut_draft,
+                                        );
+                                    if conflict.is_none() {
+                                        this.shortcut_draft.insert(id_c.clone(), keys);
+                                        crate::state::persistence::save_shortcuts(
+                                            &this.shortcut_draft,
+                                        );
+                                    }
+                                }
+                            }
+                            this.editing_shortcut = None;
+                            this.pending_keystroke = None;
+                            cx.notify();
+                        })),
+                    );
+                    // Cancel.
+                    row = row.child(
+                        Button::new(gpui::ElementId::Name(
+                            format!("shortcut-cancel-{id_owned}").into(),
+                        ))
+                        .small()
+                        .ghost()
+                        .label("×")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.editing_shortcut = None;
+                            this.pending_keystroke = None;
+                            cx.notify();
+                        })),
+                    );
+                } else {
+                    // Edit button.
+                    let id_e = id_owned.clone();
+                    row = row.child(
+                        Button::new(gpui::ElementId::Name(
+                            format!("shortcut-edit-{id_owned}").into(),
+                        ))
+                        .small()
+                        .ghost()
+                        .label(rust_i18n::t!("settings.shortcuts_edit").to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.editing_shortcut = Some(id_e.clone());
+                            this.pending_keystroke = None;
+                            cx.notify();
+                        })),
+                    );
+                    // Reset (only if customized).
+                    if is_custom {
+                        let id_r = id_owned.clone();
+                        row = row.child(
+                            Button::new(gpui::ElementId::Name(
+                                format!("shortcut-reset-{id_owned}").into(),
+                            ))
+                            .small()
+                            .ghost()
+                            .label(rust_i18n::t!("settings.shortcuts_reset").to_string())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.shortcut_draft.remove(&id_r);
+                                    crate::state::persistence::save_shortcuts(&this.shortcut_draft);
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                    }
+                }
+
+                group = group.child(row);
+            }
+            content = content.child(group);
+        }
+
+        v_flex()
+            .size_full()
+            .id("settings-shortcuts-scroll")
+            .overflow_y_scroll()
+            .child(content)
     }
 }
 
@@ -517,6 +779,31 @@ impl Render for SettingsWindow {
                                     .child(SettingsSection::Remote.label().to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.active_section = SettingsSection::Remote;
+                                        cx.notify();
+                                    }))
+                            })
+                            // Shortcuts nav item.
+                            .child({
+                                let is_active = active == SettingsSection::Shortcuts;
+                                let fg = theme.foreground;
+                                let accent = theme.accent;
+                                let mf = muted;
+                                div()
+                                    .id("settings-nav-shortcuts")
+                                    .px_2()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .when(is_active, |d| {
+                                        d.bg(accent.opacity(0.5)).text_color(fg)
+                                    })
+                                    .when(!is_active, |d| {
+                                        d.text_color(mf).hover(|s| s.bg(accent.opacity(0.2)))
+                                    })
+                                    .child(SettingsSection::Shortcuts.label().to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_section = SettingsSection::Shortcuts;
                                         cx.notify();
                                     }))
                             })
@@ -879,6 +1166,10 @@ impl Render for SettingsWindow {
                                                 .text_color(muted)
                                                 .child(rust_i18n::t!("settings.remote_restart_hint").to_string())
                                         )
+                                        .into_any_element()
+                                }
+                                SettingsSection::Shortcuts => {
+                                    self.render_shortcuts_section(&theme, cx)
                                         .into_any_element()
                                 }
                                 SettingsSection::About => {

@@ -129,6 +129,10 @@ settings:
   general: 通用设置
   environments: 环境管理
   about: 关于
+  shortcuts: 快捷键
+  shortcuts_hint: 更改将在重启应用后生效。
+  shortcuts_edit: 编辑
+  shortcuts_reset: 重置
   close: 关闭
   home_view: 首页指向
   home_view_desc: 选择品牌标识「V」点击后打开的模块。被选中的模块将自动从活动栏隐藏。

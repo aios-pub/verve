@@ -4,7 +4,15 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{img, *};
 
 // Actions for keybindings (PRD §6).
-actions!(verve, [SaveWorkspace, NewRequest]);
+actions!(
+    verve,
+    [
+        SaveWorkspace,
+        NewRequest,
+        OpenMarkdownFile,
+        OpenMarkdownFileNewTab
+    ]
+);
 use crate::assets::{
     BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
     K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
@@ -2128,10 +2136,13 @@ impl Render for VerveApp {
         );
 
         v_flex()
+            .id("verve-app-root")
             .size_full()
             .overflow_hidden()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .on_action(cx.listener(Self::on_open_markdown_file))
+            .on_action(cx.listener(Self::on_open_markdown_file_new_tab))
             .child(self.render_title_bar(cx))
             .child(
                 h_flex()
@@ -3796,6 +3807,30 @@ impl VerveApp {
                     })),
             )
             .child(self.render_lang_picker(cx))
+    }
+
+    /// cmd-o — open a Markdown file in the markdown editor view.
+    fn on_open_markdown_file(
+        &mut self,
+        _: &OpenMarkdownFile,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_view = SideView::MarkdownEditor;
+        let _ = self.markdown.update(cx, |p, cx| p.open_file_dialog(cx));
+        cx.notify();
+    }
+
+    /// cmd-shift-o — same: open in a new tab of the markdown editor view.
+    fn on_open_markdown_file_new_tab(
+        &mut self,
+        _: &OpenMarkdownFileNewTab,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_view = SideView::MarkdownEditor;
+        let _ = self.markdown.update(cx, |p, cx| p.open_file_dialog(cx));
+        cx.notify();
     }
 }
 

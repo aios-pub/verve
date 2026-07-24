@@ -104,7 +104,10 @@ pub fn rule_map(project: &Project) -> Arc<Vec<RuleEntry>> {
     Arc::new(entries)
 }
 
-fn walk_folder(folder: &crate::state::models::Folder, collect: &mut impl FnMut(String, String, &MockRule)) {
+fn walk_folder(
+    folder: &crate::state::models::Folder,
+    collect: &mut impl FnMut(String, String, &MockRule),
+) {
     for req in &folder.requests {
         if let Some(m) = req.mock.as_ref() {
             collect(req.name.clone(), req.url.clone(), m);
@@ -220,10 +223,9 @@ pub(crate) fn url_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(b);
                 i += 3;
                 continue;
@@ -250,7 +252,11 @@ pub(crate) fn rule_matches_for(entry: &RuleEntry, req: &dyn MockRequestLike) -> 
     let path_match = match &entry.rule.match_path {
         PathPattern::Exact(s) => req.path() == *s,
         PathPattern::Prefix(s) => req.path().starts_with(s.as_str()),
-        PathPattern::Regex(_) => entry.regex.as_ref().map(|r| r.is_match(req.path())).unwrap_or(false),
+        PathPattern::Regex(_) => entry
+            .regex
+            .as_ref()
+            .map(|r| r.is_match(req.path()))
+            .unwrap_or(false),
     };
     if !path_match {
         return false;
@@ -314,10 +320,18 @@ mod tests {
     }
 
     impl MockRequestLike for TestRequest {
-        fn method(&self) -> &str { &self.method }
-        fn path(&self) -> &str { &self.path }
-        fn query(&self) -> &HashMap<String, String> { &self.query }
-        fn headers(&self) -> &HashMap<String, String> { &self.headers }
+        fn method(&self) -> &str {
+            &self.method
+        }
+        fn path(&self) -> &str {
+            &self.path
+        }
+        fn query(&self) -> &HashMap<String, String> {
+            &self.query
+        }
+        fn headers(&self) -> &HashMap<String, String> {
+            &self.headers
+        }
     }
 
     fn req(method: &str, path: &str) -> TestRequest {
@@ -389,7 +403,13 @@ mod tests {
     fn method_filter_works() {
         let mut r = rule_exact("/a");
         r.match_method = Some(RequestMethod::Post);
-        let e = RuleEntry { rule: r, priority: 0, pattern: "/a".into(), regex: None, name: "t".into() };
+        let e = RuleEntry {
+            rule: r,
+            priority: 0,
+            pattern: "/a".into(),
+            regex: None,
+            name: "t".into(),
+        };
         assert!(!rule_matches_for(&e, &req("GET", "/a")));
         assert!(rule_matches_for(&e, &req("POST", "/a")));
     }
@@ -398,7 +418,13 @@ mod tests {
     fn query_match_requires_presence_and_value() {
         let mut r = rule_exact("/a");
         r.match_query = vec![KeyValue::new("debug", "1")];
-        let e = RuleEntry { rule: r, priority: 0, pattern: "/a".into(), regex: None, name: "t".into() };
+        let e = RuleEntry {
+            rule: r,
+            priority: 0,
+            pattern: "/a".into(),
+            regex: None,
+            name: "t".into(),
+        };
         assert!(!rule_matches_for(&e, &req("GET", "/a")));
         assert!(rule_matches_for(&e, &req("GET", "/a?debug=1")));
         assert!(!rule_matches_for(&e, &req("GET", "/a?debug=2")));
@@ -411,11 +437,18 @@ mod tests {
         r1.mock = None;
         p.requests.push(r1);
         let mut r2 = crate::state::models::ApiRequest::new("b", RequestMethod::Get, "/api/b");
-        r2.mock = Some(MockRule { enabled: false, ..Default::default() });
+        r2.mock = Some(MockRule {
+            enabled: false,
+            ..Default::default()
+        });
         p.requests.push(r2);
-        let gen = generate_missing(&p);
-        assert_eq!(gen.len(), 1, "only the request without a rule gets one");
-        let (id, rule) = &gen[0];
+        let generated = generate_missing(&p);
+        assert_eq!(
+            generated.len(),
+            1,
+            "only the request without a rule gets one"
+        );
+        let (id, rule) = &generated[0];
         assert_eq!(p.requests[0].id, *id);
         assert!(rule.enabled);
         assert_eq!(rule.status, 200);

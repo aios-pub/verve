@@ -47,10 +47,7 @@ pub enum ClusterAuth {
     /// Bearer token authentication.
     Token { token: String },
     /// Client certificate + key (base64-encoded PEM data).
-    ClientCert {
-        cert_data: String,
-        key_data: String,
-    },
+    ClientCert { cert_data: String, key_data: String },
     /// Username + password (HTTP basic auth).
     BasicAuth { username: String, password: String },
 }
@@ -243,9 +240,12 @@ pub fn parse_kubeconfig_contexts(raw_yaml: &str) -> Result<Vec<KubeconfigContext
             Some(c) => c,
             None => continue,
         };
-        let user = match ctx.context.user.as_deref().and_then(|uname| {
-            kcfg.users.iter().find(|u| u.name == uname)
-        }) {
+        let user = match ctx
+            .context
+            .user
+            .as_deref()
+            .and_then(|uname| kcfg.users.iter().find(|u| u.name == uname))
+        {
             Some(u) => u,
             None => continue,
         };
@@ -275,14 +275,8 @@ pub fn cluster_from_kubeconfig(
     let (server, namespace, auth, _ca, _orig_ctx) = extract_from_raw_kubeconfig(&raw, context_name)
         .ok_or_else(|| format!("在 kubeconfig 中找不到 context: {context_name}"))?;
 
-    let mc = ManualCluster::from_kubeconfig(
-        display_name,
-        &server,
-        &namespace,
-        auth,
-        raw,
-        context_name,
-    );
+    let mc =
+        ManualCluster::from_kubeconfig(display_name, &server, &namespace, auth, raw, context_name);
     Ok(mc)
 }
 
@@ -413,7 +407,10 @@ pub fn import_kubeconfig_from_string(raw: &str) -> Result<usize, String> {
             Ok(mut new_cluster) => {
                 // Check if we already have a cluster with this name; if so update it (overwrite),
                 // preserving connection_type/ssh_host_id if the user previously configured them.
-                if let Some(existing) = existing_clusters.iter_mut().find(|c| c.name == new_cluster.name) {
+                if let Some(existing) = existing_clusters
+                    .iter_mut()
+                    .find(|c| c.name == new_cluster.name)
+                {
                     // Preserve user-configured connection settings if they were set
                     if existing.connection_type != ClusterConnectionType::Direct {
                         new_cluster.connection_type = existing.connection_type;
@@ -495,7 +492,9 @@ fn extract_from_raw_kubeconfig(
 
     // Extract auth from user entry
     let auth = if let Some(token) = &named_user.user.token {
-        ClusterAuth::Token { token: token.clone() }
+        ClusterAuth::Token {
+            token: token.clone(),
+        }
     } else if named_user.user.cert_data.is_some() || named_user.user.key_data.is_some() {
         ClusterAuth::ClientCert {
             cert_data: named_user.user.cert_data.clone().unwrap_or_default(),
@@ -508,10 +507,16 @@ fn extract_from_raw_kubeconfig(
         }
     } else {
         // Default to empty token (user can fill later)
-        ClusterAuth::Token { token: String::new() }
+        ClusterAuth::Token {
+            token: String::new(),
+        }
     };
 
-    let namespace = ctx.context.namespace.clone().unwrap_or_else(|| "default".into());
+    let namespace = ctx
+        .context
+        .namespace
+        .clone()
+        .unwrap_or_else(|| "default".into());
 
     Some((
         cluster.cluster.server.clone(),
@@ -525,7 +530,8 @@ fn extract_from_raw_kubeconfig(
 /// Generate a merged KubeConfig from the manual cluster list and write it.
 pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
     use crate::k8s::config::{
-        Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser, UserEntry,
+        Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser,
+        UserEntry,
     };
 
     let mut cfg = load_verve_kubeconfig();
@@ -533,12 +539,18 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
     // Context names match cluster display names; clusters are "{name}-cluster", users "{name}-user".
     let manual_ctx_names: std::collections::HashSet<&str> =
         clusters.iter().map(|c| c.name.as_str()).collect();
-    let manual_cluster_names: std::collections::HashSet<String> =
-        clusters.iter().map(|c| format!("{}-cluster", c.name)).collect();
-    let manual_user_names: std::collections::HashSet<String> =
-        clusters.iter().map(|c| format!("{}-user", c.name)).collect();
-    cfg.clusters.retain(|c| !manual_cluster_names.contains(&c.name));
-    cfg.contexts.retain(|c| !manual_ctx_names.contains(c.name.as_str()));
+    let manual_cluster_names: std::collections::HashSet<String> = clusters
+        .iter()
+        .map(|c| format!("{}-cluster", c.name))
+        .collect();
+    let manual_user_names: std::collections::HashSet<String> = clusters
+        .iter()
+        .map(|c| format!("{}-user", c.name))
+        .collect();
+    cfg.clusters
+        .retain(|c| !manual_cluster_names.contains(&c.name));
+    cfg.contexts
+        .retain(|c| !manual_ctx_names.contains(c.name.as_str()));
     cfg.users.retain(|u| !manual_user_names.contains(&u.name));
 
     for mc in clusters {
@@ -548,8 +560,7 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
         // Extract CA data from raw kubeconfig if available
         let ca_data = if let Some(raw) = &mc.raw_kubeconfig {
             if let Some(orig_ctx) = &mc.original_context {
-                extract_from_raw_kubeconfig(raw, orig_ctx)
-                    .and_then(|(_, _, _, ca, _)| ca)
+                extract_from_raw_kubeconfig(raw, orig_ctx).and_then(|(_, _, _, ca, _)| ca)
             } else {
                 None
             }
@@ -573,9 +584,7 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
 
         // Build the User entry based on auth type.
         let (cert_data, key_data, token, username, password) = match &mc.auth {
-            ClusterAuth::Token { token } => {
-                (None, None, Some(token.clone()), None, None)
-            }
+            ClusterAuth::Token { token } => (None, None, Some(token.clone()), None, None),
             ClusterAuth::ClientCert {
                 cert_data,
                 key_data,
@@ -586,9 +595,13 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
                 None,
                 None,
             ),
-            ClusterAuth::BasicAuth { username, password } => {
-                (None, None, None, Some(username.clone()), Some(password.clone()))
-            }
+            ClusterAuth::BasicAuth { username, password } => (
+                None,
+                None,
+                None,
+                Some(username.clone()),
+                Some(password.clone()),
+            ),
         };
         let user = UserEntry {
             cert_data,
@@ -639,10 +652,14 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("verve-k8s-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
         drop(_guard);
@@ -668,7 +685,11 @@ mod tests {
 
             // Check kubeconfig was written
             let kcfg = load_verve_kubeconfig();
-            assert!(kcfg.clusters.iter().any(|cl| cl.name == "test-cluster-cluster"));
+            assert!(
+                kcfg.clusters
+                    .iter()
+                    .any(|cl| cl.name == "test-cluster-cluster")
+            );
             assert!(kcfg.contexts.iter().any(|ctx| ctx.name == "test-cluster"));
 
             remove_manual_cluster(&c.id);
@@ -680,11 +701,7 @@ mod tests {
     fn ssh_tunnel_cluster_defaults() {
         // via_ssh() should set SshTunnel connection type, ssh_host_id, and
         // default insecure_skip_tls to true (common case for 127.0.0.1 cert mismatch).
-        let c = ManualCluster::via_ssh(
-            "private-cluster",
-            "https://127.0.0.1:6443",
-            "ssh-host-123",
-        );
+        let c = ManualCluster::via_ssh("private-cluster", "https://127.0.0.1:6443", "ssh-host-123");
         assert_eq!(c.name, "private-cluster");
         assert_eq!(c.server, "https://127.0.0.1:6443");
         assert!(c.uses_ssh_tunnel());
@@ -705,11 +722,8 @@ mod tests {
     #[test]
     fn cluster_serialization_preserves_tunnel_fields() {
         with_temp_home(|| {
-            let mut c = ManualCluster::via_ssh(
-                "tunnel-cluster",
-                "https://10.0.0.1:6443",
-                "bastion-ssh-id",
-            );
+            let mut c =
+                ManualCluster::via_ssh("tunnel-cluster", "https://10.0.0.1:6443", "bastion-ssh-id");
             c.insecure_skip_tls = false; // user explicitly disabled
             upsert_manual_cluster(c.clone());
 
@@ -808,34 +822,53 @@ users:
         with_temp_home(|| {
             // Create and upsert a cluster
             let mut c1 = ManualCluster::new("my-cluster", "https://example.com:6443");
-            c1.auth = ClusterAuth::Token { token: "token1".into() };
+            c1.auth = ClusterAuth::Token {
+                token: "token1".into(),
+            };
             upsert_manual_cluster(c1.clone());
 
             // Modify token and upsert again
             let mut c2 = c1.clone();
-            c2.auth = ClusterAuth::Token { token: "updated-token".into() };
+            c2.auth = ClusterAuth::Token {
+                token: "updated-token".into(),
+            };
             upsert_manual_cluster(c2);
 
             // Load resulting kubeconfig and verify no duplicates
             let kcfg = load_verve_kubeconfig();
 
             // Count cluster entries
-            let cluster_count = kcfg.clusters.iter()
+            let cluster_count = kcfg
+                .clusters
+                .iter()
                 .filter(|c| c.name == "my-cluster-cluster")
                 .count();
-            assert_eq!(cluster_count, 1, "should have exactly one cluster entry, got {cluster_count}");
+            assert_eq!(
+                cluster_count, 1,
+                "should have exactly one cluster entry, got {cluster_count}"
+            );
 
             // Count user entries
-            let user_count = kcfg.users.iter()
+            let user_count = kcfg
+                .users
+                .iter()
                 .filter(|u| u.name == "my-cluster-user")
                 .count();
-            assert_eq!(user_count, 1, "should have exactly one user entry, got {user_count}");
+            assert_eq!(
+                user_count, 1,
+                "should have exactly one user entry, got {user_count}"
+            );
 
             // Count context entries
-            let ctx_count = kcfg.contexts.iter()
+            let ctx_count = kcfg
+                .contexts
+                .iter()
                 .filter(|c| c.name == "my-cluster")
                 .count();
-            assert_eq!(ctx_count, 1, "should have exactly one context entry, got {ctx_count}");
+            assert_eq!(
+                ctx_count, 1,
+                "should have exactly one context entry, got {ctx_count}"
+            );
         });
     }
 
@@ -869,7 +902,10 @@ users:
         assert_eq!(contexts[0].name, "default");
         assert_eq!(contexts[0].server, "https://127.0.0.1:6443");
         assert!(contexts[0].has_ca, "CA data should be parsed after repair");
-        assert!(contexts[0].has_client_cert, "client cert should be parsed after repair");
+        assert!(
+            contexts[0].has_client_cert,
+            "client cert should be parsed after repair"
+        );
     }
 
     #[test]
@@ -877,7 +913,8 @@ users:
         // Test against the user's actual file if it exists (development only)
         let path = "/Users/lijing/Downloads/kubeconfig-98.yaml";
         if let Ok(content) = std::fs::read_to_string(path) {
-            let contexts = parse_kubeconfig_contexts(&content).expect("user kubeconfig should parse");
+            let contexts =
+                parse_kubeconfig_contexts(&content).expect("user kubeconfig should parse");
             assert!(!contexts.is_empty());
         }
     }
@@ -925,7 +962,14 @@ users:
             assert_eq!(clusters.len(), 2);
             assert!(clusters.iter().any(|c| c.name == "prod"));
             assert!(clusters.iter().any(|c| c.name == "staging"));
-            assert!(clusters.iter().find(|c| c.name == "prod").unwrap().raw_kubeconfig.is_some());
+            assert!(
+                clusters
+                    .iter()
+                    .find(|c| c.name == "prod")
+                    .unwrap()
+                    .raw_kubeconfig
+                    .is_some()
+            );
 
             // Re-importing should update (not duplicate)
             let count2 = import_kubeconfig_from_string(kubeconfig).unwrap();

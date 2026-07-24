@@ -62,8 +62,8 @@ pub fn upsert_share(share: ShareConfig) -> Vec<ShareConfig> {
     // Remove any existing share for the same document target
     shares.retain(|s| {
         !(s.project_id == share.project_id
-          && s.scope == share.scope
-          && s.target_id == share.target_id)
+            && s.scope == share.scope
+            && s.target_id == share.target_id)
     });
     // Add the new share
     shares.push(share);
@@ -94,8 +94,9 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         let mut s = ShareConfig::new("proj-1", "My Project");
         s.title = "Docs".into();
         let saved = upsert_share(s.clone());
@@ -112,7 +113,9 @@ mod tests {
 
         // Restore HOME.
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -127,8 +130,9 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         // Create first share for project proj-1, project scope
         let s1 = ShareConfig::new("proj-1", "My Project");
         let id1 = s1.id.clone();
@@ -157,7 +161,9 @@ mod tests {
 
         // Restore HOME.
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -172,8 +178,9 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         // Create share for project proj-1
         let s1 = ShareConfig::new("proj-1", "Project 1");
         let id1 = s1.id.clone();
@@ -206,7 +213,9 @@ mod tests {
 
         // Restore HOME.
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

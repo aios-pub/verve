@@ -121,10 +121,14 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("verve-docker-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
         if let Err(e) = result {

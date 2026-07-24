@@ -201,8 +201,9 @@ mod tests {
         ));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         let store = CloudStore::load();
         let mut project = Project::new("Cloud API");
         project
@@ -223,7 +224,9 @@ mod tests {
         assert!(store3.get_project(&pid).is_none());
 
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }

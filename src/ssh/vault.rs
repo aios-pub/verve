@@ -172,15 +172,18 @@ mod tests {
         ));
         std::fs::create_dir_all(&tmp).unwrap();
         let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
-
+        unsafe {
+            std::env::set_var("HOME", &tmp);
+        };
         let pw = "master123";
         let mut map = SecretMap::new();
         map.insert("host1:password".into(), "s3cret".into());
         let result = save_vault(pw, &map);
 
         if let Some(h) = old_home {
-            std::env::set_var("HOME", h);
+            unsafe {
+                std::env::set_var("HOME", h);
+            };
         }
         let _ = std::fs::remove_dir_all(&tmp);
         result.unwrap();

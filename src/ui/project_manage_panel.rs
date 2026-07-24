@@ -19,8 +19,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
+    h_flex, v_flex,
 };
 
 use crate::assets::{EXPORT, IMPORT};
@@ -1396,34 +1397,34 @@ impl ProjectManagePanel {
             .id("iter-scroll")
             .overflow_y_scroll()
             .child(
-                v_flex()
-                    .p_6()
-                    .gap_5()
-                    .max_w(px(820.))
-                    .child(section_title("迭代分支"))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child(
+            v_flex()
+                .p_6()
+                .gap_5()
+                .max_w(px(820.))
+                .child(section_title("迭代分支"))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted_foreground)
+                        .child(
                             "按分支组织迭代。每条分支对应一次开发迭代，可在此查看、创建与切换。",
                         ),
-                    )
-                    .child(
-                        h_flex().gap_2().child(
-                            Button::new("iter-new")
-                                .primary()
-                                .small()
-                                .icon(IconName::Plus)
-                                .label("新建迭代分支")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.pending = Some(PendingInput::NewBranch);
-                                    cx.notify();
-                                })),
-                        ),
-                    )
-                    .child(div().h(px(1.)).w_full().bg(theme.border)),
-            );
+                )
+                .child(
+                    h_flex().gap_2().child(
+                        Button::new("iter-new")
+                            .primary()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("新建迭代分支")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pending = Some(PendingInput::NewBranch);
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .child(div().h(px(1.)).w_full().bg(theme.border)),
+        );
 
         if !initialized {
             body = body.child(
@@ -1707,11 +1708,9 @@ impl ProjectManagePanel {
             })
             .unwrap_or_default();
 
-        let header = table_header(
-            &["所属目录", "接口名称", "方法", "请求路径", "状态", "标签"],
-            &[px(140.), px(160.), px(72.), px(220.), px(90.), px(120.)],
-            &theme,
-        );
+        let header_labels = ["所属目录", "接口名称", "方法", "请求路径", "状态", "标签"];
+        let header_widths = [px(140.), px(160.), px(72.), px(220.), px(90.), px(120.)];
+        let header = table_header(&header_labels, &header_widths, &theme);
 
         v_flex()
             .size_full()
@@ -1975,11 +1974,8 @@ fn mr_table(
     state_ent: Entity<AppState>,
 ) -> impl IntoElement {
     let widths = [px(220.), px(120.), px(120.), px(90.), px(140.)];
-    let header = table_header(
-        &["标题", "源分支", "目标分支", "状态", "创建时间"],
-        &widths,
-        theme,
-    );
+    let labels = ["标题", "源分支", "目标分支", "状态", "创建时间"];
+    let header = table_header(&labels, &widths, theme);
 
     let body = if mrs.is_empty() {
         v_flex().child(
@@ -2091,7 +2087,8 @@ fn status_code_table(
     state_ent: Entity<AppState>,
 ) -> impl IntoElement {
     let widths = [px(90.), px(140.), px(360.)];
-    let header = table_header(&["状态码", "名称", "描述"], &widths, theme);
+    let labels = ["状态码", "名称", "描述"];
+    let header = table_header(&labels, &widths, theme);
 
     let body = if codes.is_empty() {
         v_flex().child(
@@ -2160,7 +2157,8 @@ fn token_table(
     state_ent: Entity<AppState>,
 ) -> impl IntoElement {
     let widths = [px(160.), px(300.), px(160.)];
-    let header = table_header(&["备注名", "Token", "创建时间"], &widths, theme);
+    let labels = ["备注名", "Token", "创建时间"];
+    let header = table_header(&labels, &widths, theme);
 
     let body = if tokens.is_empty() {
         v_flex().child(

@@ -41,7 +41,9 @@ use verve::share::server;
 fn main() {
     // Initialize logging.
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        };
     }
     let _ = env_logger::Builder::from_default_env()
         .format_timestamp_secs()
@@ -95,11 +97,15 @@ fn main() {
         let p = std::path::Path::new(dir);
         if p.ends_with(".verve") {
             if let Some(parent) = p.parent() {
-                std::env::set_var("HOME", parent);
+                unsafe {
+                    std::env::set_var("HOME", parent);
+                };
             }
         } else {
             // Treat the arg as the parent that should contain `.verve`.
-            std::env::set_var("HOME", dir);
+            unsafe {
+                std::env::set_var("HOME", dir);
+            };
         }
     }
 

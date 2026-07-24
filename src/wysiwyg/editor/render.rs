@@ -5,6 +5,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
+use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::ButtonVariants as _;
 
@@ -2096,20 +2097,28 @@ impl Render for Editor {
             self.render_workspace_panel(&theme, &strings, workspace_width, cx)
         {
             main_content.child(workspace_panel)
-        } else if self.show_chrome {
-            // Workspace drawer is closed but chrome is on (side-view mode):
-            // show a thin expand strip (same pattern as the Notes panel's
-            // collapsed-list strip) so the user can reopen the outline.
+        } else if self.owns_window {
+            // Workspace drawer is closed and the editor owns its window
+            // (standalone mode, no host title bar): show a thin expand strip so
+            // the user can reopen the outline. Mirrors the Notes panel's
+            // collapsed-list strip (same width, border, bg, button).
+            //
+            // In the side-view (`show_chrome && !owns_window`) the host title
+            // bar already provides the outline toggle, so we collapse fully —
+            // no residual border, no redundant expand button.
+            let app = cx.theme();
+            let strip_border = app.border;
+            let strip_bg = app.muted.opacity(0.3);
             main_content.child(
                 div()
                     .w(px(28.))
                     .h_full()
                     .flex_shrink_0()
                     .border_r_1()
-                    .border_color(theme.colors.separator_color)
-                    .bg(theme.colors.editor_background.opacity(0.5))
+                    .border_color(strip_border)
+                    .bg(strip_bg)
                     .items_center()
-                    .pt(px(8.))
+                    .pt_2()
                     .child(
                         gpui_component::button::Button::new("editor-outline-expand")
                             .ghost()

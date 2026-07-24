@@ -1190,6 +1190,15 @@ mod tests {
 
     #[test]
     fn exports_mermaid_block_as_svg() {
+        // render_html renders the mermaid block to an SVG cached under
+        // <data_dir>/cache; isolate the data dir so this test never races with
+        // sibling HOME/data-dir tests under parallel execution.
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-html-mermaid-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&tmp).expect("create test data dir");
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let html = render_html(
             "```mermaid\nflowchart LR\nA --> B\n```",
             &Theme::default_theme(),
@@ -1317,6 +1326,14 @@ mod tests {
 
     #[test]
     fn invalid_mermaid_exports_escaped_raw_markdown() {
+        // Same data-dir isolation as exports_mermaid_block_as_svg — the render
+        // path resolves a cache dir before detecting the invalid diagram.
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-html-mermaid-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&tmp).expect("create test data dir");
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let html = render_html(
             "```mermaid\nnot a real mermaid diagram ::::\n```",
             &Theme::default_theme(),

@@ -188,7 +188,7 @@ impl Editor {
         self.toggle_view_mode_from_ui(cx);
     }
 
-    pub(super) fn toggle_view_mode_from_ui(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_view_mode_from_ui(&mut self, cx: &mut Context<Self>) {
         self.end_block_pointer_selection_sessions(cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.toggle_view_mode(cx);

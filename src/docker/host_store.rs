@@ -120,16 +120,11 @@ mod tests {
     fn with_temp_home<F: FnOnce()>(f: F) {
         let tmp = std::env::temp_dir().join(format!("verve-docker-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        // Point the persistence layer at a unique per-thread dir instead of
+        // mutating the process-global HOME env var. The thread-local override
+        // keeps parallel tests isolated with no cross-module races.
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
         if let Err(e) = result {
             std::panic::resume_unwind(e);

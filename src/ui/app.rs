@@ -4256,13 +4256,17 @@ impl VerveApp {
 
         let theme = cx.theme().clone();
         let md = self.markdown.clone();
-        let (title, dirty, file_path, outline_open, open_popover, export_popover, recents) = {
+        let (title, dirty, file_path, outline_open, view_mode, word_total, word_sel, open_popover, export_popover, recents) = {
             let r = md.read(cx);
+            let (wt, ws) = r.word_count(cx);
             (
                 r.title(cx),
                 r.dirty(cx),
                 r.file_path(cx),
                 r.outline_open(cx),
+                r.view_mode(cx),
+                wt,
+                ws,
                 r.open_popover_open(),
                 r.export_popover_open(),
                 r.recent_files().to_vec(),
@@ -4275,6 +4279,7 @@ impl VerveApp {
         let md_save = md.clone();
         let md_save_as = md.clone();
         let md_outline = md.clone();
+        let md_view_mode = md.clone();
         let md_export_html = md.clone();
         let md_export_pdf = md.clone();
         let md_open_pop = md.clone();
@@ -4290,6 +4295,32 @@ impl VerveApp {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
+            // Far-left rail toggle (shared across views, so the window chrome
+            // never shifts when switching views).
+            .child(self.render_rail_toggle(cx))
+            // Outline toggle — opens the document-outline drawer inside the
+            // editor. Same leading position + icon/selected/tooltip pattern as
+            // the Notes title bar's sidebar-toggle, so the two views read as
+            // one consistent sidebar affordance.
+            .child(
+                Button::new("md-title-outline")
+                    .ghost()
+                    .small()
+                    .icon(if outline_open {
+                        IconName::PanelLeft
+                    } else {
+                        IconName::PanelLeftOpen
+                    })
+                    .selected(outline_open)
+                    .tooltip(if outline_open {
+                        rust_i18n::t!("markdown.collapse_outline").to_string()
+                    } else {
+                        rust_i18n::t!("markdown.outline").to_string()
+                    })
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
+                    })),
+            )
             // Icon + filename + dirty marker
             .child(
                 h_flex()
@@ -4438,19 +4469,41 @@ impl VerveApp {
                         let _ = md_save_as.update(cx, |p, cx| p.save_as(window, cx));
                     })),
             )
-            // Outline toggle — opens the document-outline drawer inside the
-            // editor (headings tree on the left). Distinct from the activity-rail
-            // toggle (which is not shown in this title bar).
+            // View-mode toggle (Rendered ↔ Source), moved up from the status
+            // bar. Single Eye icon + .selected (lit in Source mode) + a tooltip
+            // naming the target mode — same affordance pattern as the outline
+            // toggle above.
             .child(
-                Button::new("md-title-outline")
+                Button::new("md-title-view-mode")
                     .small()
                     .ghost()
-                    .selected(outline_open)
-                    .icon(IconName::Menu)
-                    .tooltip(rust_i18n::t!("markdown.outline").to_string())
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
+                    .selected(view_mode == crate::wysiwyg::editor::ViewMode::Source)
+                    .icon(IconName::Eye)
+                    .tooltip(if view_mode == crate::wysiwyg::editor::ViewMode::Source {
+                        rust_i18n::t!("markdown.switch_to_rendered").to_string()
+                    } else {
+                        rust_i18n::t!("markdown.switch_to_source").to_string()
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = md_view_mode.update(cx, |p, cx| p.toggle_view_mode(cx));
                     })),
+            )
+            // Word count. Reads "N 字" normally, or "sel / total 字" with a
+            // selection. Plain muted text label, no interaction.
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(if let Some(sel) = word_sel {
+                        format!(
+                            "{} / {} {}",
+                            sel,
+                            word_total,
+                            rust_i18n::t!("markdown.word_suffix")
+                        )
+                    } else {
+                        format!("{} {}", word_total, rust_i18n::t!("markdown.word_suffix"))
+                    }),
             )
             // Export popover (HTML / PDF)
             .child(

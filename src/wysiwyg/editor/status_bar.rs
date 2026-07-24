@@ -48,7 +48,9 @@ impl Editor {
             ));
         }
 
-        if prefs.show_mode_switch {
+        // The mode switch lives in the host title bar for the embedded
+        // side-view; only the standalone (window-owning) editor shows it here.
+        if prefs.show_mode_switch && self.owns_window {
             left_items.push(render_mode_switch(
                 &mut self.status_bar,
                 self.view_mode,
@@ -67,7 +69,9 @@ impl Editor {
             ));
         }
 
-        if prefs.show_word_count {
+        // Word count lives in the host title bar for the embedded side-view;
+        // only the standalone (window-owning) editor shows it here.
+        if prefs.show_word_count && self.owns_window {
             let text = self.serialized_document_text(cx);
             let total_count = count_words(&text);
             let selection_count = self.selected_markdown_text(cx).as_deref().map(count_words);
@@ -86,6 +90,13 @@ impl Editor {
                 theme,
                 cx,
             ));
+        }
+
+        // If nothing is left to show (embedded side-view moved mode/word to the
+        // title bar, and there's no cursor position or custom buttons), hide the
+        // bar entirely so the editor fills the full height.
+        if left_items.is_empty() && right_items.is_empty() {
+            return None;
         }
 
         let bar = div()

@@ -341,3 +341,6 @@ markdown:
   export_html: Export as HTML
   export_pdf: Export as PDF
   no_recent: No recent files
+  switch_to_source: Switch to Source
+  switch_to_rendered: Switch to Rendered
+  word_suffix: words

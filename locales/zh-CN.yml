@@ -341,3 +341,6 @@ markdown:
   export_html: 导出 HTML
   export_pdf: 导出 PDF
   no_recent: 没有最近文件
+  switch_to_source: 切换到源码
+  switch_to_rendered: 切换到渲染
+  word_suffix: 字

@@ -6,16 +6,71 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result};
 
 use super::models::WorkspaceData;
 
+/// Process-wide data-directory override (used by `verve_server --data-dir`).
+///
+/// Set once at startup; takes precedence over the `$HOME/.verve` default. Tests
+/// should prefer [`set_thread_data_dir`] (per-thread) so parallel tests stay
+/// isolated without touching this or the `HOME` env var.
+static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+thread_local! {
+    /// Per-thread data-directory override, used by tests to point each test at
+    /// a unique temp dir without mutating the process-global `HOME` env var.
+    /// The rust test runner spawns one thread per test, so thread-local scoping
+    /// keeps parallel tests fully isolated.
+    static THREAD_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Install a process-wide data-directory override (startup only). Subsequent
+/// calls are ignored — the first value wins. Used by `verve_server --data-dir`.
+pub fn set_data_dir(dir: PathBuf) {
+    let _ = DATA_DIR_OVERRIDE.set(dir);
+}
+
+/// Install a per-thread data-directory override (tests). The returned guard
+/// clears the override on drop, restoring the prior value so nested scopes work.
+#[doc(hidden)]
+pub fn set_thread_data_dir(dir: PathBuf) -> ThreadDataDirGuard {
+    let prev = THREAD_DATA_DIR.with(|c| c.borrow_mut().replace(dir));
+    ThreadDataDirGuard(prev)
+}
+
+/// RAII guard that restores the prior per-thread data dir on drop.
+#[doc(hidden)]
+pub struct ThreadDataDirGuard(Option<PathBuf>);
+
+impl Drop for ThreadDataDirGuard {
+    fn drop(&mut self) {
+        THREAD_DATA_DIR.with(|c| {
+            *c.borrow_mut() = self.0.take();
+        });
+    }
+}
+
 /// Return the workspace directory, creating it if needed.
+///
+/// Resolution order: per-thread override (tests) → process override
+/// (`set_data_dir`, e.g. `--data-dir`) → `$HOME/.verve`.
 pub fn data_dir() -> Result<PathBuf> {
-    let dir = home_data_dir()?;
+    let dir = resolved_data_dir()?;
     fs::create_dir_all(&dir).with_context(|| format!("create data dir {:?}", dir))?;
     Ok(dir)
+}
+
+fn resolved_data_dir() -> Result<PathBuf> {
+    if let Some(dir) = THREAD_DATA_DIR.with(|c| c.borrow().clone()) {
+        return Ok(dir);
+    }
+    if let Some(dir) = DATA_DIR_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
+    home_data_dir()
 }
 
 fn home_data_dir() -> Result<PathBuf> {

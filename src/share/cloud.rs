@@ -194,16 +194,14 @@ mod tests {
 
     #[test]
     fn cloud_store_round_trips_projects() {
-        // Point HOME at a temp dir so data_dir() resolves there.
+        // Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+        // so this test can't race with sibling data-dir tests under parallel run).
         let tmp = std::env::temp_dir().join(format!(
             "verve-cloud-test-{}",
             crate::state::models::new_id()
         ));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let store = CloudStore::load();
         let mut project = Project::new("Cloud API");
         project
@@ -223,11 +221,6 @@ mod tests {
         let store3 = CloudStore::load();
         assert!(store3.get_project(&pid).is_none());
 
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

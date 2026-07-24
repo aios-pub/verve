@@ -13,7 +13,3 @@ pub mod vault;
 pub mod zmodem;
 
 pub use port_forward::LocalForward;
-
-/// Global mutex for serializing HOME-dependent tests across all ssh submodules.
-#[cfg(test)]
-pub static TEST_HOME_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());

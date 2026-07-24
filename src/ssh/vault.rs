@@ -162,29 +162,19 @@ mod tests {
 
     #[test]
     fn vault_load_save_round_trip() {
-        let _guard = crate::ssh::TEST_HOME_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
+        // Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+        // no mutex) so this test can't race with sibling data-dir tests.
         let tmp = std::env::temp_dir().join(format!(
             "verve-vault-test-{}",
             crate::state::models::new_id()
         ));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let pw = "master123";
         let mut map = SecretMap::new();
         map.insert("host1:password".into(), "s3cret".into());
         let result = save_vault(pw, &map);
 
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
         result.unwrap();
     }

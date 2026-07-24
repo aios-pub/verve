@@ -87,26 +87,17 @@ fn main() {
         }
     }
 
-    // Override the data directory: persistence::data_dir() reads $HOME/.verve,
-    // so point $HOME at the parent of the requested data dir.
+    // Override the data directory via the persistence-layer override point
+    // (no env-var mutation). If the path ends in `.verve` it's used as-is;
+    // otherwise it's treated as the parent and `.verve` is appended.
     if let Some(dir) = &data_dir {
-        // The cloud store reads <data>/cloud/, and data_dir() = $HOME/.verve.
-        // So if the user wants data at /var/verve, set HOME=/var (so
-        // $HOME/.verve = /var/verve). For clarity, we also support an absolute
-        // .verve path by setting HOME to its parent.
         let p = std::path::Path::new(dir);
-        if p.ends_with(".verve") {
-            if let Some(parent) = p.parent() {
-                unsafe {
-                    std::env::set_var("HOME", parent);
-                };
-            }
+        let resolved = if p.ends_with(".verve") {
+            p.to_path_buf()
         } else {
-            // Treat the arg as the parent that should contain `.verve`.
-            unsafe {
-                std::env::set_var("HOME", dir);
-            };
-        }
+            p.join(".verve")
+        };
+        verve::state::persistence::set_data_dir(resolved);
     }
 
     log::info!("verve-server starting: host={host} port={port}");

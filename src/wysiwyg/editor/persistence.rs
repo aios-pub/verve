@@ -47,7 +47,7 @@ pub(super) fn safe_code_fence_with_info(content: &str, info: Option<&str>) -> St
 }
 
 impl Editor {
-    pub(super) fn serialized_document_text(&self, cx: &App) -> String {
+    pub fn serialized_document_text(&self, cx: &App) -> String {
         if self.view_mode == super::ViewMode::Source {
             self.document.raw_source_text(cx)
         } else {

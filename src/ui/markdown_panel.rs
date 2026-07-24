@@ -21,7 +21,9 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{ActiveTheme, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::state::AppState;
+use crate::wysiwyg::editor::count_words;
 use crate::wysiwyg::editor::Editor;
+use crate::wysiwyg::editor::ViewMode;
 use crate::wysiwyg::export::ExportFormat;
 
 /// One open document: its own editor + backing file path.
@@ -283,6 +285,32 @@ impl MarkdownPanel {
 
     pub fn outline_open(&self, cx: &App) -> bool {
         self.active_tab().editor.read(cx).workspace_open()
+    }
+
+    /// The active tab's view mode (Rendered WYSIWYG or raw Source). Read by the
+    /// title bar to render the mode-switch button.
+    pub fn view_mode(&self, cx: &App) -> ViewMode {
+        self.active_tab().editor.read(cx).view_mode()
+    }
+
+    /// `(total, selection)` word counts for the active tab's document. The
+    /// selection count is `Some(n)` only when text is selected. Read by the
+    /// title bar to render the word-count label.
+    pub fn word_count(&self, cx: &App) -> (usize, Option<usize>) {
+        let editor = self.active_tab().editor.read(cx);
+        let total = count_words(&editor.serialized_document_text(cx));
+        let selection = editor
+            .selected_markdown_text(cx)
+            .map(|t| count_words(&t));
+        (total, selection)
+    }
+
+    /// Toggle the active tab between Rendered and Source view (UI entry point).
+    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        self.editor().clone().update(cx, |e, cx| {
+            e.toggle_view_mode_from_ui(cx);
+        });
+        cx.notify();
     }
 
     pub fn tab_labels(&self, cx: &App) -> Vec<(String, bool)> {

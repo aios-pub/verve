@@ -638,31 +638,17 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // All tests in this module mutate the process-global HOME environment
-    // variable and share the same underlying persistence directory, so they
-    // must run serially. A single static mutex enforces this regardless of
-    // the test runner's parallelism setting.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _guard = TEST_LOCK.lock().unwrap();
         use crate::state::models::new_id;
         let tmp = std::env::temp_dir().join(format!("verve-k8s-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        // Point the persistence layer at a unique per-thread dir instead of
+        // mutating the process-global HOME env var. The thread-local override
+        // keeps parallel tests isolated with no mutex and no cross-module race.
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
-        drop(_guard);
         if let Err(e) = result {
             std::panic::resume_unwind(e);
         }

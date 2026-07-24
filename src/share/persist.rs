@@ -86,17 +86,11 @@ mod tests {
 
     #[test]
     fn round_trip_via_temp_dir() {
-        // Use the shared ssh mutex to serialize all HOME-dependent tests.
-        let _guard = crate::ssh::TEST_HOME_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
+        // Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+        // no mutex) so this test can't race with sibling data-dir tests.
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         let mut s = ShareConfig::new("proj-1", "My Project");
         s.title = "Docs".into();
         let saved = upsert_share(s.clone());
@@ -111,28 +105,16 @@ mod tests {
         assert!(after_remove.is_empty());
         assert!(load_shares().is_empty());
 
-        // Restore HOME.
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn same_target_replaces_old_share() {
-        // Use the shared ssh mutex to serialize all HOME-dependent tests.
-        let _guard = crate::ssh::TEST_HOME_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
+        // Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+        // no mutex) so this test can't race with sibling data-dir tests.
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         // Create first share for project proj-1, project scope
         let s1 = ShareConfig::new("proj-1", "My Project");
         let id1 = s1.id.clone();
@@ -159,28 +141,16 @@ mod tests {
         remove_share(&id2);
         assert!(load_shares().is_empty());
 
-        // Restore HOME.
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn different_targets_coexist() {
-        // Use the shared ssh mutex to serialize all HOME-dependent tests.
-        let _guard = crate::ssh::TEST_HOME_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
+        // Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+        // no mutex) so this test can't race with sibling data-dir tests.
         let tmp = std::env::temp_dir().join(format!("verve-share-test-{}", new_id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let old_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", &tmp);
-        };
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
         // Create share for project proj-1
         let s1 = ShareConfig::new("proj-1", "Project 1");
         let id1 = s1.id.clone();
@@ -211,12 +181,6 @@ mod tests {
         remove_share(&id3);
         assert!(load_shares().is_empty());
 
-        // Restore HOME.
-        if let Some(h) = old_home {
-            unsafe {
-                std::env::set_var("HOME", h);
-            };
-        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

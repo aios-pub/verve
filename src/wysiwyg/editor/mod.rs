@@ -51,6 +51,10 @@ mod workspace;
 use self::status_bar::StatusBarState;
 use self::workspace::WorkspaceState;
 
+// Re-exported so hosts (e.g. the markdown side-view title bar) can count words
+// without depending on the private `status_bar` module.
+pub use self::status_bar::count_words;
+
 /// Link navigation request deferred until a `Window` is available.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingOpenLink {

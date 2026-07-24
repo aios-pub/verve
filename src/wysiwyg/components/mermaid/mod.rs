@@ -625,6 +625,25 @@ mod tests {
         }
     }
 
+    /// Isolate this test's Mermaid cache dir (`<data_dir>/cache/mermaid-svg`)
+    /// by pointing the persistence layer at a unique temp dir for the duration
+    /// of the returned guard. The override is thread-local, so parallel tests
+    /// (each on its own thread) never collide, and the `HOME` env var is never
+    /// touched — eliminating the cross-module race that used to make these
+    /// tests flaky under parallel execution.
+    fn isolated_cache_home() -> (
+        crate::state::persistence::ThreadDataDirGuard,
+        std::path::PathBuf,
+    ) {
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-mermaid-test-{}",
+            crate::state::models::new_id()
+        ));
+        fs::create_dir_all(&tmp).expect("create mermaid test home");
+        let guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
+        (guard, tmp)
+    }
+
     #[test]
     fn detects_mermaid_info_string() {
         assert!(is_mermaid_info_string(Some("mermaid")));
@@ -745,6 +764,7 @@ mod tests {
 
     #[test]
     fn renders_basic_flowchart_svg() {
+        let _home = isolated_cache_home();
         let svg = render_mermaid_to_svg("flowchart LR\nA --> B").expect("svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
@@ -752,6 +772,7 @@ mod tests {
 
     #[test]
     fn display_render_uses_scaled_intrinsic_size() {
+        let _home = isolated_cache_home();
         let source =
             parse_mermaid_fence_source("```mermaid\nflowchart LR\nA --> B\n```").expect("source");
         let rendered = render_mermaid_svg_for_display(&source, 720.0, 960.0).expect("display svg");
@@ -774,11 +795,13 @@ mod tests {
 
     #[test]
     fn invalid_mermaid_returns_error() {
+        let _home = isolated_cache_home();
         assert!(render_mermaid_to_svg("not a real mermaid diagram ::::").is_err());
     }
 
     #[test]
     fn display_cache_hit_does_not_call_renderer_again() {
+        let _home = isolated_cache_home();
         let source = unique_mermaid_source("display-cache-hit-does-not-call-renderer-again");
         let base_key = mermaid_cache_key(&source.body);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");
@@ -803,6 +826,7 @@ mod tests {
 
     #[test]
     fn display_cache_miss_reuses_base_cache() {
+        let _home = isolated_cache_home();
         let source = unique_mermaid_source("display-cache-miss-reuses-base-cache");
         let base_key = mermaid_cache_key(&source.body);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");
@@ -827,6 +851,7 @@ mod tests {
 
     #[test]
     fn display_scale_change_reuses_base_cache_with_new_display_file() {
+        let _home = isolated_cache_home();
         let source = unique_mermaid_source("display-scale-change-reuses-base-cache");
         let base_key = mermaid_cache_key(&source.body);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");

@@ -875,7 +875,7 @@ impl Editor {
 
     /// Returns the markdown text of the current selection, whether cross-block
     /// or within a single block. Returns `None` when nothing is selected.
-    pub(super) fn selected_markdown_text(&self, cx: &App) -> Option<String> {
+    pub fn selected_markdown_text(&self, cx: &App) -> Option<String> {
         // Prefer cross-block selection when present.
         if let Some(text) = self.cross_block_selected_markdown(cx) {
             if !text.is_empty() {

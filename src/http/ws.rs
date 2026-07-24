@@ -4,8 +4,8 @@
 //! smol-based, so we keep tokio isolated here). Messages flow back through an
 //! `smol::channel` that the GPUI side drains in a `cx.spawn` loop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // (no extra anyhow import needed: connect_async errors are stringified)
 use futures_util::{SinkExt as _, StreamExt as _};

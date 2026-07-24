@@ -59,8 +59,7 @@ impl ApiTunnel {
     /// - `https://kubernetes.default.svc:443` → ("kubernetes.default.svc", 443)
     /// - `https://10.0.0.1` (no port) → ("10.0.0.1", 6443, default K8s port)
     pub fn parse_server_url(server: &str) -> Result<(String, u16), String> {
-        let url = url::Url::parse(server)
-            .map_err(|e| format!("解析 API server URL 失败: {e}"))?;
+        let url = url::Url::parse(server).map_err(|e| format!("解析 API server URL 失败: {e}"))?;
         let host = url.host_str().ok_or("URL 缺少 host")?.to_string();
         let port = url.port().unwrap_or(6443);
         Ok((host, port))
@@ -109,7 +108,12 @@ impl ApiTunnel {
         })?;
 
         let bound_addr = format!("127.0.0.1:{local_port}");
-        log::info!("k8s tunnel: listening on {} → {}:{}", bound_addr, remote_host, remote_port);
+        log::info!(
+            "k8s tunnel: listening on {} → {}:{}",
+            bound_addr,
+            remote_host,
+            remote_port
+        );
 
         Ok(ApiTunnel {
             bound_addr,

@@ -182,7 +182,7 @@ pub fn project_to_apipost(project: &Project) -> serde_json::Result<String> {
 
 /// Build the postman JSON document (`serde_json::Value`) from a Verve project.
 fn build_postman_doc(project: &Project) -> serde_json::Value {
-    use serde_json::{json, Map};
+    use serde_json::{Map, json};
 
     // --- global.envs ---
     let envs: Vec<serde_json::Value> = project
@@ -852,7 +852,7 @@ pub fn project_to_postman_v2_1(project: &Project) -> serde_json::Result<String> 
 }
 
 fn build_postman_v21_doc(project: &Project) -> serde_json::Value {
-    use serde_json::{json, Map};
+    use serde_json::{Map, json};
 
     // Convert environments to collection variables.
     let mut variables = Vec::new();
@@ -906,7 +906,10 @@ fn postman_v21_request_item(req: &ApiRequest) -> serde_json::Value {
     use crate::state::models::Protocol;
 
     // Skip non-HTTP protocols (WebSocket/SSE/gRPC don't map to Postman v2.1 cleanly).
-    if matches!(req.protocol, Protocol::WebSocket | Protocol::Sse | Protocol::SocketIo) {
+    if matches!(
+        req.protocol,
+        Protocol::WebSocket | Protocol::Sse | Protocol::SocketIo
+    ) {
         return json!({
             "name": req.name,
             "request": { "method": method_label(req.method), "url": req.url }
@@ -1119,12 +1122,7 @@ fn build_swagger_doc(project: &Project) -> serde_json::Value {
     }
 
     for req in &all_requests {
-        let entry = swagger_for_request(
-            req,
-            &mut has_bearer,
-            &mut has_basic,
-            &mut has_apikey,
-        );
+        let entry = swagger_for_request(req, &mut has_bearer, &mut has_basic, &mut has_apikey);
         let (path_str, method, op) = match entry {
             Some(v) => v,
             None => continue,
@@ -1170,7 +1168,12 @@ fn build_swagger_doc(project: &Project) -> serde_json::Value {
     })
 }
 
-fn parse_swagger_url(url: &str, host: &mut String, base_path: &mut String, schemes: &mut Vec<String>) {
+fn parse_swagger_url(
+    url: &str,
+    host: &mut String,
+    base_path: &mut String,
+    schemes: &mut Vec<String>,
+) {
     let s = url.trim().trim_end_matches('/');
     let (scheme, rest) = if let Some(idx) = s.find("://") {
         let sch = s[..idx].to_lowercase();
@@ -1288,14 +1291,12 @@ fn swagger_for_request(
 fn swagger_body_parameter(req: &ApiRequest) -> Option<serde_json::Value> {
     match req.body.body_type {
         BodyType::None => None,
-        BodyType::Raw => {
-            Some(json!({
-                "name": "body",
-                "in": "body",
-                "required": true,
-                "schema": { "type": "string", "example": req.body.raw }
-            }))
-        }
+        BodyType::Raw => Some(json!({
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": { "type": "string", "example": req.body.raw }
+        })),
         BodyType::Urlencoded => {
             // Swagger 2.0 uses in: formData for urlencoded params.
             // Emit one formData parameter per key as a simpler alternative to a body schema.
@@ -1455,14 +1456,14 @@ mod tests {
         let mut project = Project::new("Demo API");
         project.description = "demo".into();
         let mut env = crate::state::models::Environment::new("dev");
-        env.variables.push(KeyValue::new("baseUrl", "https://api.example.com"));
+        env.variables
+            .push(KeyValue::new("baseUrl", "https://api.example.com"));
         project.environments.push(env);
 
         let mut req = ApiRequest::new("ListUsers", RequestMethod::Get, "{{baseUrl}}/users");
         req.params.push(KeyValue::new("page", "1"));
         req.params.push(KeyValue::new("size", "20"));
-        req.headers
-            .push(KeyValue::new("X-Trace", "t"));
+        req.headers.push(KeyValue::new("X-Trace", "t"));
         project.requests.push(req);
 
         let mut req2 = ApiRequest::new("CreateUser", RequestMethod::Post, "{{baseUrl}}/users");
@@ -1489,7 +1490,9 @@ mod tests {
         assert!(v["paths"]["/users"]["get"].is_object());
         assert!(v["paths"]["/users"]["post"].is_object());
         // query params present.
-        let params = v["paths"]["/users"]["get"]["parameters"].as_array().unwrap();
+        let params = v["paths"]["/users"]["get"]["parameters"]
+            .as_array()
+            .unwrap();
         assert_eq!(params.len(), 3); // page, size, X-Trace header
         // bearer auth scheme present.
         assert!(v["components"]["securitySchemes"]["bearerAuth"].is_object());
@@ -1500,7 +1503,10 @@ mod tests {
 
     #[test]
     fn openapi_path_cleaning() {
-        assert_eq!(openapi_path_from_url("{{baseUrl}}/users/{id}"), "/users/{id}");
+        assert_eq!(
+            openapi_path_from_url("{{baseUrl}}/users/{id}"),
+            "/users/{id}"
+        );
         assert_eq!(
             openapi_path_from_url("https://example.com/foo/bar"),
             "/foo/bar"

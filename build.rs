@@ -19,14 +19,20 @@ fn main() {
         ("linux", "x86_64") => "pdfium-linux-x64.tgz",
         ("linux", "aarch64") => "pdfium-linux-arm64.tgz",
         (os, arch) => {
-            println!("cargo:warning=No bundled Pdfium for {}/{}, PDF rendering will be unavailable", os, arch);
+            println!(
+                "cargo:warning=No bundled Pdfium for {}/{}, PDF rendering will be unavailable",
+                os, arch
+            );
             return;
         }
     };
 
     let archive_path = lib_assets_dir.join(archive_name);
     if !archive_path.exists() {
-        println!("cargo:warning=Pdfium archive not found at {}, PDF rendering will be unavailable", archive_path.display());
+        println!(
+            "cargo:warning=Pdfium archive not found at {}, PDF rendering will be unavailable",
+            archive_path.display()
+        );
         return;
     }
 
@@ -165,7 +171,10 @@ fn main() {
         }
     }
 
-    println!("cargo:warning=Using bundled Pdfium from {}", archive_path.display());
+    println!(
+        "cargo:warning=Using bundled Pdfium from {}",
+        archive_path.display()
+    );
 }
 
 fn copy_libs(src: &PathBuf, dst: &PathBuf) {

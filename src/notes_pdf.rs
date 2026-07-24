@@ -33,8 +33,7 @@ fn pt_to_mm(pt: f32) -> f32 {
 }
 
 pub fn markdown_to_pdf(md: &str, title: &str, out_path: &Path) -> Result<()> {
-    let (doc, page1, layer1) =
-        PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+    let (doc, page1, layer1) = PdfDocument::new(title, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
     let font_regular = doc.add_builtin_font(BuiltinFont::Helvetica)?;
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_italic = doc.add_builtin_font(BuiltinFont::HelveticaOblique)?;

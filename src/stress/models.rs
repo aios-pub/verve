@@ -158,7 +158,9 @@ where
 {
     let opt = Option::<f64>::deserialize(deserializer)?;
     // Coerce NaN/inf to 0 as well — these are never useful latencies.
-    Ok(opt.and_then(|v| if v.is_finite() { Some(v) } else { None }).unwrap_or(0.0))
+    Ok(opt
+        .and_then(|v| if v.is_finite() { Some(v) } else { None })
+        .unwrap_or(0.0))
 }
 
 /// Deserialize a `BTreeMap<String, f64>` treating any null values as 0.0.
@@ -172,7 +174,9 @@ where
     Ok(raw
         .into_iter()
         .map(|(k, v)| {
-            let v = v.and_then(|x| if x.is_finite() { Some(x) } else { None }).unwrap_or(0.0);
+            let v = v
+                .and_then(|x| if x.is_finite() { Some(x) } else { None })
+                .unwrap_or(0.0);
             (k, v)
         })
         .collect())
@@ -236,11 +240,7 @@ impl From<OhaJsonReport> for StressResult {
         let lat = &r.metrics.latency_ms;
         let p = &r.latency_percentiles;
         let coerce = |v: f64| {
-            if v.is_finite() && v >= 0.0 {
-                v
-            } else {
-                0.0
-            }
+            if v.is_finite() && v >= 0.0 { v } else { 0.0 }
         };
         Self {
             total_secs: coerce(r.summary.total),
@@ -253,7 +253,11 @@ impl From<OhaJsonReport> for StressResult {
                 p90: p.get("p90").copied().map(coerce).unwrap_or(coerce(lat.p95)),
                 p95: coerce(lat.p95),
                 p99: coerce(lat.p99),
-                p999: p.get("p99.9").copied().map(coerce).unwrap_or(coerce(lat.p99)),
+                p999: p
+                    .get("p99.9")
+                    .copied()
+                    .map(coerce)
+                    .unwrap_or(coerce(lat.p99)),
                 min: coerce(lat.min),
                 max: coerce(lat.max),
                 mean: coerce(lat.mean),

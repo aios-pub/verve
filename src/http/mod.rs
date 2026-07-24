@@ -7,5 +7,5 @@ pub mod tcp;
 pub mod variable;
 pub mod ws;
 
-pub use client::{execute, normalize_url, normalize_url_with_default, prepare, PreparedRequest};
+pub use client::{PreparedRequest, execute, normalize_url, normalize_url_with_default, prepare};
 pub use variable::{collect_placeholders, substitute};

@@ -10,16 +10,17 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::WindowExt as _;
 use gpui_component::Icon;
+use gpui_component::WindowExt as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
+    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     popover::Popover,
-    v_flex, ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
+    v_flex,
 };
 
 use crate::http;
@@ -246,8 +247,16 @@ impl RequestPanel {
             )
         });
         // Mock fields.
-        let mock_status_input = cx.new(|cx| InputState::new(window, cx).placeholder("200").default_value("200"));
-        let mock_delay_input = cx.new(|cx| InputState::new(window, cx).placeholder("0").default_value("0"));
+        let mock_status_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("200")
+                .default_value("200")
+        });
+        let mock_delay_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("0")
+                .default_value("0")
+        });
         let mock_body_editor = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor(RawLanguage::Json.highlight())
@@ -269,7 +278,8 @@ impl RequestPanel {
                 cx,
             )
         });
-        let path_pattern_options: Vec<String> = vec!["精确".to_string(), "前缀".to_string(), "正则".to_string()];
+        let path_pattern_options: Vec<String> =
+            vec!["精确".to_string(), "前缀".to_string(), "正则".to_string()];
         let mock_path_pattern_select = cx.new(|cx| {
             SelectState::new(
                 path_pattern_options,
@@ -278,7 +288,8 @@ impl RequestPanel {
                 cx,
             )
         });
-        let mock_match_path_input = cx.new(|cx| InputState::new(window, cx).placeholder("/api/path"));
+        let mock_match_path_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("/api/path"));
         // Auth fields.
         let auth_type_options: Vec<String> = AuthType::all()
             .iter()
@@ -639,17 +650,31 @@ impl RequestPanel {
                 // Load mock rule data.
                 if let Some(mock) = &r.mock {
                     self.mock_enabled = mock.enabled;
-                    self.mock_status_input.update(cx, |s, cx| s.set_value(mock.status.to_string(), window, cx));
-                    self.mock_delay_input.update(cx, |s, cx| s.set_value(mock.delay_ms.to_string(), window, cx));
-                    self.mock_body_editor.update(cx, |s, cx| s.set_value(mock.body.clone(), window, cx));
+                    self.mock_status_input
+                        .update(cx, |s, cx| s.set_value(mock.status.to_string(), window, cx));
+                    self.mock_delay_input.update(cx, |s, cx| {
+                        s.set_value(mock.delay_ms.to_string(), window, cx)
+                    });
+                    self.mock_body_editor
+                        .update(cx, |s, cx| s.set_value(mock.body.clone(), window, cx));
                     self.mock_headers_rows = kv_table::rows_from_pairs(&mock.headers, window, cx);
                     // Match method: "不限制" is index 7, others match their position in RequestMethod::all().
                     let method_idx = match &mock.match_method {
-                        Some(m) => RequestMethod::all().iter().position(|x| x == m).unwrap_or(7),
+                        Some(m) => RequestMethod::all()
+                            .iter()
+                            .position(|x| x == m)
+                            .unwrap_or(7),
                         None => 7,
                     };
                     self.mock_match_method_select.update(cx, |s, cx| {
-                        s.set_selected_value(&RequestMethod::all().get(method_idx).map(|m| m.to_string()).unwrap_or_else(|| "不限制".to_string()), window, cx)
+                        s.set_selected_value(
+                            &RequestMethod::all()
+                                .get(method_idx)
+                                .map(|m| m.to_string())
+                                .unwrap_or_else(|| "不限制".to_string()),
+                            window,
+                            cx,
+                        )
                     });
                     // Path pattern: 0=Exact, 1=Prefix, 2=Regex.
                     let (pattern_idx, pattern_str) = match &mock.match_path {
@@ -661,20 +686,34 @@ impl RequestPanel {
                         0 => "精确",
                         1 => "前缀",
                         _ => "正则",
-                    }.to_string();
+                    }
+                    .to_string();
                     self.mock_path_pattern_select.update(cx, |s, cx| {
                         s.set_selected_value(&pattern_str_val, window, cx)
                     });
-                    self.mock_match_path_input.update(cx, |s, cx| s.set_value(pattern_str, window, cx));
+                    self.mock_match_path_input
+                        .update(cx, |s, cx| s.set_value(pattern_str, window, cx));
                     self.mock_enable_templates = mock.enable_templates;
-                    self.mock_match_query_rows = kv_table::rows_from_pairs(&mock.match_query, window, cx);
-                    self.mock_match_header_rows = kv_table::rows_from_pairs(&mock.match_headers, window, cx);
+                    self.mock_match_query_rows =
+                        kv_table::rows_from_pairs(&mock.match_query, window, cx);
+                    self.mock_match_header_rows =
+                        kv_table::rows_from_pairs(&mock.match_headers, window, cx);
                 } else {
                     self.mock_enabled = false;
-                    self.mock_status_input.update(cx, |s, cx| s.set_value("200".to_string(), window, cx));
-                    self.mock_delay_input.update(cx, |s, cx| s.set_value("0".to_string(), window, cx));
-                    self.mock_body_editor.update(cx, |s, cx| s.set_value("{}".to_string(), window, cx));
-                    self.mock_headers_rows = kv_table::rows_from_pairs(&[crate::state::models::KeyValue::new("Content-Type", "application/json")], window, cx);
+                    self.mock_status_input
+                        .update(cx, |s, cx| s.set_value("200".to_string(), window, cx));
+                    self.mock_delay_input
+                        .update(cx, |s, cx| s.set_value("0".to_string(), window, cx));
+                    self.mock_body_editor
+                        .update(cx, |s, cx| s.set_value("{}".to_string(), window, cx));
+                    self.mock_headers_rows = kv_table::rows_from_pairs(
+                        &[crate::state::models::KeyValue::new(
+                            "Content-Type",
+                            "application/json",
+                        )],
+                        window,
+                        cx,
+                    );
                     self.mock_match_method_select.update(cx, |s, cx| {
                         s.set_selected_value(&"不限制".to_string(), window, cx)
                     });
@@ -683,7 +722,8 @@ impl RequestPanel {
                     });
                     // Auto-extract path from request URL if available.
                     let auto_path = crate::mock::path_of(&r.url).unwrap_or_else(|| "/".into());
-                    self.mock_match_path_input.update(cx, |s, cx| s.set_value(auto_path, window, cx));
+                    self.mock_match_path_input
+                        .update(cx, |s, cx| s.set_value(auto_path, window, cx));
                     self.mock_enable_templates = false;
                     self.mock_match_query_rows = Vec::new();
                     self.mock_match_header_rows = Vec::new();
@@ -863,17 +903,37 @@ impl RequestPanel {
                     req.pre_script = pre_script;
                     req.tests_script = tests_script;
                     // Save mock rule.
-                    let mock_status = self.mock_status_input.read(cx).value().parse::<u16>().unwrap_or(200);
-                    let mock_delay = self.mock_delay_input.read(cx).value().parse::<u64>().unwrap_or(0);
+                    let mock_status = self
+                        .mock_status_input
+                        .read(cx)
+                        .value()
+                        .parse::<u16>()
+                        .unwrap_or(200);
+                    let mock_delay = self
+                        .mock_delay_input
+                        .read(cx)
+                        .value()
+                        .parse::<u64>()
+                        .unwrap_or(0);
                     let mock_body = self.mock_body_editor.read(cx).text().to_string();
                     let mock_headers = kv_table::pairs_from_rows(&self.mock_headers_rows, cx);
-                    let selected_method_str = self.mock_match_method_select.read(cx).selected_value().cloned().unwrap_or_else(|| "不限制".to_string());
+                    let selected_method_str = self
+                        .mock_match_method_select
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .unwrap_or_else(|| "不限制".to_string());
                     let match_method = if selected_method_str == "不限制" {
                         None
                     } else {
                         RequestMethod::parse(&selected_method_str)
                     };
-                    let selected_pattern_str = self.mock_path_pattern_select.read(cx).selected_value().cloned().unwrap_or_else(|| "精确".to_string());
+                    let selected_pattern_str = self
+                        .mock_path_pattern_select
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .unwrap_or_else(|| "精确".to_string());
                     let match_path_str = self.mock_match_path_input.read(cx).value().to_string();
                     let match_path = match selected_pattern_str.as_str() {
                         "前缀" => crate::state::models::PathPattern::Prefix(match_path_str),
@@ -945,9 +1005,17 @@ impl RequestPanel {
         // System variables: mock_server address (local/remote based on config)
         let mut system = BTreeMap::new();
         let remote_cfg = crate::state::persistence::load_remote_config();
-        system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
-        let mut map =
-            crate::state::models::effective_variables(&system, &global, &env, &folder_vars, &req_vars);
+        system.insert(
+            "mock_server".to_string(),
+            crate::share::remote::mock_server_url(&remote_cfg),
+        );
+        let mut map = crate::state::models::effective_variables(
+            &system,
+            &global,
+            &env,
+            &folder_vars,
+            &req_vars,
+        );
         log::info!(
             "EFFECTIVE_VARS: final map keys={:?}",
             map.keys().collect::<Vec<_>>()
@@ -1153,7 +1221,10 @@ impl RequestPanel {
             // System variables: mock_server address
             let mut system = BTreeMap::new();
             let remote_cfg = crate::state::persistence::load_remote_config();
-            system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
+            system.insert(
+                "mock_server".to_string(),
+                crate::share::remote::mock_server_url(&remote_cfg),
+            );
             let mut vars = crate::state::models::effective_variables(
                 &system,
                 &project.global_variables,
@@ -1390,14 +1461,7 @@ impl RequestPanel {
                                             .take(crate::state::HISTORY_KV_MAX)
                                             .map(|kv| (kv.key.clone(), kv.value.clone()))
                                             .collect();
-                                        (
-                                            pid,
-                                            r.name.clone(),
-                                            r.method,
-                                            r.url.clone(),
-                                            qp,
-                                            rh,
-                                        )
+                                        (pid, r.name.clone(), r.method, r.url.clone(), qp, rh)
                                     }
                                     None => (
                                         pid,
@@ -2086,9 +2150,7 @@ impl Render for RequestPanel {
                                 .rounded(px(6.))
                                 .cursor_pointer()
                                 .when(is_active, |d| {
-                                    d.bg(theme.background)
-                                        .border_1()
-                                        .border_color(theme.border)
+                                    d.bg(theme.background).border_1().border_color(theme.border)
                                 })
                                 .when(!is_active, |d| {
                                     d.text_color(theme.muted_foreground)
@@ -2469,12 +2531,32 @@ impl Render for RequestPanel {
                 )
                 .child({
                     // Compute non-empty row counts for count badges.
-                    let hdr_count = self.headers_rows.iter().filter(|r| r.has_content(cx)).count();
-                    let qry_count = self.params_rows.iter().filter(|r| r.has_content(cx)).count();
+                    let hdr_count = self
+                        .headers_rows
+                        .iter()
+                        .filter(|r| r.has_content(cx))
+                        .count();
+                    let qry_count = self
+                        .params_rows
+                        .iter()
+                        .filter(|r| r.has_content(cx))
+                        .count();
                     let path_count = self.path_rows.iter().filter(|r| r.has_content(cx)).count();
-                    let body_count = if self.body_type != BodyType::None { 1 } else { 0 };
-                    let auth_count = if self.auth_type != AuthType::None { 1 } else { 0 };
-                    let cookie_count = self.cookie_rows.iter().filter(|r| r.has_content(cx)).count();
+                    let body_count = if self.body_type != BodyType::None {
+                        1
+                    } else {
+                        0
+                    };
+                    let auth_count = if self.auth_type != AuthType::None {
+                        1
+                    } else {
+                        0
+                    };
+                    let cookie_count = self
+                        .cookie_rows
+                        .iter()
+                        .filter(|r| r.has_content(cx))
+                        .count();
                     // Tab strip
                     h_flex()
                         .px_3()
@@ -2601,7 +2683,9 @@ fn tab_label(
             this.font_weight(FontWeight::SEMIBOLD)
                 .bg(theme.accent.opacity(0.15))
         })
-        .when(!is_active, |this| this.hover(|s| s.bg(theme.accent.opacity(0.1))))
+        .when(!is_active, |this| {
+            this.hover(|s| s.bg(theme.accent.opacity(0.1)))
+        })
         .child(
             h_flex()
                 .items_center()
@@ -2635,7 +2719,11 @@ fn tab_label(
 }
 
 impl RequestPanel {
-    fn render_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_active_tab(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         match self.active_tab {
             ReqTab::Headers => self

@@ -3,8 +3,8 @@
 //! The connection runs on a tokio runtime (shared with WebSocket). Messages
 //! flow back via an smol channel that the GPUI side drains in a `cx.spawn` loop.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;

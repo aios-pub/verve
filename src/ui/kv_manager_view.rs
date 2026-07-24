@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
+    h_flex, v_flex,
 };
 
 use crate::state::models::KeyValue;

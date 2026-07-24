@@ -145,8 +145,7 @@ pub fn set_active_workspace(id: &str) {
 
 /// The `.gitignore` content excluding cross-branch / non-data / machine-local files from git.
 /// layout.json is now tracked (shared settings); layout.local.json contains machine-specific panel sizes.
-const GITIGNORE: &str =
-    "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\nhosts.staging\n.bootstrap_done\n";
+const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\nhosts.staging\n.bootstrap_done\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into
@@ -385,7 +384,10 @@ pub fn load_layout() -> Option<PanelLayout> {
             .map(|mut l| {
                 // Migration: if old layout.json contains main/center, extract to local and save back.
                 if l.main.is_some() || l.center.is_some() {
-                    let local = LocalLayout { main: l.main.take(), center: l.center.take() };
+                    let local = LocalLayout {
+                        main: l.main.take(),
+                        center: l.center.take(),
+                    };
                     let _ = save_local_layout(&local);
                     let _ = save_layout(&l);
                     log::info!("Migrated layout: panel sizes moved to layout.local.json");
@@ -422,7 +424,10 @@ pub fn save_layout(layout: &PanelLayout) -> Result<()> {
     let dir = data_dir()?;
 
     // Save machine-specific sizes separately.
-    let local = LocalLayout { main: layout.main, center: layout.center };
+    let local = LocalLayout {
+        main: layout.main,
+        center: layout.center,
+    };
     save_local_layout(&local)?;
 
     // Save shared settings to layout.json (without main/center).

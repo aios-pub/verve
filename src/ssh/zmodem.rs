@@ -53,11 +53,15 @@ pub enum ZmEvent {
     Cancelled,
     /// UI must show a "save file" dialog with the suggested name, then call
     /// [`ZmodemSession::provide_save_path`].
-    NeedSavePath { suggested_name: String },
+    NeedSavePath {
+        suggested_name: String,
+    },
     /// UI must show an "open file" dialog, then call
     /// [`ZmodemSession::provide_file_to_send`].
     NeedFileToSend,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// Sliding-window matcher for the ZMODEM trigger bytes in the inbound stream.
@@ -186,7 +190,12 @@ impl ZmodemSession {
     /// from SSH. This function drives the state machine synchronously and may
     /// block briefly when a UI prompt is pending (we wait on a sync channel).
     pub fn feed(&mut self, data: &[u8]) {
-        log::info!("zmodem feed {} bytes; role={:?} done={}", data.len(), self.role, self.done);
+        log::info!(
+            "zmodem feed {} bytes; role={:?} done={}",
+            data.len(),
+            self.role,
+            self.done
+        );
         if self.done {
             return;
         }
@@ -266,68 +275,64 @@ impl ZmodemSession {
             return;
         };
         match for_role {
-            ZmRole::ReceiveFromRemote => {
-                match File::create(&path) {
-                    Ok(f) => {
-                        self.saved_to = Some(path.clone());
-                        self.file = Some(f);
-                        let fname = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("file")
-                            .to_string();
-                        self.filename = fname.clone();
-                        self.events.push(ZmEvent::Started {
-                            filename: fname,
-                            total: self.total,
-                            role: ZmRole::ReceiveFromRemote,
-                        });
-                    }
-                    Err(e) => {
-                        self.cancel(&format!("无法创建文件 {}: {}", path.display(), e));
-                    }
+            ZmRole::ReceiveFromRemote => match File::create(&path) {
+                Ok(f) => {
+                    self.saved_to = Some(path.clone());
+                    self.file = Some(f);
+                    let fname = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file")
+                        .to_string();
+                    self.filename = fname.clone();
+                    self.events.push(ZmEvent::Started {
+                        filename: fname,
+                        total: self.total,
+                        role: ZmRole::ReceiveFromRemote,
+                    });
                 }
-            }
-            ZmRole::SendToRemote => {
-                match File::open(&path) {
-                    Ok(f) => {
-                        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
-                        let fname = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("file")
-                            .to_string();
-                        self.file = Some(f);
-                        self.total = size;
-                        self.filename = fname.clone();
+                Err(e) => {
+                    self.cancel(&format!("无法创建文件 {}: {}", path.display(), e));
+                }
+            },
+            ZmRole::SendToRemote => match File::open(&path) {
+                Ok(f) => {
+                    let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+                    let fname = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file")
+                        .to_string();
+                    self.file = Some(f);
+                    self.total = size;
+                    self.filename = fname.clone();
 
-                        let info = zmodem2::FileInfo::new(
-                            fname.as_bytes(),
-                            Some(zmodem2::Position::new(size.min(u32::MAX as u64) as u32)),
-                        );
-                        if let Some(s) = &mut self.sender {
-                            match s.start_file(info) {
-                                Ok(()) => {
-                                    log::info!("zmodem start_file OK, size={}", size);
-                                }
-                                Err(e) => {
-                                    log::error!("zmodem start_file failed: {:?}", e);
-                                    self.cancel(&format!("start_file 失败: {e}"));
-                                    return;
-                                }
+                    let info = zmodem2::FileInfo::new(
+                        fname.as_bytes(),
+                        Some(zmodem2::Position::new(size.min(u32::MAX as u64) as u32)),
+                    );
+                    if let Some(s) = &mut self.sender {
+                        match s.start_file(info) {
+                            Ok(()) => {
+                                log::info!("zmodem start_file OK, size={}", size);
+                            }
+                            Err(e) => {
+                                log::error!("zmodem start_file failed: {:?}", e);
+                                self.cancel(&format!("start_file 失败: {e}"));
+                                return;
                             }
                         }
-                        self.events.push(ZmEvent::Started {
-                            filename: fname,
-                            total: size,
-                            role: ZmRole::SendToRemote,
-                        });
                     }
-                    Err(e) => {
-                        self.cancel(&format!("无法打开文件 {}: {}", path.display(), e));
-                    }
+                    self.events.push(ZmEvent::Started {
+                        filename: fname,
+                        total: size,
+                        role: ZmRole::SendToRemote,
+                    });
                 }
-            }
+                Err(e) => {
+                    self.cancel(&format!("无法打开文件 {}: {}", path.display(), e));
+                }
+            },
         }
     }
 
@@ -500,7 +505,11 @@ impl ZmodemSession {
         if self.done {
             return;
         }
-        log::info!("zmodem run loop starting; role={:?} events={}", self.role, self.events.len());
+        log::info!(
+            "zmodem run loop starting; role={:?} events={}",
+            self.role,
+            self.events.len()
+        );
         loop {
             if self.done {
                 return;
@@ -617,7 +626,10 @@ impl ZmodemSession {
                 buf.truncate(n);
                 log::info!(
                     "zmodem ReadFile off={} max={} read={} total={}",
-                    off, max_len, n, self.total
+                    off,
+                    max_len,
+                    n,
+                    self.total
                 );
                 if n == 0 {
                     // EOF — shouldn't normally happen (offset==total triggers
@@ -842,7 +854,9 @@ mod tests {
         assert_eq!(received, payload, "file content must survive the upload");
         let events = session.pop_events();
         assert!(
-            events.iter().any(|e| matches!(e, ZmEvent::Completed { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, ZmEvent::Completed { .. })),
             "UI must see a Completed event"
         );
     }
@@ -966,9 +980,9 @@ mod tests {
         // The canonical CAN*8 + BS abort sequence must be on the wire.
         let out = session.drain_outgoing();
         assert!(
-            out.windows(9).any(|w| w == [0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x08]),
+            out.windows(9)
+                .any(|w| w == [0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x08]),
             "abort sequence must be emitted, got {out:?}"
         );
     }
 }
-

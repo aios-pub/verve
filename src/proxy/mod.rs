@@ -13,4 +13,4 @@ pub mod capture;
 pub mod server;
 
 pub use capture::{CaptureEntry, CaptureStore};
-pub use server::{serve, ProxyHandle, DEFAULT_PORT};
+pub use server::{DEFAULT_PORT, ProxyHandle, serve};

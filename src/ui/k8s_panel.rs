@@ -15,17 +15,19 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::select::{Select, SelectState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use gpui_component::{ActiveTheme, Disableable as _, IconName, Sizable as _, h_flex, v_flex};
 use tokio::io::AsyncWriteExt;
 
 use crate::k8s::clusters::{
-    load_manual_clusters, remove_manual_cluster, ClusterAuth, ManualCluster,
+    ClusterAuth, ManualCluster, load_manual_clusters, remove_manual_cluster,
 };
-use crate::k8s::kubectl::{exec_pod, list_namespaces, list_pods, port_forward, stream_logs, ExecSession, LogStream, Pod};
-use crate::k8s::{kubeconfig_path, load_merged, KubeConfig};
+use crate::k8s::kubectl::{
+    ExecSession, LogStream, Pod, exec_pod, list_namespaces, list_pods, port_forward, stream_logs,
+};
+use crate::k8s::{KubeConfig, kubeconfig_path, load_merged};
 use crate::ssh::terminal::TerminalView;
-use gpui_component::text::TextView;
 use crate::ui::k8s_cluster_dialog;
+use gpui_component::text::TextView;
 
 /// Which top-level page is active (session tabs overlay these).
 #[derive(Clone, PartialEq, Eq)]
@@ -130,7 +132,8 @@ impl K8sPanel {
                 cx,
             )
         });
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("按名称搜索 Pod..."));
+        let search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("按名称搜索 Pod..."));
         Self {
             cfg: load_merged(),
             error: None,
@@ -154,7 +157,9 @@ impl K8sPanel {
         let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<String>, String>>();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(list_namespaces(ctx.as_deref())).map_err(|e| e.to_string());
+            let result = rt
+                .block_on(list_namespaces(ctx.as_deref()))
+                .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         let ent = cx.entity().downgrade();
@@ -185,7 +190,8 @@ impl K8sPanel {
                     Err(_) => break,
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     fn refresh_config(&mut self, cx: &mut Context<Self>) {
@@ -316,9 +322,11 @@ impl K8sPanel {
         cx: &mut Context<Self>,
     ) -> String {
         let key = session_key(&pod, &namespace, &kind);
-        if let Some(pos) = self.sessions.iter().position(|s| {
-            session_key(&s.pod_name, &s.namespace, &s.kind) == key
-        }) {
+        if let Some(pos) = self
+            .sessions
+            .iter()
+            .position(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key)
+        {
             self.active_session_key = Some(key.clone());
             cx.notify();
             return key;
@@ -334,9 +342,11 @@ impl K8sPanel {
     }
 
     fn close_session_by_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        if let Some(pos) = self.sessions.iter().position(|s| {
-            session_key(&s.pod_name, &s.namespace, &s.kind) == key
-        }) {
+        if let Some(pos) = self
+            .sessions
+            .iter()
+            .position(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key)
+        {
             // Drop stdin sender to signal the pump thread to exit.
             self.sessions[pos].stdin_tx = None;
             self.sessions.remove(pos);
@@ -349,15 +359,26 @@ impl K8sPanel {
 
     fn active_session_idx(&self) -> Option<usize> {
         let key = self.active_session_key.as_ref()?;
-        self.sessions.iter().position(|s| {
-            session_key(&s.pod_name, &s.namespace, &s.kind) == *key
-        })
+        self.sessions
+            .iter()
+            .position(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == *key)
     }
 
-    fn start_exec_for(&mut self, pod: String, pod_namespace: String, window: &mut Window, cx: &mut Context<Self>) {
-        let key = self.open_or_focus_session(pod.clone(), pod_namespace.clone(), SessionKind::Shell, cx);
+    fn start_exec_for(
+        &mut self,
+        pod: String,
+        pod_namespace: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key =
+            self.open_or_focus_session(pod.clone(), pod_namespace.clone(), SessionKind::Shell, cx);
         // If session already has a terminal, it's already connected — just focus it.
-        if let Some(s) = self.sessions.iter().find(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key) {
+        if let Some(s) = self
+            .sessions
+            .iter()
+            .find(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key)
+        {
             if s.terminal.is_some() {
                 return;
             }
@@ -401,16 +422,21 @@ impl K8sPanel {
                     return;
                 }
             };
-            let ExecSession { stdin_tx, output_rx } = sess;
+            let ExecSession {
+                stdin_tx,
+                output_rx,
+            } = sess;
             let stdin_tx_term = stdin_tx.clone();
             let stdin_tx_panel = stdin_tx;
             let mut output_rx = output_rx;
             let (term_tx, term_rx) = tokio::sync::oneshot::channel::<Entity<TerminalView>>();
 
             let _ = ent.update(cx, |p, cx| {
-                if let Some(s) = p.sessions.iter_mut().find(|s| {
-                    session_key(&s.pod_name, &s.namespace, &s.kind) == key_for_setup
-                }) {
+                if let Some(s) = p
+                    .sessions
+                    .iter_mut()
+                    .find(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key_for_setup)
+                {
                     let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
                     s.terminal = Some(terminal.clone());
                     s.stdin_tx = Some(stdin_tx_panel);
@@ -425,12 +451,19 @@ impl K8sPanel {
                 }
             });
 
-            let terminal = match term_rx.await { Ok(t) => t, Err(_) => return };
+            let terminal = match term_rx.await {
+                Ok(t) => t,
+                Err(_) => return,
+            };
             let term_weak = terminal.downgrade();
             while let Some(chunk) = output_rx.recv().await {
-                let _ = term_weak.update(cx, |tv, cx| { tv.feed(&chunk); cx.notify(); });
+                let _ = term_weak.update(cx, |tv, cx| {
+                    tv.feed(&chunk);
+                    cx.notify();
+                });
             }
-        }).detach();
+        })
+        .detach();
     }
 
     pub fn reload_pods(&mut self, cx: &mut Context<Self>) {
@@ -453,7 +486,9 @@ impl K8sPanel {
                 Some(s) => Some(s.as_str()),
                 None => None,
             };
-            let res = rt.block_on(list_pods(ns_arg, ctx.as_deref())).map_err(|e| e.to_string());
+            let res = rt
+                .block_on(list_pods(ns_arg, ctx.as_deref()))
+                .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
         let ent = cx.entity().downgrade();
@@ -481,7 +516,12 @@ impl K8sPanel {
         .detach();
     }
 
-    fn start_logs_for(&mut self, pod: String, pod_namespace: Option<String>, cx: &mut Context<Self>) {
+    fn start_logs_for(
+        &mut self,
+        pod: String,
+        pod_namespace: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         enum Ev {
             Started,
             Line(String),
@@ -493,9 +533,11 @@ impl K8sPanel {
         let ctx = self.current_context_name().map(String::from);
         let key = self.open_or_focus_session(pod.clone(), ns_for_session, SessionKind::Logs, cx);
         // If this session already has log lines, already streaming — just focus.
-        if let Some(s) = self.sessions.iter().find(|s| {
-            session_key(&s.pod_name, &s.namespace, &s.kind) == key
-        }) {
+        if let Some(s) = self
+            .sessions
+            .iter()
+            .find(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == key)
+        {
             if !s.log_lines.is_empty() || s.log_stream.is_some() {
                 return;
             }
@@ -507,7 +549,9 @@ impl K8sPanel {
             rt.block_on(async move {
                 match stream_logs(&pod_for_thread, ns.as_deref(), None, 50, ctx.as_deref()) {
                     Ok(mut s) => {
-                        let Some(mut lines_rx) = s.take_lines() else { return };
+                        let Some(mut lines_rx) = s.take_lines() else {
+                            return;
+                        };
                         let _ = tx.send(Ev::Started);
                         while let Some(line) = lines_rx.recv().await {
                             if tx.send(Ev::Line(line)).is_err() {
@@ -523,46 +567,56 @@ impl K8sPanel {
         });
         let ent = cx.entity().downgrade();
         let key_for_updates = key.clone();
-        cx.spawn(async move |_this, cx| loop {
-            match rx.try_recv() {
-                Ok(ev) => {
-                    let _ = ent.update(cx, |p, cx| match ev {
-                        Ev::Started => {
-                            if let Some(s) = p.sessions.iter_mut().find(|s| {
-                                session_key(&s.pod_name, &s.namespace, &s.kind) == key_for_updates
-                            }) {
-                                s.log_lines.clear();
-                            }
-                            p.error = None;
-                            cx.notify();
-                        }
-                        Ev::Line(line) => {
-                            if let Some(s) = p.sessions.iter_mut().find(|s| {
-                                session_key(&s.pod_name, &s.namespace, &s.kind) == key_for_updates
-                            }) {
-                                if s.log_lines.len() > 2000 {
-                                    s.log_lines.remove(0);
+        cx.spawn(async move |_this, cx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(ev) => {
+                        let _ = ent.update(cx, |p, cx| match ev {
+                            Ev::Started => {
+                                if let Some(s) = p.sessions.iter_mut().find(|s| {
+                                    session_key(&s.pod_name, &s.namespace, &s.kind)
+                                        == key_for_updates
+                                }) {
+                                    s.log_lines.clear();
                                 }
-                                s.log_lines.push(line);
+                                p.error = None;
+                                cx.notify();
                             }
-                            cx.notify();
-                        }
-                        Ev::Err(e) => {
-                            p.error = Some(e);
-                            cx.notify();
-                        }
-                    });
+                            Ev::Line(line) => {
+                                if let Some(s) = p.sessions.iter_mut().find(|s| {
+                                    session_key(&s.pod_name, &s.namespace, &s.kind)
+                                        == key_for_updates
+                                }) {
+                                    if s.log_lines.len() > 2000 {
+                                        s.log_lines.remove(0);
+                                    }
+                                    s.log_lines.push(line);
+                                }
+                                cx.notify();
+                            }
+                            Ev::Err(e) => {
+                                p.error = Some(e);
+                                cx.notify();
+                            }
+                        });
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(_) => break,
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    smol::Timer::after(std::time::Duration::from_millis(50)).await;
-                }
-                Err(_) => break,
             }
         })
         .detach();
     }
 
-    fn start_forward(&mut self, pod: String, pod_namespace: Option<String>, remote_port: u16, cx: &mut Context<Self>) {
+    fn start_forward(
+        &mut self,
+        pod: String,
+        pod_namespace: Option<String>,
+        remote_port: u16,
+        cx: &mut Context<Self>,
+    ) {
         enum Ev {
             Ok(u16),
             Err(String),
@@ -574,10 +628,23 @@ impl K8sPanel {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
-                match port_forward(&pod_for_thread, ns.as_deref(), 0, remote_port, ctx.as_deref()).await {
+                match port_forward(
+                    &pod_for_thread,
+                    ns.as_deref(),
+                    0,
+                    remote_port,
+                    ctx.as_deref(),
+                )
+                .await
+                {
                     Ok(h) => {
                         let port = h.local_port;
-                        log::info!("k8s port-forward {}:{} → localhost:{}", pod_for_thread, remote_port, port);
+                        log::info!(
+                            "k8s port-forward {}:{} → localhost:{}",
+                            pod_for_thread,
+                            remote_port,
+                            port
+                        );
                         // Leak the handle so the child process lives until app exit;
                         // kill_on_drop(true) would fire when this future exits otherwise.
                         std::mem::forget(h);
@@ -650,7 +717,9 @@ impl Render for K8sPanel {
                         .px_2()
                         .py_1()
                         .rounded_sm()
-                        .when(is_active, |d| d.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                        .when(is_active, |d| {
+                            d.bg(theme.accent.opacity(0.25)).text_color(theme.accent)
+                        })
                         .when(!is_active, |d| d.text_color(theme.muted_foreground))
                         .child(
                             Button::new(format!("k8s-session-focus-{}", i))
@@ -684,25 +753,19 @@ impl Render for K8sPanel {
         } else {
             match self.active_view {
                 View::Contexts => self.render_contexts(&theme, cx).into_any_element(),
-                View::Pods => self.render_pods(&theme, pods_loading, window, cx).into_any_element(),
+                View::Pods => self
+                    .render_pods(&theme, pods_loading, window, cx)
+                    .into_any_element(),
                 View::Forwards => self.render_forwards(&theme, cx).into_any_element(),
             }
         };
 
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .child(tab_bar)
-            .child(body)
+        v_flex().size_full().min_h_0().child(tab_bar).child(body)
     }
 }
 
 impl K8sPanel {
-    fn render_contexts(
-        &self,
-        theme: &gpui_component::Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render_contexts(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted = theme.muted_foreground;
         let border = theme.border;
         // Load manual clusters to detect SSH tunnel mode
@@ -733,12 +796,21 @@ impl K8sPanel {
             .child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_size(px(12.)).text_color(muted).child("当前 Context"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child("当前 Context"),
+                    )
                     .child(
                         div()
                             .text_size(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(if self.cfg.current_context.is_empty() { "(无)".into() } else { self.cfg.current_context.clone() }),
+                            .child(if self.cfg.current_context.is_empty() {
+                                "(无)".into()
+                            } else {
+                                self.cfg.current_context.clone()
+                            }),
                     ),
             )
             .child(
@@ -753,12 +825,20 @@ impl K8sPanel {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().text_size(px(11.)).text_color(muted).child("Namespace"))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(muted)
+                                    .child("Namespace"),
+                            )
                             .child(div().text_size(px(12.)).child(active_ns)),
                     ),
             )
             .children(self.error.as_ref().map(|e| {
-                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.danger)
+                    .child(e.clone())
             }))
             .child(div().h(px(1.)).w_full().bg(border))
             .child(
@@ -822,13 +902,26 @@ impl K8sPanel {
                     .border_1()
                     .border_color(border)
                     .rounded_md()
-                    .bg(if is_active { theme.accent.opacity(0.15) } else { Hsla::transparent_black() })
+                    .bg(if is_active {
+                        theme.accent.opacity(0.15)
+                    } else {
+                        Hsla::transparent_black()
+                    })
                     .child(
                         h_flex()
                             .gap_1()
                             .items_center()
                             .flex_1()
-                            .child(div().text_size(px(12.)).font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).child(c.name.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(if is_active {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .child(c.name.clone()),
+                            )
                             .when(is_tunnel, |row| {
                                 row.child(
                                     div()
@@ -838,11 +931,16 @@ impl K8sPanel {
                                         .rounded_sm()
                                         .bg(theme.primary.opacity(0.2))
                                         .text_color(theme.primary)
-                                        .child("SSH 隧道")
+                                        .child("SSH 隧道"),
                                 )
-                            })
+                            }),
                     )
-                    .child(div().text_size(px(11.)).text_color(muted).child(server.clone()))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child(server.clone()),
+                    )
                     .when(!is_active, |d| {
                         d.child(
                             Button::new(format!("k8s-switch-{}", c.name))
@@ -917,12 +1015,14 @@ impl K8sPanel {
 
         // Lazily create namespace select and search input
         if self.namespace_select.is_none() {
-            let sel = cx.new(|cx| SelectState::new(
-                self.namespaces.clone(),
-                Some(gpui_component::IndexPath::new(0)),
-                window,
-                cx,
-            ));
+            let sel = cx.new(|cx| {
+                SelectState::new(
+                    self.namespaces.clone(),
+                    Some(gpui_component::IndexPath::new(0)),
+                    window,
+                    cx,
+                )
+            });
             self.namespace_select = Some(sel);
         }
         if self.search_input.is_none() {
@@ -948,7 +1048,11 @@ impl K8sPanel {
                         Button::new("k8s-reload-pods")
                             .small()
                             .primary()
-                            .icon(if loading { IconName::Loader } else { IconName::File })
+                            .icon(if loading {
+                                IconName::Loader
+                            } else {
+                                IconName::File
+                            })
                             .label(if loading { "加载中…" } else { "加载" })
                             .disabled(loading)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -970,7 +1074,10 @@ impl K8sPanel {
                     ),
             )
             .children(self.error.as_ref().map(|e| {
-                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.danger)
+                    .child(e.clone())
             }))
             .child(div().h(px(1.)).w_full().bg(border))
             .child({
@@ -982,22 +1089,44 @@ impl K8sPanel {
                     .gap_1();
                 let search_query = search_input.read(cx).value().to_string().to_lowercase();
                 // Collect and filter pods by search query
-                let filtered_pods: Vec<&Pod> = self.pods.iter()
+                let filtered_pods: Vec<&Pod> = self
+                    .pods
+                    .iter()
                     .filter(|p| p.metadata.name.to_lowercase().contains(&search_query))
                     .collect();
 
                 if self.pods.is_empty() && !loading {
-                    rows = rows.child(div().text_size(px(12.)).text_color(muted).child("点\"加载\"列出所有命名空间的 Pods"));
+                    rows = rows.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child("点\"加载\"列出所有命名空间的 Pods"),
+                    );
                 } else if filtered_pods.is_empty() && !search_query.is_empty() {
-                    rows = rows.child(div().text_size(px(12.)).text_color(muted).child(format!("未找到匹配 \"{}\" 的 Pod", search_query)));
+                    rows = rows.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child(format!("未找到匹配 \"{}\" 的 Pod", search_query)),
+                    );
                 } else {
                     let show_ns_column = self.selected_namespace.is_none(); // show NS column when viewing all
                     for p in filtered_pods {
                         let name = p.metadata.name.clone();
                         let pod_ns = p.metadata.namespace.clone();
                         let phase = p.status.phase.clone();
-                        let restarts: u32 = p.status.container_statuses.iter().map(|c| c.restart_count).sum();
-                        let ready = p.status.container_statuses.iter().filter(|c| c.ready).count();
+                        let restarts: u32 = p
+                            .status
+                            .container_statuses
+                            .iter()
+                            .map(|c| c.restart_count)
+                            .sum();
+                        let ready = p
+                            .status
+                            .container_statuses
+                            .iter()
+                            .filter(|c| c.ready)
+                            .count();
                         let total = p.status.container_statuses.len();
                         let phase_color = match phase.as_str() {
                             "Running" => theme.primary,
@@ -1026,7 +1155,7 @@ impl K8sPanel {
                                     .text_size(px(10.))
                                     .text_color(muted)
                                     .w(px(100.))
-                                    .child(pod_ns.clone())
+                                    .child(pod_ns.clone()),
                             );
                         }
 
@@ -1060,7 +1189,11 @@ impl K8sPanel {
                                     .ghost()
                                     .label("日志")
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.start_logs_for(logs_name.clone(), Some(logs_ns.clone()), cx);
+                                        this.start_logs_for(
+                                            logs_name.clone(),
+                                            Some(logs_ns.clone()),
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
@@ -1070,7 +1203,12 @@ impl K8sPanel {
                                     .label("Shell")
                                     .tooltip("kubectl exec -it 进入 Pod")
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.start_exec_for(exec_name.clone(), exec_ns.clone(), window, cx);
+                                        this.start_exec_for(
+                                            exec_name.clone(),
+                                            exec_ns.clone(),
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                             .child(
@@ -1080,7 +1218,12 @@ impl K8sPanel {
                                     .label("转发 80→8080")
                                     .tooltip("转发 pod/xxx:8080 到 127.0.0.1:<port>")
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.start_forward(fwd_name.clone(), Some(fwd_ns.clone()), 8080, cx);
+                                        this.start_forward(
+                                            fwd_name.clone(),
+                                            Some(fwd_ns.clone()),
+                                            8080,
+                                            cx,
+                                        );
                                     })),
                             );
                         rows = rows.child(row);
@@ -1091,7 +1234,12 @@ impl K8sPanel {
             .into_any_element()
     }
 
-    fn render_logs_session(&self, theme: &gpui_component::Theme, idx: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_logs_session(
+        &self,
+        theme: &gpui_component::Theme,
+        idx: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let s = &self.sessions[idx];
         v_flex()
             .flex_1()
@@ -1099,20 +1247,16 @@ impl K8sPanel {
             .child({
                 let lines = s.log_lines.clone();
                 let session_idx = idx;
-                h_flex()
-                    .justify_end()
-                    .px_2()
-                    .py_1()
-                    .child(
-                        Button::new(format!("k8s-logs-copy-{}", session_idx))
-                            .xsmall()
-                            .ghost()
-                            .label("复制全部")
-                            .on_click(move |_, _window, cx| {
-                                let text = lines.join("\n");
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                            }),
-                    )
+                h_flex().justify_end().px_2().py_1().child(
+                    Button::new(format!("k8s-logs-copy-{}", session_idx))
+                        .xsmall()
+                        .ghost()
+                        .label("复制全部")
+                        .on_click(move |_, _window, cx| {
+                            let text = lines.join("\n");
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }),
+                )
             })
             .child({
                 let content = format!("```\n{}\n```", s.log_lines.join("\n"));
@@ -1124,7 +1268,10 @@ impl K8sPanel {
                     .px_3()
                     .bg(theme.muted)
                     .text_size(px(11.))
-                    .child(TextView::markdown(format!("k8s-logs-md-{}", idx), content).selectable(true))
+                    .child(
+                        TextView::markdown(format!("k8s-logs-md-{}", idx), content)
+                            .selectable(true),
+                    )
             })
             .into_any_element()
     }
@@ -1145,7 +1292,11 @@ impl K8sPanel {
             .into_any_element()
     }
 
-    fn render_forwards(&self, theme: &gpui_component::Theme, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_forwards(
+        &self,
+        theme: &gpui_component::Theme,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
         let muted = theme.muted_foreground;
         let border = theme.border;
         v_flex()
@@ -1155,11 +1306,26 @@ impl K8sPanel {
             .overflow_y_scroll()
             .p_4()
             .gap_2()
-            .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("活跃 Port-Forward"))
-            .child(div().text_size(px(12.)).text_color(muted).child("从 Pods 视图点 \"转发\" 启动。关闭应用会终止所有转发。"))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("活跃 Port-Forward"),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(muted)
+                    .child("从 Pods 视图点 \"转发\" 启动。关闭应用会终止所有转发。"),
+            )
             .child(div().h(px(1.)).w_full().bg(border))
             .children(if self.forwards.is_empty() {
-                Some(div().text_size(px(12.)).text_color(muted).child("暂无活跃转发"))
+                Some(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .child("暂无活跃转发"),
+                )
             } else {
                 None
             })
@@ -1171,7 +1337,12 @@ impl K8sPanel {
                     .border_1()
                     .border_color(border)
                     .rounded_md()
-                    .child(div().text_size(px(12.)).flex_1().child(format!("127.0.0.1:{} → {}", port, target)))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .flex_1()
+                            .child(format!("127.0.0.1:{} → {}", port, target)),
+                    )
             }))
             .into_any_element()
     }

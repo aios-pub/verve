@@ -15,4 +15,4 @@ pub mod scenario;
 
 pub use models::*;
 pub use oha::{find_or_download, run_oha};
-pub use scenario::{run_scenario, StressStopHandle};
+pub use scenario::{StressStopHandle, run_scenario};

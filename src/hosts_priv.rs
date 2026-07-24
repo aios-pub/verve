@@ -62,9 +62,7 @@ pub fn write_system_hosts(content: &str) -> Result<()> {
             _ => {
                 // Fallback: launch terminal with sudo.
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "/usr/bin/editor".into());
-                let _ = std::process::Command::new(editor)
-                    .arg(&target)
-                    .spawn();
+                let _ = std::process::Command::new(editor).arg(&target).spawn();
                 anyhow::bail!("请在打开的编辑器中保存 hosts 文件");
             }
         }

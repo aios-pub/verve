@@ -7,15 +7,15 @@
 //! for the expected concurrency range (≤ a few hundred RPS).
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use http_client::HttpClient;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::autotest::runner::run_case;
 use crate::autotest::TestCase;
+use crate::autotest::runner::run_case;
 use crate::state::models::Project;
 
 use super::models::{LatencyPercentiles, StressResult, StressSnapshot};
@@ -62,7 +62,8 @@ pub fn run_scenario(
     let (result_tx, result_rx) = oneshot::channel::<StressResult>();
     let completed = Arc::new(AtomicU64::new(0));
     let failed = Arc::new(AtomicU64::new(0));
-    let latencies: Arc<tokio::sync::Mutex<Vec<u64>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let latencies: Arc<tokio::sync::Mutex<Vec<u64>>> =
+        Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     let start = Instant::now();
     let mut workers = Vec::with_capacity(concurrency as usize);

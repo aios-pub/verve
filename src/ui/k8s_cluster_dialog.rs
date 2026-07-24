@@ -15,11 +15,11 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::select::{Select, SelectState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Selectable as _, Sizable as _, WindowExt as _};
+use gpui_component::{ActiveTheme, Selectable as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 
 use crate::k8s::clusters::{
-    cluster_from_kubeconfig, parse_kubeconfig_contexts, upsert_manual_cluster, ClusterAuth,
-    ClusterConnectionType, KubeconfigContextInfo, ManualCluster,
+    ClusterAuth, ClusterConnectionType, KubeconfigContextInfo, ManualCluster,
+    cluster_from_kubeconfig, parse_kubeconfig_contexts, upsert_manual_cluster,
 };
 use crate::ssh::host_store as ssh_host_store;
 
@@ -99,31 +99,67 @@ pub struct K8sClusterDialogState {
 }
 
 impl K8sClusterDialogState {
-    pub fn new(
-        editing: Option<&ManualCluster>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
+    pub fn new(editing: Option<&ManualCluster>, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let existing = editing.cloned();
         let is_editing = existing.is_some();
-        let is_imported = existing.as_ref().map(|e| e.raw_kubeconfig.is_some()).unwrap_or(false);
+        let is_imported = existing
+            .as_ref()
+            .map(|e| e.raw_kubeconfig.is_some())
+            .unwrap_or(false);
 
         // Determine initial tab: new → import tab; editing → manual tab (simplified view with conn mode switch)
         let init_tab = DialogTab::ManualEntry;
 
         // Determine initial auth kind from existing cluster
-        let (init_auth_kind, init_token, init_cert, init_key, init_user, init_pass) = match &existing {
-            Some(c) => match &c.auth {
-                ClusterAuth::Token { token } => (AuthKind::Token, token.clone(), String::new(), String::new(), String::new(), String::new()),
-                ClusterAuth::ClientCert { cert_data, key_data } => (AuthKind::ClientCert, String::new(), cert_data.clone(), key_data.clone(), String::new(), String::new()),
-                ClusterAuth::BasicAuth { username, password } => (AuthKind::BasicAuth, String::new(), String::new(), String::new(), username.clone(), password.clone()),
-            },
-            None => (AuthKind::Token, String::new(), String::new(), String::new(), String::new(), String::new()),
-        };
+        let (init_auth_kind, init_token, init_cert, init_key, init_user, init_pass) =
+            match &existing {
+                Some(c) => match &c.auth {
+                    ClusterAuth::Token { token } => (
+                        AuthKind::Token,
+                        token.clone(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    ),
+                    ClusterAuth::ClientCert {
+                        cert_data,
+                        key_data,
+                    } => (
+                        AuthKind::ClientCert,
+                        String::new(),
+                        cert_data.clone(),
+                        key_data.clone(),
+                        String::new(),
+                        String::new(),
+                    ),
+                    ClusterAuth::BasicAuth { username, password } => (
+                        AuthKind::BasicAuth,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        username.clone(),
+                        password.clone(),
+                    ),
+                },
+                None => (
+                    AuthKind::Token,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            };
 
         // Determine initial connection mode
         let (init_conn_type, init_ssh_host_id, init_server, init_insecure) = match &existing {
-            Some(c) => (c.connection_type, c.ssh_host_id.clone(), c.server.clone(), c.insecure_skip_tls),
+            Some(c) => (
+                c.connection_type,
+                c.ssh_host_id.clone(),
+                c.server.clone(),
+                c.insecure_skip_tls,
+            ),
             None => (ClusterConnectionType::Direct, None, String::new(), false),
         };
 
@@ -143,37 +179,57 @@ impl K8sClusterDialogState {
         });
         let namespace = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("default");
-            let ns = existing.as_ref().map(|e| e.namespace.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
+            let ns = existing
+                .as_ref()
+                .map(|e| e.namespace.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "default".into());
             s.set_value(&ns, window, cx);
             s
         });
         let token = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("Bearer token");
-            if !init_token.is_empty() { s.set_value(&init_token, window, cx); }
+            if !init_token.is_empty() {
+                s.set_value(&init_token, window, cx);
+            }
             s
         });
         let cert_data = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).multi_line(true).placeholder("base64 编码的 PEM 证书数据");
-            if !init_cert.is_empty() { s.set_value(&init_cert, window, cx); }
+            let mut s = InputState::new(window, cx)
+                .multi_line(true)
+                .placeholder("base64 编码的 PEM 证书数据");
+            if !init_cert.is_empty() {
+                s.set_value(&init_cert, window, cx);
+            }
             s
         });
         let key_data = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).multi_line(true).placeholder("base64 编码的 PEM 私钥数据");
-            if !init_key.is_empty() { s.set_value(&init_key, window, cx); }
+            let mut s = InputState::new(window, cx)
+                .multi_line(true)
+                .placeholder("base64 编码的 PEM 私钥数据");
+            if !init_key.is_empty() {
+                s.set_value(&init_key, window, cx);
+            }
             s
         });
         let username = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("用户名");
-            if !init_user.is_empty() { s.set_value(&init_user, window, cx); }
+            if !init_user.is_empty() {
+                s.set_value(&init_user, window, cx);
+            }
             s
         });
         let password = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("密码");
-            if !init_pass.is_empty() { s.set_value(&init_pass, window, cx); }
+            if !init_pass.is_empty() {
+                s.set_value(&init_pass, window, cx);
+            }
             s
         });
         let kubeconfig_text = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).multi_line(true).placeholder("粘贴 kubeconfig YAML 内容，或点击\"选择文件\"按钮导入");
+            let mut s = InputState::new(window, cx)
+                .multi_line(true)
+                .placeholder("粘贴 kubeconfig YAML 内容，或点击\"选择文件\"按钮导入");
             // If editing and has raw kubeconfig, preload it
             if let Some(e) = &existing {
                 if let Some(raw) = &e.raw_kubeconfig {
@@ -194,7 +250,8 @@ impl K8sClusterDialogState {
         }
         // Find initial selected SSH host by id (if editing an ssh-tunnel cluster)
         let init_label = init_ssh_host_id.and_then(|id| {
-            ssh_hosts.iter()
+            ssh_hosts
+                .iter()
                 .find(|h| h.id == id)
                 .map(|h| ssh_host_label(&h.name, &h.username, &h.host, h.port))
         });
@@ -205,7 +262,11 @@ impl K8sClusterDialogState {
         let ssh_host_select = cx.new(|cx| {
             SelectState::new(
                 options,
-                if label_to_id.is_empty() { None } else { Some(gpui_component::IndexPath::new(initial_index)) },
+                if label_to_id.is_empty() {
+                    None
+                } else {
+                    Some(gpui_component::IndexPath::new(initial_index))
+                },
                 window,
                 cx,
             )
@@ -269,14 +330,17 @@ pub fn open_dialog<F>(
     on_save: F,
     window: &mut Window,
     cx: &mut App,
-)
-where
+) where
     F: Fn(&mut Window, &mut App) + 'static,
 {
     let on_save: std::sync::Arc<F> = std::sync::Arc::new(on_save);
     let is_editing = editing.is_some();
     let state = K8sClusterDialogState::new(editing, window, cx);
-    let title_text = if is_editing { "编辑 Kubernetes 集群" } else { "添加 Kubernetes 集群" };
+    let title_text = if is_editing {
+        "编辑 Kubernetes 集群"
+    } else {
+        "添加 Kubernetes 集群"
+    };
     window.open_dialog(cx, move |dialog, _window, cx| {
         let state_for_content = state.clone();
         let state_for_footer = state.clone();

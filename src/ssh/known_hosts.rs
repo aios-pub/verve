@@ -76,10 +76,7 @@ fn key_to_string(key: &PublicKey) -> String {
     let Ok(s) = key.to_openssh() else {
         return String::new();
     };
-    s.split_whitespace()
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" ")
+    s.split_whitespace().take(2).collect::<Vec<_>>().join(" ")
 }
 
 /// Short fingerprint for display (default hash algorithm SHA256).
@@ -100,7 +97,9 @@ fn load_entries(path: &Path) -> HashMap<String, String> {
         }
         // Each line: <host:port> <keytype> <base64...>
         let mut parts = line.splitn(2, ' ');
-        let Some(hostport) = parts.next() else { continue };
+        let Some(hostport) = parts.next() else {
+            continue;
+        };
         let Some(rest) = parts.next() else { continue };
         map.insert(hostport.to_string(), rest.trim().to_string());
     }

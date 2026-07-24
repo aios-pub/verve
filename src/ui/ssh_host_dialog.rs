@@ -8,8 +8,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, Selectable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Selectable as _, Sizable as _, WindowExt as _,
+    h_flex, v_flex,
 };
 
 use crate::ssh::models::{SshAuthType, SshHost};

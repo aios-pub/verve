@@ -134,7 +134,12 @@ async fn handle_conn(
         "HEAD" => client.head(&target),
         "OPTIONS" => client.request(reqwest::Method::OPTIONS, &target),
         other => {
-            let _ = write_response(&mut stream, 405, format!("method {other} not supported").as_bytes()).await;
+            let _ = write_response(
+                &mut stream,
+                405,
+                format!("method {other} not supported").as_bytes(),
+            )
+            .await;
             return Ok(());
         }
     };

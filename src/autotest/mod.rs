@@ -8,4 +8,4 @@ pub mod models;
 pub mod runner;
 
 pub use models::*;
-pub use runner::{run_case, RunEvent};
+pub use runner::{RunEvent, run_case};

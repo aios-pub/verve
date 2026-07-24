@@ -7,16 +7,17 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::tree::{tree, TreeItem, TreeState};
+use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     list::ListItem,
     popover::Popover,
-    v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
+    v_flex,
 };
 
-use crate::state::models::{new_id, MoveTarget, Protocol, RequestMethod};
+use crate::state::models::{MoveTarget, Protocol, RequestMethod, new_id};
 use crate::state::{AppEvent, AppState};
 
 /// Tag embedded in a `TreeItem.id` so we can tell what a node refers to.
@@ -1695,7 +1696,9 @@ impl ProjectTreePanel {
         self.state.update(cx, |s, cx| {
             let mut opened: Option<String> = None;
             if let Some(project) = s.active_project_mut() {
-                if let Some(new_id) = duplicate_request_in_place(&mut project.folders, &mut project.requests, &id) {
+                if let Some(new_id) =
+                    duplicate_request_in_place(&mut project.folders, &mut project.requests, &id)
+                {
                     opened = Some(new_id);
                 }
             }
@@ -1728,9 +1731,13 @@ impl ProjectTreePanel {
         match action {
             TreeAction::Share(_) => {
                 // Share the selected request's documentation.
-                if let Some((id, name)) = req_id.and_then(|id| req_snapshot.as_ref().map(|r| (id, r.name.clone()))) {
+                if let Some((id, name)) =
+                    req_id.and_then(|id| req_snapshot.as_ref().map(|r| (id, r.name.clone())))
+                {
                     // Emit event up to VerveApp to open the share dialog.
-                    cx.emit(crate::ui::project_tree_panel::TreeEvent::ShareRequest(id, name));
+                    cx.emit(crate::ui::project_tree_panel::TreeEvent::ShareRequest(
+                        id, name,
+                    ));
                 }
             }
             TreeAction::CopyAsCurl(_) => {
@@ -1779,7 +1786,8 @@ impl ProjectTreePanel {
         let selected = self.state.read(cx).selected_request.clone();
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
-                let _ = duplicate_request_in_place(&mut project.folders, &mut project.requests, &id);
+                let _ =
+                    duplicate_request_in_place(&mut project.folders, &mut project.requests, &id);
             }
             s.notify_workspace(cx);
         });

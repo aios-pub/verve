@@ -2,6 +2,8 @@
 
 # ⚡ Verve
 
+**🔥🔥🔥 An offline-first, one-stop developer workbench built with Rust — unifying API debugging, SSH triage, Docker/K8s log inspection, stress testing, mock & capture, notes, hosts, and JSON tools in a single native window.**
+
 ### The One-Stop Developer Workbench
 
 **Debug APIs, investigate issues, tail logs, exec into containers — one window for the high-frequency tasks you repeat every day.** Built-in HTTP debugging, SSH terminal, Docker / K8s read-only inspection & troubleshooting, stress testing, mock, and traffic capture — plus notes, hosts, JSON formatting, and other dev utilities, with document sharing and Git sync. Everything a developer reaches for daily, finally under one roof.

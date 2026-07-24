@@ -91,19 +91,18 @@ mod tests {
     async fn push_evicts_oldest() {
         let store = CaptureStore::new(2);
         for i in 0..5u8 {
-            store
-                .push(CaptureEntry {
-                    id: 0,
-                    ts_ms: 0,
-                    method: "GET".into(),
-                    url: format!("/{i}"),
-                    status: 200,
-                    duration_ms: 1,
-                    req_headers: Vec::new(),
-                    req_body: Vec::new(),
-                    resp_headers: Vec::new(),
-                    resp_body: Vec::new(),
-                });
+            store.push(CaptureEntry {
+                id: 0,
+                ts_ms: 0,
+                method: "GET".into(),
+                url: format!("/{i}"),
+                status: 200,
+                duration_ms: 1,
+                req_headers: Vec::new(),
+                req_body: Vec::new(),
+                resp_headers: Vec::new(),
+                resp_body: Vec::new(),
+            });
         }
         let snap = store.snapshot();
         assert_eq!(snap.len(), 2);

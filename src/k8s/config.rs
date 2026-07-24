@@ -32,9 +32,17 @@ pub struct Cluster {
     pub server: String,
     #[serde(rename = "insecure-skip-tls-verify", default)]
     pub insecure_skip_tls_verify: bool,
-    #[serde(rename = "certificate-authority-data", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "certificate-authority-data",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ca_data: Option<String>,
-    #[serde(rename = "certificate-authority", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "certificate-authority",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ca_file: Option<String>,
 }
 
@@ -60,13 +68,29 @@ pub struct NamedUser {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct UserEntry {
-    #[serde(rename = "client-certificate-data", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "client-certificate-data",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cert_data: Option<String>,
-    #[serde(rename = "client-key-data", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "client-key-data",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub key_data: Option<String>,
-    #[serde(rename = "client-certificate", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "client-certificate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cert_file: Option<String>,
-    #[serde(rename = "client-key", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "client-key",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub key_file: Option<String>,
     #[serde(rename = "token", default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -149,7 +173,9 @@ pub fn load_merged() -> KubeConfig {
 impl KubeConfig {
     /// Look up the currently-active context (NamedContext), if any.
     pub fn active_context(&self) -> Option<&NamedContext> {
-        self.contexts.iter().find(|c| c.name == self.current_context)
+        self.contexts
+            .iter()
+            .find(|c| c.name == self.current_context)
     }
 
     /// Look up the cluster for a given context name.
@@ -216,11 +242,18 @@ users:
             cfg.cluster_for("prod-cluster").unwrap().server,
             "https://prod.example.com:6443"
         );
-        assert!(cfg.cluster_for("prod-cluster").unwrap().insecure_skip_tls_verify);
+        assert!(
+            cfg.cluster_for("prod-cluster")
+                .unwrap()
+                .insecure_skip_tls_verify
+        );
         assert_eq!(
             cfg.active_context().unwrap().context.namespace.as_deref(),
             Some("default")
         );
-        assert_eq!(cfg.user_for("dev-cluster").unwrap().user.token.as_deref(), Some("abcdef"));
+        assert_eq!(
+            cfg.user_for("dev-cluster").unwrap().user.token.as_deref(),
+            Some("abcdef")
+        );
     }
 }

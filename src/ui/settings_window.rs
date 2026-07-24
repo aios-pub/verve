@@ -12,16 +12,17 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{
-    button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
-};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 
 use crate::assets::REFRESH_CW;
-use crate::state::persistence;
 use crate::state::AppState;
+use crate::state::persistence;
 use crate::ui::app::SideView;
 use crate::ui::environments_view::EnvironmentsView;
 
@@ -115,7 +116,10 @@ impl SettingsWindow {
 
         // Build dropdowns.
         let home_options: Vec<String> = SideView::ALL.iter().map(|v| v.label()).collect();
-        let home_idx = SideView::ALL.iter().position(|&v| v == home_view).unwrap_or(0);
+        let home_idx = SideView::ALL
+            .iter()
+            .position(|&v| v == home_view)
+            .unwrap_or(0);
         let home_view_select = cx.new(|cx| {
             SelectState::new(
                 home_options,
@@ -151,7 +155,10 @@ impl SettingsWindow {
         });
 
         let cur_locale = rust_i18n::locale().to_string();
-        let lang_options: Vec<String> = LANGUAGES.iter().map(|(_, label)| label.to_string()).collect();
+        let lang_options: Vec<String> = LANGUAGES
+            .iter()
+            .map(|(_, label)| label.to_string())
+            .collect();
         let lang_idx = LANGUAGES
             .iter()
             .position(|(code, _)| *code == cur_locale || cur_locale.starts_with(code))
@@ -349,11 +356,7 @@ impl Render for SettingsWindow {
         self.home_view_select.update(cx, |s, cx| {
             let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
             if cur != home_idx {
-                s.set_selected_index(
-                    Some(gpui_component::IndexPath::new(home_idx)),
-                    window,
-                    cx,
-                );
+                s.set_selected_index(Some(gpui_component::IndexPath::new(home_idx)), window, cx);
             }
         });
         let sync_idx = SYNC_INTERVALS
@@ -363,11 +366,7 @@ impl Render for SettingsWindow {
         self.sync_interval_select.update(cx, |s, cx| {
             let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
             if cur != sync_idx {
-                s.set_selected_index(
-                    Some(gpui_component::IndexPath::new(sync_idx)),
-                    window,
-                    cx,
-                );
+                s.set_selected_index(Some(gpui_component::IndexPath::new(sync_idx)), window, cx);
             }
         });
         let cur_locale = rust_i18n::locale().to_string();
@@ -378,11 +377,7 @@ impl Render for SettingsWindow {
         self.language_select.update(cx, |s, cx| {
             let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
             if cur != lang_idx {
-                s.set_selected_index(
-                    Some(gpui_component::IndexPath::new(lang_idx)),
-                    window,
-                    cx,
-                );
+                s.set_selected_index(Some(gpui_component::IndexPath::new(lang_idx)), window, cx);
             }
         });
 

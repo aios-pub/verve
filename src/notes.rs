@@ -257,7 +257,10 @@ pub fn children_of<'a>(store: &'a NotesStore, parent_id: Option<&str>) -> Vec<&'
 
 /// Whether a note has at least one child.
 pub fn has_children(store: &NotesStore, id: &str) -> bool {
-    store.notes.iter().any(|n| n.parent_id.as_deref() == Some(id))
+    store
+        .notes
+        .iter()
+        .any(|n| n.parent_id.as_deref() == Some(id))
 }
 
 #[cfg(test)]
@@ -318,6 +321,9 @@ mod tests {
         let id = store.notes[1].id.clone();
         delete_note_cascade(&mut store, &id);
         assert_eq!(store.notes.len(), 1);
-        assert_eq!(store.active_note.as_deref(), Some(store.notes[0].id.as_str()));
+        assert_eq!(
+            store.active_note.as_deref(),
+            Some(store.notes[0].id.as_str())
+        );
     }
 }

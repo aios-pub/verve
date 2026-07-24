@@ -14,8 +14,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Sizable as _, WindowExt as _,
+    h_flex, v_flex,
 };
 use tokio::sync::mpsc;
 
@@ -24,14 +25,35 @@ use crate::ssh::sftp::{FileEntry, TransferProgress, humanize_size};
 /// Commands from the UI to the SFTP background actor.
 #[derive(Debug)]
 pub enum SftpCmd {
-    ListDir { path: String },
-    Mkdir { parent: String, name: String },
-    Rename { from: String, to: String },
-    Remove { path: String, is_dir: bool },
+    ListDir {
+        path: String,
+    },
+    Mkdir {
+        parent: String,
+        name: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
+    Remove {
+        path: String,
+        is_dir: bool,
+    },
     /// Recursively remove a directory and all its contents (like `rm -rf`).
-    RemoveDirAll { path: String },
-    Upload { local: PathBuf, remote: String, id: String },
-    Download { remote: String, local: PathBuf, id: String },
+    RemoveDirAll {
+        path: String,
+    },
+    Upload {
+        local: PathBuf,
+        remote: String,
+        id: String,
+    },
+    Download {
+        remote: String,
+        local: PathBuf,
+        id: String,
+    },
 }
 
 /// One in-progress or completed transfer.
@@ -104,9 +126,7 @@ impl SftpBrowser {
                 // jump to parent; otherwise just refresh the current dir.
                 let cur = self.current_path.trim_end_matches('/');
                 let rm = removed_path.trim_end_matches('/');
-                let should_cd_up = cur == rm
-                    || rm == "/"
-                    || cur.starts_with(&format!("{}/", rm));
+                let should_cd_up = cur == rm || rm == "/" || cur.starts_with(&format!("{}/", rm));
                 if should_cd_up {
                     self.cd_parent(cx);
                 } else {
@@ -228,11 +248,7 @@ impl SftpBrowser {
         if self.cmd_tx.is_none() {
             self.pending_uploads.push(local);
         } else {
-            let _ = self.send_cmd(SftpCmd::Upload {
-                local,
-                remote,
-                id,
-            });
+            let _ = self.send_cmd(SftpCmd::Upload { local, remote, id });
         }
     }
 
@@ -278,9 +294,7 @@ impl SftpBrowser {
         // Use a oneshot channel to bring the chosen PathBuf back from an OS thread.
         let (tx, rx) = smol::channel::bounded::<Option<PathBuf>>(1);
         std::thread::spawn(move || {
-            let local_path = rfd::FileDialog::new()
-                .set_file_name(&suggested)
-                .save_file();
+            let local_path = rfd::FileDialog::new().set_file_name(&suggested).save_file();
             let _ = smol::block_on(tx.send(local_path));
         });
 
@@ -324,7 +338,11 @@ impl SftpBrowser {
             } else {
                 format!("确定要删除「{}」吗？此操作不可撤销。", name_for_content)
             };
-            let title = if is_dir { "删除文件夹" } else { "删除文件" };
+            let title = if is_dir {
+                "删除文件夹"
+            } else {
+                "删除文件"
+            };
             let confirm_label = if is_dir { "删除全部" } else { "删除" };
             dialog
                 .title(title)
@@ -490,41 +508,37 @@ impl Render for SftpBrowser {
                     )
                     .child(div().w(px(8.)))
                     // Breadcrumbs
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .flex_1()
-                            .children(breadcrumbs.iter().enumerate().map(|(i, (path, label))| {
-                                let is_last = i + 1 == breadcrumbs.len();
-                                let path_c = path.clone();
-                                h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .cursor_pointer()
-                                    .when(!is_last, |d| d.text_color(muted))
-                                    .when(is_last, |d| {
-                                        d.text_color(fg).font_weight(FontWeight::SEMIBOLD)
-                                    })
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .hover(|s| s.text_color(accent))
-                                            .child(label.clone())
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, _, cx| {
-                                                    if !is_last {
-                                                        this.cd(path_c.clone(), cx);
-                                                    }
-                                                }),
-                                            ),
-                                    )
-                                    .when(!is_last, |d| {
-                                        d.child(div().text_sm().text_color(muted).child("/"))
-                                    })
-                            })),
-                    ),
+                    .child(h_flex().gap_1().items_center().flex_1().children(
+                        breadcrumbs.iter().enumerate().map(|(i, (path, label))| {
+                            let is_last = i + 1 == breadcrumbs.len();
+                            let path_c = path.clone();
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .cursor_pointer()
+                                .when(!is_last, |d| d.text_color(muted))
+                                .when(is_last, |d| {
+                                    d.text_color(fg).font_weight(FontWeight::SEMIBOLD)
+                                })
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .hover(|s| s.text_color(accent))
+                                        .child(label.clone())
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                if !is_last {
+                                                    this.cd(path_c.clone(), cx);
+                                                }
+                                            }),
+                                        ),
+                                )
+                                .when(!is_last, |d| {
+                                    d.child(div().text_sm().text_color(muted).child("/"))
+                                })
+                        }),
+                    )),
             )
             // Column header
             .child(
@@ -654,10 +668,18 @@ impl Render for SftpBrowser {
                                                 .child(div().text_sm().truncate().child(name)),
                                         )
                                         .child(
-                                            div().w(px(100.)).text_xs().text_color(muted).child(size_str),
+                                            div()
+                                                .w(px(100.))
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child(size_str),
                                         )
                                         .child(
-                                            div().w(px(160.)).text_xs().text_color(muted).child(mtime_str),
+                                            div()
+                                                .w(px(160.))
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child(mtime_str),
                                         )
                                         .child(
                                             h_flex()
@@ -684,15 +706,17 @@ impl Render for SftpBrowser {
                                                         .on_click({
                                                             let path_for_dl = path_for_dl.clone();
                                                             let name_for_btn = name_for_del.clone();
-                                                            cx.listener(move |this, _, window, cx| {
-                                                                this.confirm_delete(
-                                                                    path_for_dl.clone(),
-                                                                    name_for_btn.clone(),
-                                                                    e_is_dir,
-                                                                    window,
-                                                                    cx,
-                                                                );
-                                                            })
+                                                            cx.listener(
+                                                                move |this, _, window, cx| {
+                                                                    this.confirm_delete(
+                                                                        path_for_dl.clone(),
+                                                                        name_for_btn.clone(),
+                                                                        e_is_dir,
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            )
                                                         }),
                                                 ),
                                         )
@@ -748,7 +772,11 @@ impl Render for SftpBrowser {
                                         .rounded(px(3.))
                                         .bg(border)
                                         .child(
-                                            div().w(px(bar_w as f32)).h_full().rounded(px(3.)).bg(accent),
+                                            div()
+                                                .w(px(bar_w as f32))
+                                                .h_full()
+                                                .rounded(px(3.))
+                                                .bg(accent),
                                         ),
                                 )
                         }))
@@ -838,8 +866,7 @@ fn spawn_sftp_actor(
                             let _ = event_tx.send(ev);
                         }
                         SftpCmd::Mkdir { parent, name } => {
-                            let full =
-                                format!("{}/{}", parent.trim_end_matches('/'), name);
+                            let full = format!("{}/{}", parent.trim_end_matches('/'), name);
                             let ev = match sftp.mkdir(&full).await {
                                 Ok(()) => SftpEvent::MkdirDone { parent },
                                 Err(e) => SftpEvent::Error { message: e },
@@ -873,8 +900,7 @@ fn spawn_sftp_actor(
                             let _ = event_tx.send(ev);
                         }
                         SftpCmd::Upload { local, remote, id } => {
-                            let (ptx, mut prx) =
-                                mpsc::unbounded_channel::<TransferProgress>();
+                            let (ptx, mut prx) = mpsc::unbounded_channel::<TransferProgress>();
                             let fwd = event_tx.clone();
                             let id_fwd = id.clone();
                             tokio::spawn(async move {
@@ -884,9 +910,7 @@ fn spawn_sftp_actor(
                             });
                             let res = sftp.upload_file(&local, &remote, ptx).await;
                             let ev = match res {
-                                Ok(()) => SftpEvent::Transfer(
-                                    TransferProgress::Completed { id },
-                                ),
+                                Ok(()) => SftpEvent::Transfer(TransferProgress::Completed { id }),
                                 Err(e) => SftpEvent::Transfer(TransferProgress::Error {
                                     id: id_fwd,
                                     message: e,
@@ -895,8 +919,7 @@ fn spawn_sftp_actor(
                             let _ = event_tx.send(ev);
                         }
                         SftpCmd::Download { remote, local, id } => {
-                            let (ptx, mut prx) =
-                                mpsc::unbounded_channel::<TransferProgress>();
+                            let (ptx, mut prx) = mpsc::unbounded_channel::<TransferProgress>();
                             let fwd = event_tx.clone();
                             let id_fwd = id.clone();
                             tokio::spawn(async move {
@@ -906,9 +929,7 @@ fn spawn_sftp_actor(
                             });
                             let res = sftp.download_file(&remote, &local, ptx).await;
                             let ev = match res {
-                                Ok(()) => SftpEvent::Transfer(
-                                    TransferProgress::Completed { id },
-                                ),
+                                Ok(()) => SftpEvent::Transfer(TransferProgress::Completed { id }),
                                 Err(e) => SftpEvent::Transfer(TransferProgress::Error {
                                     id: id_fwd,
                                     message: e,
@@ -929,7 +950,9 @@ fn spawn_sftp_actor(
 #[derive(Debug, Clone)]
 pub enum SftpEvent {
     /// Emitted once when the SFTP subsystem is open and the home path is known.
-    Ready { home: String },
+    Ready {
+        home: String,
+    },
     DirListed {
         path: String,
         entries: Vec<FileEntry>,
@@ -938,7 +961,9 @@ pub enum SftpEvent {
         parent: String,
     },
     RenameDone,
-    RemoveDone { removed_path: String },
+    RemoveDone {
+        removed_path: String,
+    },
     Transfer(TransferProgress),
     Error {
         message: String,

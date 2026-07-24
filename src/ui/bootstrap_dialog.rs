@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, Sizable as _};
+use gpui_component::{ActiveTheme, Disableable as _, Sizable as _, h_flex, v_flex};
 
 use crate::git::ops::{self, GitAuth};
 use crate::state::persistence;
@@ -40,15 +40,12 @@ enum BootstrapStatus {
 impl BootstrapDialog {
     pub fn new(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let url_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("https://github.com/your/verve-config.git")
+            InputState::new(window, cx).placeholder("https://github.com/your/verve-config.git")
         });
-        let username_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("username (optional)")
-        });
-        let token_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("token/password (optional)")
-        });
+        let username_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("username (optional)"));
+        let token_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("token/password (optional)"));
 
         cx.new(|_cx| Self {
             url_input,
@@ -82,8 +79,8 @@ impl BootstrapDialog {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let data_dir = persistence::data_dir()
-                        .map_err(|e| format!("数据目录创建失败: {}", e))?;
+                    let data_dir =
+                        persistence::data_dir().map_err(|e| format!("数据目录创建失败: {}", e))?;
 
                     let tmp_dir = data_dir.with_file_name(".verve-clone-tmp");
                     if tmp_dir.exists() {
@@ -91,8 +88,7 @@ impl BootstrapDialog {
                     }
 
                     let auth = GitAuth { username, token };
-                    ops::clone(&tmp_dir, &url, &auth)
-                        .map_err(|e| format!("克隆失败: {}", e))?;
+                    ops::clone(&tmp_dir, &url, &auth).map_err(|e| format!("克隆失败: {}", e))?;
 
                     // Move cloned contents into data_dir.
                     for entry in std::fs::read_dir(&tmp_dir).map_err(|e| e.to_string())? {
@@ -180,20 +176,16 @@ impl Render for BootstrapDialog {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(theme.muted_foreground)
-                                    .child(rust_i18n::t!("git_bootstrap.start_fresh_desc").to_string()),
+                                    .child(
+                                        rust_i18n::t!("git_bootstrap.start_fresh_desc").to_string(),
+                                    ),
                             ),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.choose_local(window, cx);
                     })),
             )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(1.))
-                    .my(px(4.))
-                    .bg(theme.border),
-            )
+            .child(div().w_full().h(px(1.)).my(px(4.)).bg(theme.border))
             .child(
                 div()
                     .text_size(px(14.))

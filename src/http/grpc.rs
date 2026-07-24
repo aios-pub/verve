@@ -98,7 +98,9 @@ pub async fn execute_grpc_web(
                 status: 0,
                 status_text: "gRPC Error".into(),
                 time_ms,
-                error: Some(format!("连接失败：{e}\n\n请确认 gRPC 服务是否在运行，且支持 gRPC-Web。\nURL: {real_url}")),
+                error: Some(format!(
+                    "连接失败：{e}\n\n请确认 gRPC 服务是否在运行，且支持 gRPC-Web。\nURL: {real_url}"
+                )),
                 ..Default::default()
             };
         }

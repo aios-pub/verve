@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Mutex;
 use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::ssh::client::SshConnection;
@@ -245,7 +245,9 @@ async fn bridge_one(
             } else {
                 trimmed.to_string()
             };
-            return Err(format!("远端 `{REMOTE_DIAL_CMD}` 失败 (退出码 {code}):\n{detail}"));
+            return Err(format!(
+                "远端 `{REMOTE_DIAL_CMD}` 失败 (退出码 {code}):\n{detail}"
+            ));
         }
     }
     Ok(())

@@ -8,7 +8,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{StatefulInteractiveElement as _, *};
-use gpui_component::{h_flex, ActiveTheme};
+use gpui_component::{ActiveTheme, h_flex};
 
 /// Invisible entity used as a drag-preview for terminal text selection.
 struct EmptyDrag;
@@ -281,7 +281,11 @@ impl TerminalView {
     /// None if no selection exists.
     fn selected_text(&self, lines: &[String]) -> Option<String> {
         let (a, h) = self.selection_anchor.zip(self.selection_head)?;
-        let (start, end) = if (a.row, a.col) <= (h.row, h.col) { (a, h) } else { (h, a) };
+        let (start, end) = if (a.row, a.col) <= (h.row, h.col) {
+            (a, h)
+        } else {
+            (h, a)
+        };
         if start.row >= lines.len() {
             return None;
         }
@@ -594,11 +598,14 @@ impl Render for TerminalView {
             // Strip trailing whitespace from each row but preserve empty lines
             // and leading whitespace — critical for log display where blank
             // separators and indented lines are meaningful.
-            all_text.into_iter().map(|mut row| {
-                let trim_end = row.trim_end().len();
-                row.truncate(trim_end);
-                row
-            }).collect::<Vec<_>>()
+            all_text
+                .into_iter()
+                .map(|mut row| {
+                    let trim_end = row.trim_end().len();
+                    row.truncate(trim_end);
+                    row
+                })
+                .collect::<Vec<_>>()
         };
 
         // Update cached geometry so mouse events can map positions back to rows.
@@ -611,7 +618,11 @@ impl Render for TerminalView {
             .selection_anchor
             .zip(self.selection_head)
             .map(|(a, h)| {
-                if (a.row, a.col) <= (h.row, h.col) { (a, h) } else { (h, a) }
+                if (a.row, a.col) <= (h.row, h.col) {
+                    (a, h)
+                } else {
+                    (h, a)
+                }
             });
 
         // Selection highlight color (bright blue overlay for visibility).
@@ -642,7 +653,11 @@ impl Render for TerminalView {
 
                 let len = text.len();
                 let from = if row_idx == start.row { start.col } else { 0 };
-                let to = if row_idx == end.row { end.col.min(len) } else { len };
+                let to = if row_idx == end.row {
+                    end.col.min(len)
+                } else {
+                    len
+                };
                 let from = from.min(len);
                 let to = to.max(from);
 
@@ -688,37 +703,38 @@ impl Render for TerminalView {
             .on_key_down({
                 let lines_for_copy = lines.clone();
                 cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                let is_copy = (event.keystroke.modifiers.platform
-                    && event.keystroke.key == "c")
-                    || (event.keystroke.modifiers.control && event.keystroke.key == "insert");
-                if is_copy {
-                    if let Some(text) = this.selected_text(&lines_for_copy) {
-                        if !text.is_empty() {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                            cx.stop_propagation();
-                            return;
+                    let is_copy = (event.keystroke.modifiers.platform
+                        && event.keystroke.key == "c")
+                        || (event.keystroke.modifiers.control && event.keystroke.key == "insert");
+                    if is_copy {
+                        if let Some(text) = this.selected_text(&lines_for_copy) {
+                            if !text.is_empty() {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                cx.stop_propagation();
+                                return;
+                            }
                         }
                     }
-                }
-                if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
-                    if let Some(item) = cx.read_from_clipboard() {
-                        let text = item.text().unwrap_or_default();
-                        if !text.is_empty() {
-                            this.send_input(text.as_bytes());
-                            cx.notify();
-                            cx.stop_propagation();
-                            return;
+                    if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
+                        if let Some(item) = cx.read_from_clipboard() {
+                            let text = item.text().unwrap_or_default();
+                            if !text.is_empty() {
+                                this.send_input(text.as_bytes());
+                                cx.notify();
+                                cx.stop_propagation();
+                                return;
+                            }
                         }
                     }
-                }
-                let bytes = keystroke_to_bytes(&event.keystroke);
-                if !bytes.is_empty() {
-                    this.send_input(&bytes);
-                    cx.notify();
-                    cx.stop_propagation();
-                    window.refresh();
-                }
-            })})
+                    let bytes = keystroke_to_bytes(&event.keystroke);
+                    if !bytes.is_empty() {
+                        this.send_input(&bytes);
+                        cx.notify();
+                        cx.stop_propagation();
+                        window.refresh();
+                    }
+                })
+            })
             // Absolutely-positioned canvas that covers the entire area so its
             // paint hook fires reliably. Only job: record bounds (for mouse coord
             // conversion) and register the keyboard input handler.
@@ -729,14 +745,18 @@ impl Render for TerminalView {
                         if let Ok(mut b) = bounds_for_paint.lock() {
                             *b = bounds;
                         }
-                        window.handle_input(&fh, ElementInputHandler::new(bounds, entity.clone()), cx);
+                        window.handle_input(
+                            &fh,
+                            ElementInputHandler::new(bounds, entity.clone()),
+                            cx,
+                        );
                     },
                 )
                 .absolute()
                 .top_0()
                 .left_0()
                 .right_0()
-                .bottom_0()
+                .bottom_0(),
             )
             // Mouse handlers live on the outer div (not canvas) so GPUI dispatches
             // them reliably. ev.position is window-absolute; we subtract bounds.origin.
@@ -746,7 +766,10 @@ impl Render for TerminalView {
                     window.focus(&cx.focus_handle(), cx);
                     let px: f32 = ev.position.x.into();
                     let py: f32 = ev.position.y.into();
-                    let bounds = match this.bounds.lock() { Ok(g) => *g, Err(_) => return };
+                    let bounds = match this.bounds.lock() {
+                        Ok(g) => *g,
+                        Err(_) => return,
+                    };
                     let ox: f32 = bounds.origin.x.into();
                     let oy: f32 = bounds.origin.y.into();
                     let (cw, ch) = char_cell_metrics(this.font_size, this.last_line_height);
@@ -765,11 +788,18 @@ impl Render for TerminalView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
-                if !this.selecting { return; }
-                if ev.pressed_button != Some(MouseButton::Left) { return; }
+                if !this.selecting {
+                    return;
+                }
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    return;
+                }
                 let px: f32 = ev.position.x.into();
                 let py: f32 = ev.position.y.into();
-                let bounds = match this.bounds.lock() { Ok(g) => *g, Err(_) => return };
+                let bounds = match this.bounds.lock() {
+                    Ok(g) => *g,
+                    Err(_) => return,
+                };
                 let ox: f32 = bounds.origin.x.into();
                 let oy: f32 = bounds.origin.y.into();
                 let bw: f32 = bounds.size.width.into();

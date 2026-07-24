@@ -21,18 +21,19 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _, Theme, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     popover::Popover,
-    v_flex, ActiveTheme, IconName, Sizable as _, Theme, WindowExt as _,
+    v_flex,
 };
 
 use crate::share::models::{
     AccessControl, Expiration, FieldDisplay, ShareConfig, ShareMethod, ShareScope,
 };
-use crate::state::models::Environment;
 use crate::state::AppState;
+use crate::state::models::Environment;
 
 /// Mutable state backing the share dialog. Rendered as the dialog's content;
 /// the footer reads it back on confirm to build the final [`ShareConfig`].

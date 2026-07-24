@@ -6,8 +6,8 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::tree::{tree, TreeItem, TreeState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use gpui_component::tree::{TreeItem, TreeState, tree};
+use gpui_component::{ActiveTheme, Disableable as _, IconName, Sizable as _, h_flex, v_flex};
 
 pub struct JsonPanel {
     input: Entity<InputState>,
@@ -144,7 +144,7 @@ fn value_to_tree_items_expanded(value: &serde_json::Value, expand_all: bool) -> 
             vec![
                 TreeItem::new("root".to_string(), label)
                     .children(children)
-                    .expanded(true)  // root always expanded
+                    .expanded(true), // root always expanded
             ]
         }
         serde_json::Value::Array(arr) => {
@@ -164,22 +164,37 @@ fn value_to_tree_items_expanded(value: &serde_json::Value, expand_all: bool) -> 
             vec![
                 TreeItem::new("root".to_string(), label)
                     .children(children)
-                    .expanded(true)  // root always expanded
+                    .expanded(true), // root always expanded
             ]
         }
         // Primitive root value - single item
-        _ => vec![json_to_tree_item_expanded(value, String::new(), 0, expand_all)],
+        _ => vec![json_to_tree_item_expanded(
+            value,
+            String::new(),
+            0,
+            expand_all,
+        )],
     }
 }
 
 /// Recursively convert a serde_json::Value into a TreeItem.
 /// For containers we encode count in label as "prefix{|count" or "prefix[|count".
-fn json_to_tree_item(value: &serde_json::Value, key: String, depth: usize, expanded_all: bool) -> TreeItem {
+fn json_to_tree_item(
+    value: &serde_json::Value,
+    key: String,
+    depth: usize,
+    expanded_all: bool,
+) -> TreeItem {
     json_to_tree_item_expanded(value, key, depth, expanded_all)
 }
 
 /// Build tree item with specified expand_all state
-fn json_to_tree_item_expanded(value: &serde_json::Value, key: String, depth: usize, expand_all: bool) -> TreeItem {
+fn json_to_tree_item_expanded(
+    value: &serde_json::Value,
+    key: String,
+    depth: usize,
+    expand_all: bool,
+) -> TreeItem {
     let id = format!("{}-{}", depth, key);
     let key_prefix = if key.is_empty() {
         String::new()
@@ -271,19 +286,10 @@ impl Render for JsonPanel {
                     .border_color(theme.border)
                     .rounded(px(4.))
                     .overflow_hidden()
-                    .child(
-                        Input::new(&self.input)
-                            .small()
-                            .h_full(),
-                    ),
+                    .child(Input::new(&self.input).small().h_full()),
             )
             .when_some(self.error.as_ref(), |flex, err| {
-                flex.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.danger)
-                        .child(err.clone()),
-                )
+                flex.child(div().text_sm().text_color(theme.danger).child(err.clone()))
             });
 
         let mono_font = theme.mono_font_family.clone();
@@ -331,8 +337,9 @@ impl Render for JsonPanel {
                     .p_1()
                     .bg(theme.muted.opacity(0.3))
                     .when(self.formatted_json.is_some(), |c| {
-                        c.child(
-                            tree(&self.tree, move |ix, entry, _selected, _window, cx| {
+                        c.child(tree(
+                            &self.tree,
+                            move |ix, entry, _selected, _window, cx| {
                                 let item = entry.item();
                                 let depth = entry.depth();
                                 let is_folder = entry.is_folder();
@@ -343,28 +350,36 @@ impl Render for JsonPanel {
                                 let chevron_size = 20.;
                                 let indent_width = 20.;
 
-                                let mut row = gpui_component::list::ListItem::new(SharedString::from(format!("json-row-{}", item.id)))
-                                    .pl(px(indent_width) * depth)
-                                    .h(px(22.));
+                                let mut row = gpui_component::list::ListItem::new(
+                                    SharedString::from(format!("json-row-{}", item.id)),
+                                )
+                                .pl(px(indent_width) * depth)
+                                .h(px(22.));
 
                                 if is_folder {
-                                    let icon = if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight };
+                                    let icon = if is_expanded {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    };
                                     let toggle_ix = ix;
 
                                     // Parse label: we encoded as "prefix{|count" for objects, "prefix[|count" for arrays
-                                    let (is_array, key_part, count) = if let Some(pipe_pos) = label_str.rfind('|') {
-                                        let count: usize = label_str[pipe_pos+1..].parse().unwrap_or(0);
-                                        let prefix = &label_str[..pipe_pos];
-                                        let is_arr = prefix.ends_with('[');
-                                        let key_part = if is_arr {
-                                            prefix.trim_end_matches('[')
+                                    let (is_array, key_part, count) =
+                                        if let Some(pipe_pos) = label_str.rfind('|') {
+                                            let count: usize =
+                                                label_str[pipe_pos + 1..].parse().unwrap_or(0);
+                                            let prefix = &label_str[..pipe_pos];
+                                            let is_arr = prefix.ends_with('[');
+                                            let key_part = if is_arr {
+                                                prefix.trim_end_matches('[')
+                                            } else {
+                                                prefix.trim_end_matches('{')
+                                            };
+                                            (is_arr, key_part.to_string(), count)
                                         } else {
-                                            prefix.trim_end_matches('{')
+                                            (false, label_str.clone(), 0)
                                         };
-                                        (is_arr, key_part.to_string(), count)
-                                    } else {
-                                        (false, label_str.clone(), 0)
-                                    };
 
                                     let display_label = if is_expanded {
                                         // Expanded: just show opening brace/key
@@ -412,7 +427,8 @@ impl Render for JsonPanel {
 
                                     // Make entire row clickable to toggle
                                     row = row.on_click(move |_, _, cx| {
-                                        tree_for_click.update(cx, |t, cx| t.toggle_expand(toggle_ix, cx));
+                                        tree_for_click
+                                            .update(cx, |t, cx| t.toggle_expand(toggle_ix, cx));
                                     });
                                 } else {
                                     // Handle closing brace/bracket
@@ -431,22 +447,30 @@ impl Render for JsonPanel {
                                     } else {
                                         // Regular primitive value
                                         let check_str = label_str.trim_end_matches(',');
-                                        let value_color = if check_str.contains("true") || check_str.contains("false") {
+                                        let value_color = if check_str.contains("true")
+                                            || check_str.contains("false")
+                                        {
                                             warn // boolean
                                         } else if check_str.contains("null") {
                                             muted_fg // null
-                                        } else if check_str.contains(": \"") || check_str.starts_with('"') {
+                                        } else if check_str.contains(": \"")
+                                            || check_str.starts_with('"')
+                                        {
                                             success // string
                                         } else {
                                             info // number
                                         };
 
                                         // Split key and value at first ": "
-                                        let (key_part, val_part) = if let Some(pos) = label_str.find(": ") {
-                                            (label_str[..pos+2].to_string(), label_str[pos+2..].to_string())
-                                        } else {
-                                            (String::new(), label_str.clone())
-                                        };
+                                        let (key_part, val_part) =
+                                            if let Some(pos) = label_str.find(": ") {
+                                                (
+                                                    label_str[..pos + 2].to_string(),
+                                                    label_str[pos + 2..].to_string(),
+                                                )
+                                            } else {
+                                                (String::new(), label_str.clone())
+                                            };
 
                                         row = row.child(
                                             h_flex()
@@ -456,23 +480,17 @@ impl Render for JsonPanel {
                                                 .pl(px(chevron_size)) // align with folder rows
                                                 .font_family(mono_font.clone())
                                                 .text_sm()
+                                                .child(div().text_color(fg).child(key_part))
                                                 .child(
-                                                    div()
-                                                        .text_color(fg)
-                                                        .child(key_part),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(value_color)
-                                                        .child(val_part),
+                                                    div().text_color(value_color).child(val_part),
                                                 ),
                                         );
                                     }
                                 }
 
                                 row
-                            }),
-                        )
+                            },
+                        ))
                     })
                     .when(self.formatted_json.is_none(), |c| {
                         c.child(
@@ -494,10 +512,6 @@ impl Render for JsonPanel {
                     .size_range(px(200.)..px(800.))
                     .child(input_el),
             )
-            .child(
-                resizable_panel()
-                    .overflow_hidden()
-                    .child(output_el),
-            )
+            .child(resizable_panel().overflow_hidden().child(output_el))
     }
 }

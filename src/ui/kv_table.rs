@@ -12,9 +12,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
+    h_flex, v_flex,
 };
 
 use crate::state::models::{FieldType, KeyValue};

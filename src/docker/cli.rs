@@ -53,9 +53,25 @@ fn docker_binary() -> PathBuf {
         let program_files = std::env::var_os("ProgramFiles")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"));
-        candidates.push(program_files.join("Docker").join("Docker").join("resources").join("bin").join("docker.exe"));
-        candidates.push(program_files.join("Docker").join("Docker").join("resources").join("bin").join("docker"));
-        candidates.push(PathBuf::from(r"C:\ProgramData\DockerDesktop\version-bin\docker.exe"));
+        candidates.push(
+            program_files
+                .join("Docker")
+                .join("Docker")
+                .join("resources")
+                .join("bin")
+                .join("docker.exe"),
+        );
+        candidates.push(
+            program_files
+                .join("Docker")
+                .join("Docker")
+                .join("resources")
+                .join("bin")
+                .join("docker"),
+        );
+        candidates.push(PathBuf::from(
+            r"C:\ProgramData\DockerDesktop\version-bin\docker.exe",
+        ));
     }
 
     // ~/.docker/bin (user-installed, all platforms)
@@ -68,7 +84,11 @@ fn docker_binary() -> PathBuf {
         }
     }
     // Fall back to PATH resolution.
-    PathBuf::from(if cfg!(windows) { "docker.exe" } else { "docker" })
+    PathBuf::from(if cfg!(windows) {
+        "docker.exe"
+    } else {
+        "docker"
+    })
 }
 
 /// Resolve (opening if necessary) the SSH tunnel for a Verve-SSH-backed
@@ -93,8 +113,7 @@ fn resolve_ssh_tunnel(h: &DockerHost) -> Result<String, DockerError> {
     let tunnel = {
         let ssh_host = super::socket_tunnel::find_ssh_host(ssh_id)
             .ok_or_else(|| DockerError(format!("找不到关联的 SSH 主机: {ssh_id}")))?;
-        SocketTunnel::open(&ssh_host)
-            .map_err(|e| DockerError(format!("建立 SSH 隧道失败: {e}")))?
+        SocketTunnel::open(&ssh_host).map_err(|e| DockerError(format!("建立 SSH 隧道失败: {e}")))?
     };
 
     let url = tunnel.docker_host_env();
@@ -137,7 +156,10 @@ fn apply_host_env(cmd: &mut Command, host: Option<&DockerHost>) -> Result<(), Do
 }
 
 /// Apply Docker host environment variables to a std (sync) Command.
-fn apply_host_env_sync(cmd: &mut std::process::Command, host: Option<&DockerHost>) -> Result<(), DockerError> {
+fn apply_host_env_sync(
+    cmd: &mut std::process::Command,
+    host: Option<&DockerHost>,
+) -> Result<(), DockerError> {
     if let Some(h) = host {
         if let Some(ref ssh_id) = h.ssh_host_id {
             let url = resolve_ssh_tunnel(h)?;
@@ -251,7 +273,10 @@ pub struct ExecSession {
 /// error so the UI never gets stuck on "loading…".
 const DOCKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-fn run_docker(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
+fn run_docker(
+    host: Option<&DockerHost>,
+    args: &[&str],
+) -> Result<std::process::Output, DockerError> {
     // std's `.output()` internally spawns reader threads for both stdout and
     // stderr before waiting on the child — it correctly handles large output
     // and can never deadlock on pipe buffers. We run it on a helper thread and
@@ -273,13 +298,16 @@ fn run_docker(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DockerError(
             "docker 命令超时（30秒），请确认 Docker daemon 正在运行".into(),
         )),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(DockerError(
-            "docker 命令执行异常终止，请重试".into(),
-        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(DockerError("docker 命令执行异常终止，请重试".into()))
+        }
     }
 }
 
-pub async fn run_docker_async(host: Option<&DockerHost>, args: &[&str]) -> Result<std::process::Output, DockerError> {
+pub async fn run_docker_async(
+    host: Option<&DockerHost>,
+    args: &[&str],
+) -> Result<std::process::Output, DockerError> {
     use tokio::time::timeout;
     let mut cmd = docker_command(host)?;
     cmd.args(args);
@@ -313,7 +341,11 @@ fn extended_path() -> String {
     {
         // Docker Desktop's bin dir on Windows; let PATH handle the rest.
         if let Some(pf) = std::env::var_os("ProgramFiles") {
-            let docker_bin = PathBuf::from(&pf).join("Docker").join("Docker").join("resources").join("bin");
+            let docker_bin = PathBuf::from(&pf)
+                .join("Docker")
+                .join("Docker")
+                .join("resources")
+                .join("bin");
             if docker_bin.exists() {
                 if let Some(s) = docker_bin.to_str() {
                     dirs.push(s.to_string());
@@ -398,14 +430,20 @@ pub async fn prune_images(host: Option<&DockerHost>) -> Result<String, DockerErr
 }
 
 /// Spawn `docker logs -f --tail=N <id>` and stream lines back to a channel.
-pub fn stream_logs(host: Option<&DockerHost>, id: &str, tail: u32) -> Result<LogStream, DockerError> {
+pub fn stream_logs(
+    host: Option<&DockerHost>,
+    id: &str,
+    tail: u32,
+) -> Result<LogStream, DockerError> {
     let mut cmd = docker_command(host)?;
     cmd.arg("logs")
         .arg("-f")
         .arg("--tail")
         .arg(tail.to_string())
         .arg(id);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = cmd
         .spawn()
         .map_err(|e| DockerError(format!("启动 docker logs 失败: {e}")))?;
@@ -500,8 +538,12 @@ fn shell_available(host: Option<&DockerHost>, id: &str, shell: &str) -> bool {
     }
 }
 
-pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) -> Result<ExecSession, DockerError> {
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+pub fn exec_container(
+    host: Option<&DockerHost>,
+    id: &str,
+    shell: Option<&str>,
+) -> Result<ExecSession, DockerError> {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::{Read, Write};
 
     // Caller-requested shell wins; otherwise auto-detect from common shells.
@@ -554,7 +596,12 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
     // but wiring that up is a later improvement — 120x32 is a sane default.
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 32,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| DockerError(format!("分配 PTY 失败: {e}")))?;
 
     // Spawn docker exec as a child of the PTY slave.
@@ -582,7 +629,10 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
 
     // Writer thread: UI keystrokes → PTY master.
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(_) => return,
         };
@@ -597,7 +647,10 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
     });
     // Reader thread: PTY master → UI TerminalView.
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(_) => return,
         };
@@ -629,7 +682,10 @@ pub fn exec_container(host: Option<&DockerHost>, id: &str, shell: Option<&str>) 
         });
     });
 
-    Ok(ExecSession { stdin_tx, output_rx })
+    Ok(ExecSession {
+        stdin_tx,
+        output_rx,
+    })
 }
 
 #[cfg(test)]

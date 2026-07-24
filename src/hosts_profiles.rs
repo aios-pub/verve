@@ -287,7 +287,10 @@ mod tests {
         });
         let overrides = effective_virtual_overrides(&store, None);
         assert_eq!(overrides.len(), 1);
-        assert_eq!(overrides[0], ("api.local".to_string(), "127.0.0.1".to_string()));
+        assert_eq!(
+            overrides[0],
+            ("api.local".to_string(), "127.0.0.1".to_string())
+        );
     }
 
     #[test]
@@ -305,7 +308,10 @@ mod tests {
         // No env active → no overrides.
         assert!(effective_virtual_overrides(&store, None).is_empty());
         // Matching env → overrides.
-        assert_eq!(effective_virtual_overrides(&store, Some("env-dev")).len(), 1);
+        assert_eq!(
+            effective_virtual_overrides(&store, Some("env-dev")).len(),
+            1
+        );
         // Wrong env → no overrides.
         assert!(effective_virtual_overrides(&store, Some("env-prod")).is_empty());
     }
@@ -313,7 +319,10 @@ mod tests {
     #[test]
     fn merge_into_existing_appends_when_no_block() {
         let existing = "127.0.0.1 localhost\n";
-        let block = format!("{}\n127.0.0.1 test\n{}\n", VERVE_BLOCK_START, VERVE_BLOCK_END);
+        let block = format!(
+            "{}\n127.0.0.1 test\n{}\n",
+            VERVE_BLOCK_START, VERVE_BLOCK_END
+        );
         let merged = merge_into_existing(existing, &block);
         assert!(merged.contains("127.0.0.1 localhost"));
         assert!(merged.contains(VERVE_BLOCK_START));

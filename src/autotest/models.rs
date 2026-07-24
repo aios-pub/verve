@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::state::models::{new_id, KeyValue};
+use crate::state::models::{KeyValue, new_id};
 
 /// A suite of test cases, analogous to a folder in Postman's collection runner.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -183,7 +183,10 @@ impl TestCaseStep {
     /// Display label for the step list.
     pub fn display_label(&self) -> String {
         match self {
-            TestCaseStep::Request(s) => s.name_override.clone().unwrap_or_else(|| "HTTP 请求".into()),
+            TestCaseStep::Request(s) => s
+                .name_override
+                .clone()
+                .unwrap_or_else(|| "HTTP 请求".into()),
             TestCaseStep::If(s) => format!("如果: {}", truncate(&s.condition, 40)),
             TestCaseStep::Loop(s) => match &s.mode {
                 LoopMode::Repeat { count } => format!("重复 {} 次", count),
@@ -440,7 +443,6 @@ pub enum ExtractSource {
     Body,
 }
 
-
 /// Result of a single step within a test run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestStepResult {
@@ -557,9 +559,11 @@ mod tests {
     fn serde_roundtrip_control_steps() {
         let mut case = TestCase::new("case 2");
         case.steps.push(TestCaseStep::new_wait(500));
-        case.steps.push(TestCaseStep::new_if("response.status === 200"));
+        case.steps
+            .push(TestCaseStep::new_if("response.status === 200"));
         case.steps.push(TestCaseStep::new_repeat(3));
-        case.steps.push(TestCaseStep::new_for_each("item", "response.json.items"));
+        case.steps
+            .push(TestCaseStep::new_for_each("item", "response.json.items"));
         case.steps.push(TestCaseStep::new_while("i < 10"));
         case.steps.push(TestCaseStep::new_script("apt.log('hi');"));
 

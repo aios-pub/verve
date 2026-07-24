@@ -171,7 +171,9 @@ impl GitState {
             Ok::<_, anyhow::Error>((status, commits, branches, remote))
         });
         cx.spawn(async move |_, cx| {
-            let res = handle.join().unwrap_or_else(|_| Err(anyhow::anyhow!("refresh 线程崩溃")));
+            let res = handle
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("refresh 线程崩溃")));
             let _ = weak.update(cx, |this, cx| {
                 if let Ok((status, commits, branches, remote)) = res {
                     this.status = status;
@@ -442,9 +444,9 @@ impl GitState {
             op(repo)
         });
         cx.spawn(async move |_, cx| {
-            let res = handle.join().unwrap_or_else(|_| {
-                Err(anyhow::anyhow!("{label_owned} 后台线程崩溃"))
-            });
+            let res = handle
+                .join()
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("{label_owned} 后台线程崩溃")));
             let _ = weak.update(cx, |this, cx| {
                 this.busy = None;
                 match res {

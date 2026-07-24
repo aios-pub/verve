@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 
 /// The GIT_ASKPASS helper script body. It reads credentials from env vars set
 /// on the git child process — it contains NO secret itself, so it can live in

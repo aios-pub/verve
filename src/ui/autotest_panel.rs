@@ -11,18 +11,20 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{
-    button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _,
-};
 use gpui_component::WindowExt as _;
+use gpui_component::{
+    ActiveTheme, Disableable as _, IconName, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 use http_client::HttpClient;
 use tokio::sync::mpsc;
 
 use crate::autotest::models::{
-    IfStep, LoopMode, LoopStep, RequestStep, ScriptStep, TestCase, TestCaseStep, TestSuite, WaitStep,
+    IfStep, LoopMode, LoopStep, RequestStep, ScriptStep, TestCase, TestCaseStep, TestSuite,
+    WaitStep,
 };
-use crate::autotest::runner::{run_case, RunEvent};
+use crate::autotest::runner::{RunEvent, run_case};
 use crate::state::models::{Folder, Project};
 use crate::state::{AppEvent, AppState};
 
@@ -90,7 +92,9 @@ impl AutoTestPanel {
         let idx = app.active_project;
         let mut data = app.data.clone();
         let _ = app;
-        let Some(p) = data.projects.get_mut(idx) else { return };
+        let Some(p) = data.projects.get_mut(idx) else {
+            return;
+        };
         f(p);
         self.state.update(cx, |app, cx| {
             app.data = data;
@@ -115,7 +119,8 @@ impl AutoTestPanel {
 
     /// Add a new empty case under the currently-selected suite (or first suite).
     fn add_case(&mut self, cx: &mut Context<Self>) {
-        let (selected_suite, selected_case) = (self.selected_suite.clone(), self.selected_case.clone());
+        let (selected_suite, selected_case) =
+            (self.selected_suite.clone(), self.selected_case.clone());
         let mut new_id: Option<String> = None;
         self.with_active_project(cx, |p| {
             let suite_id = selected_suite
@@ -137,7 +142,9 @@ impl AutoTestPanel {
 
     /// Append a request step referencing an existing ApiRequest by id.
     fn add_step(&mut self, request_id: &str, cx: &mut Context<Self>) {
-        let Some(case_id) = self.selected_case.clone() else { return };
+        let Some(case_id) = self.selected_case.clone() else {
+            return;
+        };
         let rid = request_id.to_string();
         self.with_active_project(cx, |p| {
             'outer: for suite in p.test_suites.iter_mut() {
@@ -155,7 +162,9 @@ impl AutoTestPanel {
 
     /// Append a control-flow step.
     fn add_control_step(&mut self, step: TestCaseStep, cx: &mut Context<Self>) {
-        let Some(case_id) = self.selected_case.clone() else { return };
+        let Some(case_id) = self.selected_case.clone() else {
+            return;
+        };
         self.with_active_project(cx, |p| {
             'outer: for suite in p.test_suites.iter_mut() {
                 for case in suite.test_cases.iter_mut() {
@@ -171,7 +180,9 @@ impl AutoTestPanel {
 
     /// Delete a step by index from the selected case.
     fn delete_step(&mut self, step_idx: usize, cx: &mut Context<Self>) {
-        let Some(case_id) = self.selected_case.clone() else { return };
+        let Some(case_id) = self.selected_case.clone() else {
+            return;
+        };
         self.with_active_project(cx, |p| {
             'outer: for suite in p.test_suites.iter_mut() {
                 for case in suite.test_cases.iter_mut() {
@@ -218,12 +229,18 @@ impl AutoTestPanel {
         if self.running {
             return;
         }
-        let Some(case_id) = self.selected_case.clone() else { return };
-        let Some(project) = self.active_project(cx) else { return };
+        let Some(case_id) = self.selected_case.clone() else {
+            return;
+        };
+        let Some(project) = self.active_project(cx) else {
+            return;
+        };
         let Some(case) = find_case(&project, &case_id).cloned() else {
             return;
         };
-        let Some(client) = Self::http_client(cx) else { return };
+        let Some(client) = Self::http_client(cx) else {
+            return;
+        };
 
         self.running = true;
         self.live_steps.clear();
@@ -258,9 +275,7 @@ impl AutoTestPanel {
                     got_any = true;
                     let _ = poll_entity.update(cx, |panel, cx| panel.apply_event(ev, cx));
                 }
-                let done = poll_entity
-                    .update(cx, |p, _| !p.running)
-                    .unwrap_or(true);
+                let done = poll_entity.update(cx, |p, _| !p.running).unwrap_or(true);
                 if done && !got_any {
                     break;
                 }
@@ -327,11 +342,17 @@ impl Render for AutoTestPanel {
 
         let project = self.active_project(cx);
         let has_project = project.is_some();
-        let suites = project.as_ref().map(|p| &p.test_suites).cloned().unwrap_or_default();
+        let suites = project
+            .as_ref()
+            .map(|p| &p.test_suites)
+            .cloned()
+            .unwrap_or_default();
 
         // Selected case & its steps.
         let selected_case_id = self.selected_case.clone();
-        let selected_case = project.as_ref().and_then(|p| find_case(p, selected_case_id.as_deref().unwrap_or("")));
+        let selected_case = project
+            .as_ref()
+            .and_then(|p| find_case(p, selected_case_id.as_deref().unwrap_or("")));
         let steps: Vec<TestCaseStep> = selected_case.map(|c| c.steps.clone()).unwrap_or_default();
         // Build a name lookup for request names.
         let req_name_map: BTreeMap<String, String> = project
@@ -354,14 +375,15 @@ impl Render for AutoTestPanel {
             .as_ref()
             .and_then(|cid| self.last_result.get(cid))
             .cloned();
-        let steps_to_show: Vec<(usize, TestCaseStep, Option<crate::autotest::TestStepResult>)> = steps
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let r = live.iter().find(|r| r.step_id == s.id()).cloned();
-                (i, s.clone(), r)
-            })
-            .collect();
+        let steps_to_show: Vec<(usize, TestCaseStep, Option<crate::autotest::TestStepResult>)> =
+            steps
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let r = live.iter().find(|r| r.step_id == s.id()).cloned();
+                    (i, s.clone(), r)
+                })
+                .collect();
 
         v_flex()
             .size_full()
@@ -405,8 +427,16 @@ impl Render for AutoTestPanel {
                         Button::new("autotest-run")
                             .primary()
                             .small()
-                            .icon(if self.running { IconName::Pause } else { IconName::Play })
-                            .label(if self.running { "运行中…" } else { "运行用例" })
+                            .icon(if self.running {
+                                IconName::Pause
+                            } else {
+                                IconName::Play
+                            })
+                            .label(if self.running {
+                                "运行中…"
+                            } else {
+                                "运行用例"
+                            })
                             .disabled(!has_project || self.selected_case.is_none() || self.running)
                             .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx))),
                     ),
@@ -434,12 +464,20 @@ impl Render for AutoTestPanel {
                                         .text_color(muted)
                                         .p_2()
                                         .child("暂无套件，点右上“新建套件”开始")
-                                        .into_any_element()
+                                        .into_any_element(),
                                 ]
                             } else {
                                 suites
                                     .iter()
-                                    .map(|suite| self::render_suite(suite, &self.selected_case, &self.selected_suite, &self.suite_expanded, cx))
+                                    .map(|suite| {
+                                        self::render_suite(
+                                            suite,
+                                            &self.selected_case,
+                                            &self.selected_suite,
+                                            &self.suite_expanded,
+                                            cx,
+                                        )
+                                    })
                                     .collect::<Vec<_>>()
                             }),
                     )
@@ -478,7 +516,10 @@ impl Render for AutoTestPanel {
                                             .label("条件判断 (If)")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_if("response.status === 200"), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_if("response.status === 200"),
+                                                    cx,
+                                                );
                                             })),
                                     )
                                     .child(
@@ -488,7 +529,10 @@ impl Render for AutoTestPanel {
                                             .label("重复循环")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_repeat(3), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_repeat(3),
+                                                    cx,
+                                                );
                                             })),
                                     )
                                     .child(
@@ -498,7 +542,13 @@ impl Render for AutoTestPanel {
                                             .label("遍历循环")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_for_each("item", "response.json.data.items"), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_for_each(
+                                                        "item",
+                                                        "response.json.data.items",
+                                                    ),
+                                                    cx,
+                                                );
                                             })),
                                     )
                                     .child(
@@ -508,7 +558,10 @@ impl Render for AutoTestPanel {
                                             .label("条件循环")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_while("retry < 3"), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_while("retry < 3"),
+                                                    cx,
+                                                );
                                             })),
                                     )
                                     .child(
@@ -518,7 +571,10 @@ impl Render for AutoTestPanel {
                                             .label("等待")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_wait(1000), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_wait(1000),
+                                                    cx,
+                                                );
                                             })),
                                     )
                                     .child(
@@ -528,7 +584,12 @@ impl Render for AutoTestPanel {
                                             .label("脚本")
                                             .disabled(self.selected_case.is_none())
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.add_control_step(TestCaseStep::new_script("// 在此编写脚本\napt.log('hello');"), cx);
+                                                this.add_control_step(
+                                                    TestCaseStep::new_script(
+                                                        "// 在此编写脚本\napt.log('hello');",
+                                                    ),
+                                                    cx,
+                                                );
                                             })),
                                     ),
                             )
@@ -545,7 +606,12 @@ impl Render for AutoTestPanel {
                                             h_flex()
                                                 .items_center()
                                                 .gap_2()
-                                                .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("选择请求添加为步骤"))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .child("选择请求添加为步骤"),
+                                                )
                                                 .child(div().flex_1())
                                                 .child(
                                                     Button::new("autotest-picker-close")
@@ -564,7 +630,16 @@ impl Render for AutoTestPanel {
                                                 .max_h(px(240.))
                                                 .overflow_y_scroll()
                                                 .children(
-                                                    project.as_ref().map(|p| render_picker_tree(p, &self.picker_expanded, cx)).unwrap_or_default()
+                                                    project
+                                                        .as_ref()
+                                                        .map(|p| {
+                                                            render_picker_tree(
+                                                                p,
+                                                                &self.picker_expanded,
+                                                                cx,
+                                                            )
+                                                        })
+                                                        .unwrap_or_default(),
                                                 ),
                                         ),
                                 )
@@ -612,7 +687,11 @@ fn render_suite(
                 .child(
                     div()
                         .id(format!("autotest-suite-chev-{}", suite.id.clone()))
-                        .child(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                        .child(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
                         .text_size(px(10.))
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_suite(&sid, cx))),
                 )
@@ -628,7 +707,9 @@ fn render_suite(
                             cx.theme().foreground
                         })
                         .child(suite_name)
-                        .on_click(cx.listener(move |this, _, _, cx| this.select_suite(&suite_id_for_header, cx))),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.select_suite(&suite_id_for_header, cx)
+                        })),
                 ),
         )
         .when(is_expanded, |v| {
@@ -682,8 +763,18 @@ fn render_detail_header(
         )
         .child(div().flex_1())
         .when(pass_count + fail_count > 0, |d| {
-            d.child(div().text_size(px(12.)).text_color(_cx.theme().success).child(format!("✓ {pass_count}")))
-             .child(div().text_size(px(12.)).text_color(_cx.theme().danger).child(format!("✗ {fail_count}")))
+            d.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(_cx.theme().success)
+                    .child(format!("✓ {pass_count}")),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(_cx.theme().danger)
+                    .child(format!("✗ {fail_count}")),
+            )
         })
         .into_any_element()
 }
@@ -691,7 +782,9 @@ fn render_detail_header(
 fn count_passed(steps: &[crate::autotest::TestStepResult]) -> usize {
     let mut n = 0;
     for s in steps {
-        if s.passed { n += 1; }
+        if s.passed {
+            n += 1;
+        }
         n += count_passed(&s.children);
     }
     n
@@ -700,7 +793,9 @@ fn count_passed(steps: &[crate::autotest::TestStepResult]) -> usize {
 fn count_failed(steps: &[crate::autotest::TestStepResult]) -> usize {
     let mut n = 0;
     for s in steps {
-        if !s.passed { n += 1; }
+        if !s.passed {
+            n += 1;
+        }
         n += count_failed(&s.children);
     }
     n
@@ -747,7 +842,10 @@ fn render_steps(
             let icon = self::step_kind_icon(step);
             let (status_color, status_text) = match res {
                 Some(r) if r.passed => (cx.theme().success, format!("✓ {}ms", r.time_ms)),
-                Some(r) => (cx.theme().danger, format!("✗ {}", r.error.clone().unwrap_or_default())),
+                Some(r) => (
+                    cx.theme().danger,
+                    format!("✗ {}", r.error.clone().unwrap_or_default()),
+                ),
                 None => (cx.theme().muted_foreground, "待执行".into()),
             };
             let idx = *i;
@@ -756,7 +854,11 @@ fn render_steps(
             let method_badge = match step {
                 TestCaseStep::Request(r) => req_names.get(&r.request_id).map(|_| {
                     // Look up the request id to show method color is complex; keep it simple
-                    div().text_size(px(11.)).text_color(cx.theme().muted_foreground).child("REQ").into_any_element()
+                    div()
+                        .text_size(px(11.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child("REQ")
+                        .into_any_element()
                 }),
                 _ => None,
             };
@@ -768,8 +870,18 @@ fn render_steps(
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()
-                .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(icon))
-                .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(format!("#{}", idx + 1)));
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(icon),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("#{}", idx + 1)),
+                );
 
             if let Some(badge) = method_badge {
                 row = row.child(badge);
@@ -777,7 +889,12 @@ fn render_steps(
 
             row = row
                 .child(div().flex_1().text_size(px(13.)).child(name))
-                .child(div().text_size(px(11.)).text_color(status_color).child(status_text))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(status_color)
+                        .child(status_text),
+                )
                 .child(
                     Button::new(("autotest-step-del", idx))
                         .ghost()
@@ -796,7 +913,7 @@ fn render_steps(
                             .pl(px(28.))
                             .gap_1()
                             .child(render_child_results(&r.children, cx))
-                            .into_any_element()
+                            .into_any_element(),
                     );
                     elem = v_flex().gap_1().children(children_elems).into_any_element();
                 }
@@ -806,25 +923,43 @@ fn render_steps(
         .into_any_element()
 }
 
-fn render_child_results(children: &[crate::autotest::TestStepResult], cx: &Context<AutoTestPanel>) -> AnyElement {
+fn render_child_results(
+    children: &[crate::autotest::TestStepResult],
+    cx: &Context<AutoTestPanel>,
+) -> AnyElement {
     v_flex()
         .gap_1()
         .children(children.iter().map(|c| {
-            let color = if c.passed { cx.theme().success } else { cx.theme().danger };
+            let color = if c.passed {
+                cx.theme().success
+            } else {
+                cx.theme().danger
+            };
             let icon = if c.passed { "✓" } else { "✗" };
             let row = h_flex()
                 .gap_2()
                 .items_center()
                 .child(div().text_size(px(11.)).text_color(color).child(icon))
-                .child(div().text_size(px(12.)).flex_1().child(c.request_name.clone()))
-                .child(div().text_size(px(10.)).text_color(cx.theme().muted_foreground).child(format!("{}ms", c.time_ms)));
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .flex_1()
+                        .child(c.request_name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{}ms", c.time_ms)),
+                );
 
             let mut base: AnyElement = row.into_any_element();
             if !c.children.is_empty() {
-                let parent = v_flex()
-                    .gap_1()
-                    .child(base)
-                    .child(div().pl(px(16.)).child(render_child_results(&c.children, cx)));
+                let parent = v_flex().gap_1().child(base).child(
+                    div()
+                        .pl(px(16.))
+                        .child(render_child_results(&c.children, cx)),
+                );
                 base = parent.into_any_element();
             }
             base
@@ -846,7 +981,12 @@ fn render_results(
     }
     v_flex()
         .gap_1()
-        .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).child("执行结果"))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("执行结果"),
+        )
         .children(steps.iter().map(|s| {
             let icon = if s.passed { "✓" } else { "✗" };
             v_flex()
@@ -858,25 +998,41 @@ fn render_results(
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(div().text_size(px(12.)).child(format!("{icon} {}", s.request_name)))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .child(format!("{icon} {}", s.request_name)),
+                        )
                         .child(div().flex_1())
-                        .child(div().text_size(px(11.)).child(format!("{} {}ms", s.status, s.time_ms)))
-                        .child(div().text_size(px(11.)).child(format!("{}/{} 断言", s.assertions_passed, s.assertions_passed + s.assertions_failed))),
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .child(format!("{} {}ms", s.status, s.time_ms)),
+                        )
+                        .child(div().text_size(px(11.)).child(format!(
+                            "{}/{} 断言",
+                            s.assertions_passed,
+                            s.assertions_passed + s.assertions_failed
+                        ))),
                 )
-                .children(s.logs.iter().map(|l| {
-                    div().text_size(px(11.)).text_color(muted).child(l.clone())
-                }))
+                .children(
+                    s.logs
+                        .iter()
+                        .map(|l| div().text_size(px(11.)).text_color(muted).child(l.clone())),
+                )
                 .children(if s.extracted.is_empty() {
                     None
                 } else {
-                    Some(div().text_size(px(11.)).child(
-                        "提取: ".to_string()
-                            + &s.extracted
-                                .iter()
-                                .map(|(k, v)| format!("{k}={}", truncate(v, 40)))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                    ))
+                    Some(
+                        div().text_size(px(11.)).child(
+                            "提取: ".to_string()
+                                + &s.extracted
+                                    .iter()
+                                    .map(|(k, v)| format!("{k}={}", truncate(v, 40)))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                        ),
+                    )
                 })
         }))
         .into_any_element()
@@ -886,7 +1042,11 @@ fn render_results(
 // Add-step request tree picker
 // ---------------------------------------------------------------------------
 
-fn render_picker_tree(project: &Project, expanded: &BTreeSet<String>, cx: &Context<AutoTestPanel>) -> Vec<AnyElement> {
+fn render_picker_tree(
+    project: &Project,
+    expanded: &BTreeSet<String>,
+    cx: &Context<AutoTestPanel>,
+) -> Vec<AnyElement> {
     let mut items = Vec::new();
     for folder in &project.folders {
         render_picker_folder(folder, 0, expanded, cx, &mut items);
@@ -951,11 +1111,22 @@ fn render_picker_folder(
             .child(
                 div()
                     .id(format!("autotest-picker-folder-chev-{}", folder.id.clone()))
-                    .child(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .child(if is_expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
                     .text_size(px(10.))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_picker_folder(&fid, cx))),
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_picker_folder(&fid, cx)),
+                    ),
             )
-            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child(folder.name.clone()))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(folder.name.clone()),
+            )
             .into_any_element(),
     );
 

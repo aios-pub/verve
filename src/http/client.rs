@@ -328,7 +328,10 @@ fn percent_encode(s: &str) -> String {
 /// hosts profile entry, rewrite the URL to point to the override IP and add
 /// a `Host:` header so name-based virtual hosting still works.
 /// Returns (possibly rewritten url, extra headers).
-fn apply_virtual_hosts(url_str: &str, headers: &[(String, String)]) -> (String, Vec<(String, String)>) {
+fn apply_virtual_hosts(
+    url_str: &str,
+    headers: &[(String, String)],
+) -> (String, Vec<(String, String)>) {
     let mut extra = Vec::new();
     let Ok(mut url) = Url::parse(url_str) else {
         return (url_str.to_string(), extra);

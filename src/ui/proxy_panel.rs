@@ -7,9 +7,9 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use gpui_component::{ActiveTheme, Disableable as _, IconName, Sizable as _, h_flex, v_flex};
 
-use crate::proxy::{server, CaptureEntry, CaptureStore, ProxyHandle, DEFAULT_PORT};
+use crate::proxy::{CaptureEntry, CaptureStore, DEFAULT_PORT, ProxyHandle, server};
 
 pub struct ProxyPanel {
     running: bool,

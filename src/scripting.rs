@@ -24,11 +24,11 @@
 
 use std::collections::BTreeMap;
 
-use boa_engine::object::builtins::JsFunction;
 use boa_engine::object::ObjectInitializer;
+use boa_engine::object::builtins::JsFunction;
 use boa_engine::property::Attribute;
 use boa_engine::{
-    js_string, object::FunctionObjectBuilder, Context, JsArgs, JsValue, NativeFunction, Source,
+    Context, JsArgs, JsValue, NativeFunction, Source, js_string, object::FunctionObjectBuilder,
 };
 
 use crate::state::models::Response;
@@ -100,7 +100,10 @@ pub fn eval_condition(expr: &str, vars: &BTreeMap<String, String>) -> (bool, Opt
 
 /// Evaluate a JS expression and return its value as a serde_json::Value.
 /// Primarily used for for-each loop source expressions.
-pub fn eval_expression(expr: &str, vars: &BTreeMap<String, String>) -> Result<serde_json::Value, String> {
+pub fn eval_expression(
+    expr: &str,
+    vars: &BTreeMap<String, String>,
+) -> Result<serde_json::Value, String> {
     eval_expression_value(expr, vars)
 }
 
@@ -109,8 +112,11 @@ pub fn eval_expression(expr: &str, vars: &BTreeMap<String, String>) -> Result<se
 ///
 /// Variables are injected as direct bindings so conditions can write
 /// `token && token.length > 0` rather than `apt.variables.get('token')`.
-fn eval_expression_value(expr: &str, vars: &BTreeMap<String, String>) -> Result<serde_json::Value, String> {
-    use boa_engine::{property::Attribute, Context, Source, js_string, JsValue};
+fn eval_expression_value(
+    expr: &str,
+    vars: &BTreeMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    use boa_engine::{Context, JsValue, Source, js_string, property::Attribute};
     let mut ctx = Context::default();
     let vars_json = serde_json::to_string(vars).unwrap_or_else(|_| "{}".into());
     let _ = ctx.register_global_property(
@@ -127,11 +133,14 @@ fn eval_expression_value(expr: &str, vars: &BTreeMap<String, String>) -> Result<
 
     // Build a vars object and wrap the expression in `with (vars) { return (expr); }`
     // so that `token` resolves as a property lookup.
-    let mut bindings = String::from("(function() { var __v = JSON.parse(__verve_vars__); with (__v) { return (");
+    let mut bindings =
+        String::from("(function() { var __v = JSON.parse(__verve_vars__); with (__v) { return (");
     bindings.push_str(expr);
     bindings.push_str("); } })()");
 
-    let value = ctx.eval(Source::from_bytes(&bindings)).map_err(|e| e.to_string())?;
+    let value = ctx
+        .eval(Source::from_bytes(&bindings))
+        .map_err(|e| e.to_string())?;
     js_to_json(&value, &mut ctx)
 }
 
@@ -149,7 +158,10 @@ fn js_to_json(val: &JsValue, ctx: &mut Context) -> Result<serde_json::Value, Str
             Ok(serde_json::Value::Null)
         }
     } else if val.is_string() {
-        let s = val.to_string(ctx).map(|j| j.to_std_string().unwrap_or_default()).unwrap_or_default();
+        let s = val
+            .to_string(ctx)
+            .map(|j| j.to_std_string().unwrap_or_default())
+            .unwrap_or_default();
         Ok(serde_json::Value::String(s))
     } else if val.is_object() {
         // Try to JSON.stringify the object.
@@ -165,7 +177,10 @@ fn js_to_json(val: &JsValue, ctx: &mut Context) -> Result<serde_json::Value, Str
             .ok_or("JSON.stringify not callable")?
             .call(&JsValue::undefined(), std::slice::from_ref(val), ctx)
             .map_err(|e| e.to_string())?;
-        let s = json_str.to_string(ctx).map(|j| j.to_std_string().unwrap_or_default()).unwrap_or_default();
+        let s = json_str
+            .to_string(ctx)
+            .map(|j| j.to_std_string().unwrap_or_default())
+            .unwrap_or_default();
         serde_json::from_str(&s).map_err(|e| e.to_string())
     } else {
         Ok(serde_json::Value::Null)
@@ -177,7 +192,9 @@ fn js_value_truthy(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Null => false,
         serde_json::Value::Bool(b) => *b,
-        serde_json::Value::Number(n) => n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false),
+        serde_json::Value::Number(n) => {
+            n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false)
+        }
         serde_json::Value::String(s) => !s.is_empty(),
         serde_json::Value::Array(a) => !a.is_empty(),
         serde_json::Value::Object(_) => true,

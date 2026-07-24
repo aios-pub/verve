@@ -22,7 +22,7 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 use super::api_tunnel::ApiTunnel;
-use super::clusters::{load_manual_clusters, ManualCluster};
+use super::clusters::{ManualCluster, load_manual_clusters};
 
 /// A pod summary returned by [`list_pods`].
 #[derive(Debug, Clone, Deserialize)]
@@ -176,9 +176,13 @@ fn resolve_ssh_tunnel(cluster: &ManualCluster) -> Result<Arc<ApiTunnel>, PodErro
 /// to the local tunnel endpoint (and optionally enforces insecure-skip-tls-verify).
 /// This avoids modifying the persisted Verve kubeconfig — we just set
 /// KUBECONFIG to this temp file for kubectl calls over the tunnel.
-fn generate_tunnel_kubeconfig(tunnel: &ApiTunnel, cluster: &ManualCluster) -> Result<PathBuf, PodError> {
+fn generate_tunnel_kubeconfig(
+    tunnel: &ApiTunnel,
+    cluster: &ManualCluster,
+) -> Result<PathBuf, PodError> {
     use crate::k8s::config::{
-        Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser, UserEntry,
+        Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser,
+        UserEntry,
     };
 
     // Load the base (merged) kubeconfig, then patch the target cluster entry.
@@ -188,7 +192,11 @@ fn generate_tunnel_kubeconfig(tunnel: &ApiTunnel, cluster: &ManualCluster) -> Re
     let cluster_entry_name = format!("{}-cluster", cluster.name);
 
     // Patch: override server URL to local tunnel address.
-    if let Some(named) = cfg.clusters.iter_mut().find(|c| c.name == cluster_entry_name) {
+    if let Some(named) = cfg
+        .clusters
+        .iter_mut()
+        .find(|c| c.name == cluster_entry_name)
+    {
         named.cluster.server = tunnel.local_server_url();
         // When tunneling to 127.0.0.1 the server cert almost never matches;
         // respect the cluster's insecure_skip_tls flag (default true for SSH
@@ -230,18 +238,34 @@ fn generate_tunnel_kubeconfig(tunnel: &ApiTunnel, cluster: &ManualCluster) -> Re
                 super::clusters::ClusterAuth::Token { token } => {
                     (None, None, Some(token.clone()), None, None)
                 }
-                super::clusters::ClusterAuth::ClientCert { cert_data, key_data } => {
-                    (Some(cert_data.clone()), Some(key_data.clone()), None, None, None)
-                }
-                super::clusters::ClusterAuth::BasicAuth { username, password } => {
-                    (None, None, None, Some(username.clone()), Some(password.clone()))
-                }
+                super::clusters::ClusterAuth::ClientCert {
+                    cert_data,
+                    key_data,
+                } => (
+                    Some(cert_data.clone()),
+                    Some(key_data.clone()),
+                    None,
+                    None,
+                    None,
+                ),
+                super::clusters::ClusterAuth::BasicAuth { username, password } => (
+                    None,
+                    None,
+                    None,
+                    Some(username.clone()),
+                    Some(password.clone()),
+                ),
             };
             cfg.users.push(NamedUser {
                 name: user_name,
                 user: UserEntry {
-                    cert_data, key_data, token, username, password,
-                    cert_file: None, key_file: None,
+                    cert_data,
+                    key_data,
+                    token,
+                    username,
+                    password,
+                    cert_file: None,
+                    key_file: None,
                 },
             });
         }
@@ -262,8 +286,7 @@ fn generate_tunnel_kubeconfig(tunnel: &ApiTunnel, cluster: &ManualCluster) -> Re
     let path = tmp_dir.join(format!("vk8s-{}.yaml", &short_hash[..8]));
     let yaml = serde_yaml::to_string(&cfg)
         .map_err(|e| PodError(format!("序列化临时 kubeconfig 失败: {e}")))?;
-    std::fs::write(&path, yaml)
-        .map_err(|e| PodError(format!("写入临时 kubeconfig 失败: {e}")))?;
+    std::fs::write(&path, yaml).map_err(|e| PodError(format!("写入临时 kubeconfig 失败: {e}")))?;
     Ok(path)
 }
 
@@ -331,7 +354,10 @@ fn kubectl_command() -> Command {
 /// List pods across all namespaces (kubectl get pods -A) or in a specific namespace.
 /// - `namespace = None` or `Some("")` → list pods across ALL namespaces (-A)
 /// - `namespace = Some("ns")` → list only in that namespace
-pub async fn list_pods(namespace: Option<&str>, context: Option<&str>) -> Result<Vec<Pod>, PodError> {
+pub async fn list_pods(
+    namespace: Option<&str>,
+    context: Option<&str>,
+) -> Result<Vec<Pod>, PodError> {
     let mut cmd = kubectl_command_for_context(context)?;
     cmd.arg("get").arg("pods").arg("-o").arg("json");
     if let Some(ctx) = context {
@@ -348,7 +374,9 @@ pub async fn list_pods(namespace: Option<&str>, context: Option<&str>) -> Result
             cmd.arg("-A");
         }
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let out = cmd
         .output()
         .await
@@ -389,7 +417,9 @@ pub async fn list_namespaces(context: Option<&str>) -> Result<Vec<String>, PodEr
             cmd.args(["--context", ctx]);
         }
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let out = cmd
         .output()
         .await
@@ -446,7 +476,9 @@ pub fn stream_logs(
     if let Some(c) = container {
         cmd.args(["-c", c]);
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = cmd
         .spawn()
         .map_err(|e| PodError(format!("启动 kubectl logs 失败: {e}")))?;
@@ -518,7 +550,9 @@ pub async fn port_forward(
             cmd.args(["-n", ns]);
         }
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = cmd
         .spawn()
         .map_err(|e| PodError(format!("启动 kubectl port-forward 失败: {e}")))?;
@@ -550,7 +584,10 @@ pub async fn port_forward(
 fn parse_forwarding_port(line: &str) -> Option<u16> {
     // "Forwarding from 127.0.0.1:12345 -> 5432"
     let colon = line.rfind(':')?;
-    let space = line[colon..].find(' ').map(|p| colon + p).unwrap_or(line.len());
+    let space = line[colon..]
+        .find(' ')
+        .map(|p| colon + p)
+        .unwrap_or(line.len());
     line[colon + 1..space].parse().ok()
 }
 
@@ -647,8 +684,13 @@ fn resolve_kubeconfig_env_for_context_sync(context: Option<&str>) -> Result<Stri
 /// so that Tab completion, arrow keys, and other terminal features work. When no
 /// shell is requested, multiple shells are tried in order (bash → sh → dash → ash)
 /// to support distroless, Alpine (ash), Debian/Ubuntu minimal (dash), and standard images.
-pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context: Option<&str>) -> Result<ExecSession, PodError> {
-    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+pub fn exec_pod(
+    pod: &str,
+    namespace: Option<&str>,
+    shell: Option<&str>,
+    context: Option<&str>,
+) -> Result<ExecSession, PodError> {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
     use std::io::{Read, Write};
 
     // Caller-requested shell wins; otherwise auto-detect from common shells.
@@ -697,7 +739,12 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
 
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 32, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 32,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| PodError(format!("分配 PTY 失败: {e}")))?;
     let mut _child = pair
         .slave
@@ -720,7 +767,10 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
 
     // Writer thread: UI keystrokes → PTY master.
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(_) => return,
         };
@@ -749,7 +799,10 @@ pub fn exec_pod(pod: &str, namespace: Option<&str>, shell: Option<&str>, context
         }
     });
 
-    Ok(ExecSession { stdin_tx, output_rx })
+    Ok(ExecSession {
+        stdin_tx,
+        output_rx,
+    })
 }
 
 #[cfg(test)]
@@ -762,7 +815,10 @@ mod tests {
             parse_forwarding_port("Forwarding from 127.0.0.1:54321 -> 5432"),
             Some(54321)
         );
-        assert_eq!(parse_forwarding_port("listening on 127.0.0.1:3306"), Some(3306));
+        assert_eq!(
+            parse_forwarding_port("listening on 127.0.0.1:3306"),
+            Some(3306)
+        );
         assert_eq!(parse_forwarding_port("no port here"), None);
     }
 

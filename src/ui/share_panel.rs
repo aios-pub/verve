@@ -9,11 +9,12 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
+    h_flex, v_flex,
 };
 
-use crate::share::models::{now_ts, ShareConfig, ShareScope};
+use crate::share::models::{ShareConfig, ShareScope, now_ts};
 use crate::state::{AppEvent, AppState};
 
 /// Events the share panel emits upward (consumed by `VerveApp`).

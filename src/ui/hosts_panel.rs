@@ -6,11 +6,13 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _, Selectable as _};
+use gpui_component::{
+    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 
 use crate::hosts::{self, HostEntry};
-use crate::hosts_profiles::{self, HostEntryEdit, HostsProfileStore};
 use crate::hosts_priv;
+use crate::hosts_profiles::{self, HostEntryEdit, HostsProfileStore};
 use crate::state::{AppEvent, AppState};
 
 pub struct HostsPanel {
@@ -177,7 +179,9 @@ impl HostsPanel {
                 host,
                 comment,
             });
-            let _ = ip_clone; let _ = host_clone; let _ = comment_clone;
+            let _ = ip_clone;
+            let _ = host_clone;
+            let _ = comment_clone;
         }
     }
 
@@ -295,7 +299,8 @@ impl HostsPanel {
             .active_project()
             .and_then(|p| p.active_environment.clone());
 
-        let verve_block = hosts_profiles::render_enabled_entries(&self.store, active_env.as_deref());
+        let verve_block =
+            hosts_profiles::render_enabled_entries(&self.store, active_env.as_deref());
         let existing = crate::hosts::read_hosts_string();
         let merged = hosts_profiles::merge_into_existing(&existing, &verve_block);
 
@@ -452,9 +457,18 @@ impl HostsPanel {
             .into_any_element()
     }
 
-    fn render_profile_editor(&self, cx: &Context<Self>, p: &hosts_profiles::HostsProfile) -> AnyElement {
+    fn render_profile_editor(
+        &self,
+        cx: &Context<Self>,
+        p: &hosts_profiles::HostsProfile,
+    ) -> AnyElement {
         let theme = cx.theme();
-        let search_val = self.search_input.read(cx).value().to_string().to_lowercase();
+        let search_val = self
+            .search_input
+            .read(cx)
+            .value()
+            .to_string()
+            .to_lowercase();
 
         let filtered_inputs: Vec<&EntryInput> = self
             .entry_inputs
@@ -500,7 +514,9 @@ impl HostsPanel {
                     .bg(theme.danger.opacity(0.1))
                     .text_color(theme.danger)
                     .text_size(px(12.))
-                    .child(rust_i18n::t!("hosts.system_write_failed", error = e.as_str()).to_string())
+                    .child(
+                        rust_i18n::t!("hosts.system_write_failed", error = e.as_str()).to_string(),
+                    )
                     .into_any_element();
             }
             _ => {}
@@ -653,11 +669,7 @@ impl HostsPanel {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply_to_system(window, cx);
                             }));
-                        if is_appling {
-                            btn.disabled(true)
-                        } else {
-                            btn
-                        }
+                        if is_appling { btn.disabled(true) } else { btn }
                     }),
             )
             .into_any_element()

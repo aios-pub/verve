@@ -13,19 +13,19 @@
 //! - returns a `StressResult` with full latency percentiles + a histogram.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use reqwest::redirect::Policy;
 use reqwest::ClientBuilder;
+use reqwest::redirect::Policy;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::http;
 use crate::state::models::{ApiRequest, Project};
 
 use super::models::{
-    histogram_bins, percentiles_from_sorted, LatencyPercentiles, StressResult, StressSnapshot,
+    LatencyPercentiles, StressResult, StressSnapshot, histogram_bins, percentiles_from_sorted,
 };
 use super::scenario::StressStopHandle;
 
@@ -72,7 +72,10 @@ pub fn effective_vars(project: &Project) -> BTreeMap<String, String> {
     use crate::state::models::effective_variables;
     let mut system = BTreeMap::new();
     let remote_cfg = crate::state::persistence::load_remote_config();
-    system.insert("mock_server".to_string(), crate::share::remote::mock_server_url(&remote_cfg));
+    system.insert(
+        "mock_server".to_string(),
+        crate::share::remote::mock_server_url(&remote_cfg),
+    );
     effective_variables(
         &system,
         &project.global_variables,
@@ -156,7 +159,9 @@ pub fn run_oha(
     if !body_bytes.is_empty() {
         req_builder = req_builder.body(body_bytes);
     }
-    let request = req_builder.build().map_err(|e| format!("build request: {e}"))?;
+    let request = req_builder
+        .build()
+        .map_err(|e| format!("build request: {e}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let (ev_tx, ev_rx) = mpsc::unbounded_channel::<RequestEvent>();
@@ -188,7 +193,8 @@ pub fn run_oha(
                     let stop = workers_stop.clone();
                     let to_secs = worker_timeout_secs;
                     worker_handles.push(tokio::spawn(async move {
-                        run_worker(client, req, ev_tx, stop, duration, qps_per_worker, to_secs).await
+                        run_worker(client, req, ev_tx, stop, duration, qps_per_worker, to_secs)
+                            .await
                     }));
                 }
                 // Drop our sender so the aggregator ends when workers exit.
@@ -225,7 +231,9 @@ async fn run_worker(
     timeout_secs: u32,
 ) {
     let start = Instant::now();
-    let min_gap = qps_per_worker.filter(|q| *q > 0.0).map(|q| Duration::from_secs_f64(1.0 / q));
+    let min_gap = qps_per_worker
+        .filter(|q| *q > 0.0)
+        .map(|q| Duration::from_secs_f64(1.0 / q));
 
     loop {
         if stop.load(Ordering::SeqCst) || start.elapsed() >= duration {
@@ -239,7 +247,8 @@ async fn run_worker(
             .checked_sub(start.elapsed())
             .unwrap_or(Duration::ZERO)
             .max(Duration::from_millis(50));
-        let req_deadline = Duration::from_secs(timeout_secs as u64).min(remaining + Duration::from_secs(2));
+        let req_deadline =
+            Duration::from_secs(timeout_secs as u64).min(remaining + Duration::from_secs(2));
 
         let req_start = Instant::now();
         let event = match tokio::time::timeout(req_deadline, execute_one(&client, &request)).await {

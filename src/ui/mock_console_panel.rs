@@ -5,7 +5,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _};
+use gpui_component::{ActiveTheme, IconName, Sizable as _, WindowExt as _, h_flex, v_flex};
 
 use crate::state::{AppEvent, AppState};
 
@@ -49,22 +49,27 @@ impl Render for MockConsolePanel {
         let state_copy5 = self.state.clone();
 
         // Collect all enabled mock rules.
-        let mocked = self.state.read(cx).active_project().map(|p| {
-            p.iter_all_requests()
-                .into_iter()
-                .filter_map(|(path, req)| {
-                    req.mock.as_ref().filter(|m| m.enabled).map(|m| {
-                        (
-                            path,
-                            req.name.clone(),
-                            req.url.clone(),
-                            m.status,
-                            m.delay_ms,
-                        )
+        let mocked = self
+            .state
+            .read(cx)
+            .active_project()
+            .map(|p| {
+                p.iter_all_requests()
+                    .into_iter()
+                    .filter_map(|(path, req)| {
+                        req.mock.as_ref().filter(|m| m.enabled).map(|m| {
+                            (
+                                path,
+                                req.name.clone(),
+                                req.url.clone(),
+                                m.status,
+                                m.delay_ms,
+                            )
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        }).unwrap_or_default();
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         v_flex()
             .size_full()
@@ -503,7 +508,12 @@ impl Render for MockConsolePanel {
     }
 }
 
-fn step_item(step: u8, title: String, desc: String, theme: &gpui_component::Theme) -> impl IntoElement {
+fn step_item(
+    step: u8,
+    title: String,
+    desc: String,
+    theme: &gpui_component::Theme,
+) -> impl IntoElement {
     v_flex()
         .gap_2()
         .w(px(220.))
@@ -523,19 +533,19 @@ fn step_item(step: u8, title: String, desc: String, theme: &gpui_component::Them
                         .text_color(theme.primary)
                         .text_size(px(14.))
                         .font_weight(FontWeight::BOLD)
-                        .child(format!("{}", step))
+                        .child(format!("{}", step)),
                 )
                 .child(
                     div()
                         .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title)
-                )
+                        .child(title),
+                ),
         )
         .child(
             div()
                 .text_size(px(13.))
                 .text_color(theme.muted_foreground)
-                .child(desc)
+                .child(desc),
         )
 }

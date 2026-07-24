@@ -11,8 +11,9 @@ use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::{
+    ActiveTheme, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, IconName, Sizable as _, WindowExt as _,
+    h_flex, v_flex,
 };
 
 use crate::state::models::{Environment, KeyValue};

@@ -80,7 +80,9 @@ impl AppState {
         let ws_idx = super::persistence::load_workspaces_index();
         let active_workspace_id = ws_idx.active.clone();
         let data = super::persistence::load_or_default();
-        let active_project = data.active_project_id.as_deref()
+        let active_project = data
+            .active_project_id
+            .as_deref()
             .and_then(|id| data.projects.iter().position(|p| &p.id == id))
             .unwrap_or(0);
         let entity: Entity<Self> = cx.new(|_| Self {
@@ -173,7 +175,10 @@ impl AppState {
         self.active_workspace_id = active_workspace_id;
         // Resolve the saved active project id to an index; fall back to clamping
         // if the id isn't found (e.g. project was deleted on another branch).
-        self.active_project = self.data.active_project_id.as_deref()
+        self.active_project = self
+            .data
+            .active_project_id
+            .as_deref()
             .and_then(|id| self.data.projects.iter().position(|p| &p.id == id))
             .unwrap_or_else(|| self.data.projects.len().saturating_sub(1));
         self.selected_request = None;
@@ -197,8 +202,8 @@ impl AppState {
     /// running mock server via the SharedRules handle.
     pub fn refresh_mock_rules(&mut self) {
         if let (Some(shared), Some(p)) = (self.mock_rules.clone(), self.active_project()) {
-            let entries = Arc::try_unwrap(crate::mock::rule_map(p))
-                .unwrap_or_else(|arc| (*arc).clone());
+            let entries =
+                Arc::try_unwrap(crate::mock::rule_map(p)).unwrap_or_else(|arc| (*arc).clone());
             crate::mock::swap_rules(&shared, entries);
         }
     }

@@ -541,7 +541,8 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
 
     // Build a map of server_id → variable name from global server definitions.
     // Server with id "1" is the default; map it to "baseUrl" for convenience.
-    let mut server_var_names: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut server_var_names: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     for srv in &doc.global.servers {
         if let Some(sid) = &srv.server_id {
             let var_name = if sid == "1" {
@@ -887,11 +888,13 @@ mod tests {
         }"#;
         let project = openapi_v3(json).unwrap();
         assert_eq!(project.name, "Pets API");
-        assert!(project
-            .environments
-            .first()
-            .map(|e| e.variables.iter().any(|v| v.key == "baseUrl"))
-            .unwrap_or(false));
+        assert!(
+            project
+                .environments
+                .first()
+                .map(|e| e.variables.iter().any(|v| v.key == "baseUrl"))
+                .unwrap_or(false)
+        );
         let pets = project.folders.iter().find(|f| f.name == "pets").unwrap();
         assert_eq!(pets.requests.len(), 2);
         assert_eq!(
@@ -1087,25 +1090,48 @@ mod tests {
 
         // 默认环境: empty URI → baseUrl var exists but is empty (placeholder resolves to "")
         assert_eq!(project.environments[0].name, "默认环境");
-        let default_base = project.environments[0].variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        let default_base = project.environments[0]
+            .variables
+            .iter()
+            .find(|v| v.key == "baseUrl")
+            .unwrap();
         assert_eq!(default_base.value, "");
 
         // Mock环境: has baseUrl = mock server URI
         assert_eq!(project.environments[1].name, "Mock环境");
-        let mock_base = project.environments[1].variables.iter().find(|v| v.key == "baseUrl").unwrap();
-        assert_eq!(mock_base.value, "https://mock.apipost.net/mock/35ff847188e5000");
+        let mock_base = project.environments[1]
+            .variables
+            .iter()
+            .find(|v| v.key == "baseUrl")
+            .unwrap();
+        assert_eq!(
+            mock_base.value,
+            "https://mock.apipost.net/mock/35ff847188e5000"
+        );
 
         // 本地环境: baseUrl = localhost:3002
         assert_eq!(project.environments[2].name, "本地环境");
-        let local_base = project.environments[2].variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        let local_base = project.environments[2]
+            .variables
+            .iter()
+            .find(|v| v.key == "baseUrl")
+            .unwrap();
         assert_eq!(local_base.value, "localhost:3002");
 
         // Folder AgentOS has server_id "0" → inherit → no base_url set
-        let agentos = project.folders.iter().find(|f| f.name == "AgentOS").unwrap();
+        let agentos = project
+            .folders
+            .iter()
+            .find(|f| f.name == "AgentOS")
+            .unwrap();
         assert_eq!(agentos.base_url, None);
 
         // Folder 系统功能测试 has server_id "1" → {{baseUrl}}
-        let sys_folder = project.folders.iter().find(|f| f.name == "系统功能测试").unwrap();
+        let sys_folder = project
+            .folders
+            .iter()
+            .find(|f| f.name == "系统功能测试")
+            .unwrap();
         assert_eq!(sys_folder.base_url, Some("{{baseUrl}}".to_string()));
 
         // Child API URL remains relative (will be prefixed at send time).
@@ -1166,18 +1192,34 @@ mod tests {
         // 默认环境: both baseUrl and server_7c9fc exist with empty values.
         let default_env = &project.environments[0];
         assert_eq!(default_env.name, "默认环境");
-        let base = default_env.variables.iter().find(|v| v.key == "baseUrl").unwrap();
+        let base = default_env
+            .variables
+            .iter()
+            .find(|v| v.key == "baseUrl")
+            .unwrap();
         assert_eq!(base.value, "");
-        let srv = default_env.variables.iter().find(|v| v.key == "server_7c9fc").unwrap();
+        let srv = default_env
+            .variables
+            .iter()
+            .find(|v| v.key == "server_7c9fc")
+            .unwrap();
         assert_eq!(srv.value, "");
 
         // 压测环境: server_7c9fc resolves to the stress-test URI.
         let stress_env = &project.environments[1];
-        let srv = stress_env.variables.iter().find(|v| v.key == "server_7c9fc").unwrap();
+        let srv = stress_env
+            .variables
+            .iter()
+            .find(|v| v.key == "server_7c9fc")
+            .unwrap();
         assert_eq!(srv.value, "http://account-yace.xk12.cn");
 
         // Folder references {{server_7c9fc}}.
-        let folder = project.folders.iter().find(|f| f.name == "用户中心").unwrap();
+        let folder = project
+            .folders
+            .iter()
+            .find(|f| f.name == "用户中心")
+            .unwrap();
         assert_eq!(folder.base_url, Some("{{server_7c9fc}}".to_string()));
         assert_eq!(folder.requests[0].url, "/api/user/v3/common/executeSql");
     }

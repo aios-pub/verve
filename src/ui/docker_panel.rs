@@ -12,13 +12,13 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _};
+use gpui_component::{ActiveTheme, Disableable as _, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::docker::{
-    close_ssh_tunnel, exec_container, find_host, get_active_id, list_containers, list_images,
-    load_hosts, prune_images, remove as docker_remove, remove_host, restart as docker_restart,
-    set_active_id, start as docker_start, stop as docker_stop, stream_logs, upsert_host, Container,
-    DockerError, DockerHost, ExecSession, ImageInfo, LogStream,
+    Container, DockerError, DockerHost, ExecSession, ImageInfo, LogStream, close_ssh_tunnel,
+    exec_container, find_host, get_active_id, list_containers, list_images, load_hosts,
+    prune_images, remove as docker_remove, remove_host, restart as docker_restart, set_active_id,
+    start as docker_start, stop as docker_stop, stream_logs, upsert_host,
 };
 use crate::ssh::terminal::TerminalView;
 use crate::ui::docker_host_dialog;
@@ -238,7 +238,12 @@ impl DockerPanel {
 
     fn reload_hosts(&mut self) {
         self.hosts = load_hosts();
-        if self.hosts.iter().find(|h| h.id == self.active_host_id).is_none() {
+        if self
+            .hosts
+            .iter()
+            .find(|h| h.id == self.active_host_id)
+            .is_none()
+        {
             self.active_host_id = "local".into();
             set_active_id("local");
         }
@@ -272,7 +277,11 @@ impl DockerPanel {
         cx: &mut Context<Self>,
     ) {
         let key = session_key(&container_id, kind.clone());
-        if let Some(pos) = self.sessions.iter().position(|s| session_key(&s.container_id, s.kind.clone()) == key) {
+        if let Some(pos) = self
+            .sessions
+            .iter()
+            .position(|s| session_key(&s.container_id, s.kind.clone()) == key)
+        {
             self.active_session_key = Some(key);
             cx.notify();
             return;
@@ -287,7 +296,11 @@ impl DockerPanel {
     }
 
     fn close_session_by_key(&mut self, key: &str, cx: &mut Context<Self>) {
-        if let Some(pos) = self.sessions.iter().position(|s| session_key(&s.container_id, s.kind.clone()) == key) {
+        if let Some(pos) = self
+            .sessions
+            .iter()
+            .position(|s| session_key(&s.container_id, s.kind.clone()) == key)
+        {
             self.sessions.remove(pos);
             if self.active_session_key.as_deref() == Some(key) {
                 self.active_session_key = None;
@@ -298,7 +311,9 @@ impl DockerPanel {
 
     fn active_session_idx(&self) -> Option<usize> {
         let key = self.active_session_key.as_ref()?;
-        self.sessions.iter().position(|s| session_key(&s.container_id, s.kind.clone()) == *key)
+        self.sessions
+            .iter()
+            .position(|s| session_key(&s.container_id, s.kind.clone()) == *key)
     }
 
     // ---- blocking work runner ------------------------------------------------
@@ -317,7 +332,9 @@ impl DockerPanel {
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
             match result {
-                Ok(v) => { let _ = tx.send(v); }
+                Ok(v) => {
+                    let _ = tx.send(v);
+                }
                 Err(panic) => {
                     let msg = panic
                         .downcast_ref::<&str>()
@@ -330,16 +347,14 @@ impl DockerPanel {
             }
         });
         let ent = cx.entity().downgrade();
-        cx.spawn(async move |_this, cx| {
-            match rx.await {
-                Ok(result) => {
-                    let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
-                }
-                Err(_) => {
-                    let _ = ent.update(cx, move |panel, cx| {
-                        on_err(panel, cx, "docker 操作异常终止，请重试".into())
-                    });
-                }
+        cx.spawn(async move |_this, cx| match rx.await {
+            Ok(result) => {
+                let _ = ent.update(cx, move |panel, cx| on_done(panel, cx, result));
+            }
+            Err(_) => {
+                let _ = ent.update(cx, move |panel, cx| {
+                    on_err(panel, cx, "docker 操作异常终止，请重试".into())
+                });
             }
         })
         .detach();
@@ -415,21 +430,19 @@ impl DockerPanel {
             let _ = tx.send(result.unwrap_or_else(|_| Err(DockerError("清理操作异常终止".into()))));
         });
         let ent = cx.entity().downgrade();
-        cx.spawn(async move |_this, cx| {
-            match rx.await {
-                Ok(result) => {
-                    let _ = ent.update(cx, |panel, cx| {
-                        panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
-                        panel.reload_images(cx);
-                    });
-                }
-                Err(_) => {
-                    let _ = ent.update(cx, |panel, cx| {
-                        panel.error = Some("清理操作异常终止，请重试".into());
-                        panel.images_loading = false;
-                        cx.notify();
-                    });
-                }
+        cx.spawn(async move |_this, cx| match rx.await {
+            Ok(result) => {
+                let _ = ent.update(cx, |panel, cx| {
+                    panel.error = Some(result.unwrap_or_else(|e| e.to_string()));
+                    panel.reload_images(cx);
+                });
+            }
+            Err(_) => {
+                let _ = ent.update(cx, |panel, cx| {
+                    panel.error = Some("清理操作异常终止，请重试".into());
+                    panel.images_loading = false;
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -476,7 +489,9 @@ impl DockerPanel {
             rt.block_on(async move {
                 match stream_logs(host.as_ref(), &id_for_thread, 200) {
                     Ok(mut stream) => {
-                        let Some(mut lines_rx) = stream.take_lines() else { return };
+                        let Some(mut lines_rx) = stream.take_lines() else {
+                            return;
+                        };
                         while let Some(line) = lines_rx.recv().await {
                             if tx.send(Ev::Line(line)).is_err() {
                                 break;
@@ -496,7 +511,9 @@ impl DockerPanel {
                 match rx.try_recv() {
                     Ok(Ev::Line(line)) => {
                         let _ = ent.update(cx, |p, cx| {
-                            if let Some(s) = p.sessions.iter_mut().find(|s| session_key(&s.container_id, s.kind.clone()) == key_for_updates) {
+                            if let Some(s) = p.sessions.iter_mut().find(|s| {
+                                session_key(&s.container_id, s.kind.clone()) == key_for_updates
+                            }) {
                                 if s.log_lines.len() > 2000 {
                                     s.log_lines.remove(0);
                                 }
@@ -546,15 +563,24 @@ impl DockerPanel {
             let sess = match ready_rx.await {
                 Ok(Ok(s)) => s,
                 Ok(Err(e)) => {
-                    let _ = ent.update(cx, |p, cx| { p.error = Some(e); cx.notify(); });
+                    let _ = ent.update(cx, |p, cx| {
+                        p.error = Some(e);
+                        cx.notify();
+                    });
                     return;
                 }
                 Err(_) => {
-                    let _ = ent.update(cx, |p, cx| { p.error = Some("启动 shell 失败".into()); cx.notify(); });
+                    let _ = ent.update(cx, |p, cx| {
+                        p.error = Some("启动 shell 失败".into());
+                        cx.notify();
+                    });
                     return;
                 }
             };
-            let ExecSession { stdin_tx, output_rx } = sess;
+            let ExecSession {
+                stdin_tx,
+                output_rx,
+            } = sess;
             // Can't destructure a struct with a field we need to keep without
             // moving; rebuild an ExecSession with only the channels by wrapping
             // in a helper (the IO threads stay alive as long as channels exist).
@@ -564,7 +590,11 @@ impl DockerPanel {
             let (term_tx, term_rx) = tokio::sync::oneshot::channel::<Entity<TerminalView>>();
 
             let _ = ent.update(cx, |p, cx| {
-                if let Some(s) = p.sessions.iter_mut().find(|s| session_key(&s.container_id, s.kind.clone()) == key_for_setup) {
+                if let Some(s) = p
+                    .sessions
+                    .iter_mut()
+                    .find(|s| session_key(&s.container_id, s.kind.clone()) == key_for_setup)
+                {
                     let terminal = cx.new(|cx| TerminalView::new(120, 32, cx));
                     s.terminal = Some(terminal.clone());
                     s.stdin_tx = Some(stdin_tx_panel);
@@ -586,7 +616,10 @@ impl DockerPanel {
             };
             let term_weak = terminal.downgrade();
             while let Some(chunk) = output_rx.recv().await {
-                let _ = term_weak.update(cx, |tv, cx| { tv.feed(&chunk); cx.notify(); });
+                let _ = term_weak.update(cx, |tv, cx| {
+                    tv.feed(&chunk);
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -623,7 +656,9 @@ impl Render for DockerPanel {
                         .px_2()
                         .py_1()
                         .rounded_sm()
-                        .when(is_active, |d| d.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                        .when(is_active, |d| {
+                            d.bg(theme.accent.opacity(0.25)).text_color(theme.accent)
+                        })
                         .when(!is_active, |d| d.text_color(theme.muted_foreground))
                         .child(
                             Button::new(format!("docker-session-focus-{}", i))
@@ -662,11 +697,7 @@ impl Render for DockerPanel {
             }
         };
 
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .child(tab_bar)
-            .child(body)
+        v_flex().size_full().min_h_0().child(tab_bar).child(body)
     }
 }
 
@@ -682,141 +713,181 @@ impl DockerPanel {
         let loading = self.containers_loading;
         let filter = self.container_filter.clone();
 
-        let running_count = self.containers.iter().filter(|c| c.state == "running").count();
+        let running_count = self
+            .containers
+            .iter()
+            .filter(|c| c.state == "running")
+            .count();
         let total_count = self.containers.len();
 
-        let rows = v_flex().id("docker-ct-scroll").overflow_y_scroll().flex_1().min_h_0().gap_1();
+        let rows = v_flex()
+            .id("docker-ct-scroll")
+            .overflow_y_scroll()
+            .flex_1()
+            .min_h_0()
+            .gap_1();
 
         let filtered: Vec<&Container> = match filter.as_str() {
-            "running" => self.containers.iter().filter(|c| c.state == "running").collect(),
+            "running" => self
+                .containers
+                .iter()
+                .filter(|c| c.state == "running")
+                .collect(),
             "all" => self.containers.iter().collect(),
-            _ => self.containers.iter().filter(|c| c.state == "running").collect(),
+            _ => self
+                .containers
+                .iter()
+                .filter(|c| c.state == "running")
+                .collect(),
         };
 
-        let body = if self.containers.is_empty() && !loading {
-            rows.child(div().text_size(px(12.)).text_color(muted).child(
-                "点“刷新”列出容器。需要 Docker daemon 正在运行,docker CLI 在 PATH 中。",
-            ))
-        } else if filtered.is_empty() && !loading {
-            rows.child(div().text_size(px(12.)).text_color(muted).child(
-                if filter == "running" {
-                    format!("没有正在运行的容器（共 {total_count} 个已停止）")
-                } else {
-                    "没有容器".to_string()
-                },
-            ))
-        } else {
-            rows.children(filtered.into_iter().map(|c| {
-                let state_color = match c.state.as_str() {
-                    "running" => theme.primary,
-                    "exited" => muted,
-                    "paused" => theme.accent,
-                    _ => muted,
-                };
-                let id_short: String = c.id.chars().take(12).collect();
-                let is_running = c.state == "running";
-                let cid_log = c.id.clone();
-                let cname_log = c.names.clone();
-                let cid_exec = c.id.clone();
-                let cname_exec = c.names.clone();
-                let cid_stop = c.id.clone();
-                let cid_start = c.id.clone();
-                let cid_restart = c.id.clone();
-                let cid_rm = c.id.clone();
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .p_2()
-                    .border_1()
-                    .border_color(border)
-                    .rounded_md()
-                    .child(div().text_size(px(11.)).w(px(90.)).text_color(muted).child(id_short))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .flex_1()
-                            .child(c.names.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(muted)
-                            .w(px(150.))
-                            .truncate()
-                            .child(c.image.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .px(px(6.))
-                            .py(px(1.))
-                            .rounded_sm()
-                            .bg(state_color.opacity(0.18))
-                            .text_color(state_color)
-                            .child(c.state.clone()),
-                    )
-                    .child(
-                        Button::new(format!("docker-logs-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("日志")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_or_focus_session(cid_log.clone(), cname_log.clone(), SessionKind::Logs, cx);
-                                this.start_logs_for(&cid_log, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(format!("docker-exec-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("Shell")
-                            .disabled(!is_running)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_or_focus_session(cid_exec.clone(), cname_exec.clone(), SessionKind::Shell, cx);
-                                this.start_shell_for(&cid_exec, window, cx);
-                            })),
-                    )
-                    .child(if is_running {
-                        Button::new(format!("docker-stop-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("停止")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.container_action(cid_stop.clone(), docker_stop, cx);
-                            }))
-                            .into_any_element()
+        let body =
+            if self.containers.is_empty() && !loading {
+                rows.child(
+                    div().text_size(px(12.)).text_color(muted).child(
+                        "点“刷新”列出容器。需要 Docker daemon 正在运行,docker CLI 在 PATH 中。",
+                    ),
+                )
+            } else if filtered.is_empty() && !loading {
+                rows.child(div().text_size(px(12.)).text_color(muted).child(
+                    if filter == "running" {
+                        format!("没有正在运行的容器（共 {total_count} 个已停止）")
                     } else {
-                        Button::new(format!("docker-start-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("启动")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.container_action(cid_start.clone(), docker_start, cx);
-                            }))
-                            .into_any_element()
-                    })
-                    .child(
-                        Button::new(format!("docker-restart-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("重启")
-                            .disabled(!is_running)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.container_action(cid_restart.clone(), docker_restart, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(format!("docker-rm-{}", c.id))
-                            .xsmall()
-                            .ghost()
-                            .label("删除")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.container_action(cid_rm.clone(), |h, id| docker_remove(h, id, true), cx);
-                            })),
-                    )
-            }))
-        };
+                        "没有容器".to_string()
+                    },
+                ))
+            } else {
+                rows.children(filtered.into_iter().map(|c| {
+                    let state_color = match c.state.as_str() {
+                        "running" => theme.primary,
+                        "exited" => muted,
+                        "paused" => theme.accent,
+                        _ => muted,
+                    };
+                    let id_short: String = c.id.chars().take(12).collect();
+                    let is_running = c.state == "running";
+                    let cid_log = c.id.clone();
+                    let cname_log = c.names.clone();
+                    let cid_exec = c.id.clone();
+                    let cname_exec = c.names.clone();
+                    let cid_stop = c.id.clone();
+                    let cid_start = c.id.clone();
+                    let cid_restart = c.id.clone();
+                    let cid_rm = c.id.clone();
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .p_2()
+                        .border_1()
+                        .border_color(border)
+                        .rounded_md()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .w(px(90.))
+                                .text_color(muted)
+                                .child(id_short),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .flex_1()
+                                .child(c.names.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(muted)
+                                .w(px(150.))
+                                .truncate()
+                                .child(c.image.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .px(px(6.))
+                                .py(px(1.))
+                                .rounded_sm()
+                                .bg(state_color.opacity(0.18))
+                                .text_color(state_color)
+                                .child(c.state.clone()),
+                        )
+                        .child(
+                            Button::new(format!("docker-logs-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("日志")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_or_focus_session(
+                                        cid_log.clone(),
+                                        cname_log.clone(),
+                                        SessionKind::Logs,
+                                        cx,
+                                    );
+                                    this.start_logs_for(&cid_log, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new(format!("docker-exec-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("Shell")
+                                .disabled(!is_running)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_or_focus_session(
+                                        cid_exec.clone(),
+                                        cname_exec.clone(),
+                                        SessionKind::Shell,
+                                        cx,
+                                    );
+                                    this.start_shell_for(&cid_exec, window, cx);
+                                })),
+                        )
+                        .child(if is_running {
+                            Button::new(format!("docker-stop-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("停止")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.container_action(cid_stop.clone(), docker_stop, cx);
+                                }))
+                                .into_any_element()
+                        } else {
+                            Button::new(format!("docker-start-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("启动")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.container_action(cid_start.clone(), docker_start, cx);
+                                }))
+                                .into_any_element()
+                        })
+                        .child(
+                            Button::new(format!("docker-restart-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("重启")
+                                .disabled(!is_running)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.container_action(cid_restart.clone(), docker_restart, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new(format!("docker-rm-{}", c.id))
+                                .xsmall()
+                                .ghost()
+                                .label("删除")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.container_action(
+                                        cid_rm.clone(),
+                                        |h, id| docker_remove(h, id, true),
+                                        cx,
+                                    );
+                                })),
+                        )
+                }))
+            };
 
         let is_running = filter == "running";
         let is_all = filter == "all";
@@ -827,7 +898,9 @@ impl DockerPanel {
                     .xsmall()
                     .ghost()
                     .label(format!("运行中 ({running_count})"))
-                    .when(is_running, |b| b.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                    .when(is_running, |b| {
+                        b.bg(theme.accent.opacity(0.25)).text_color(theme.accent)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.container_filter = "running".into();
                         cx.notify();
@@ -838,7 +911,9 @@ impl DockerPanel {
                     .xsmall()
                     .ghost()
                     .label(format!("全部 ({total_count})"))
-                    .when(is_all, |b| b.bg(theme.accent.opacity(0.25)).text_color(theme.accent))
+                    .when(is_all, |b| {
+                        b.bg(theme.accent.opacity(0.25)).text_color(theme.accent)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.container_filter = "all".into();
                         cx.notify();
@@ -851,11 +926,18 @@ impl DockerPanel {
             .p_4()
             .gap_2()
             .children(self.error.as_ref().map(|e| {
-                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.danger)
+                    .child(e.clone())
             }))
             .child(filter_bar)
             .child(if loading {
-                div().text_size(px(12.)).text_color(muted).child("加载中…").into_any_element()
+                div()
+                    .text_size(px(12.))
+                    .text_color(muted)
+                    .child("加载中…")
+                    .into_any_element()
             } else {
                 div().into_any_element()
             })
@@ -878,22 +960,27 @@ impl DockerPanel {
             .p_4()
             .gap_2()
             .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("docker-prune")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Delete)
-                            .label("清理未用镜像")
-                            .on_click(cx.listener(|this, _, _, cx| this.do_prune(cx))),
-                    ),
+                h_flex().gap_2().child(
+                    Button::new("docker-prune")
+                        .small()
+                        .ghost()
+                        .icon(IconName::Delete)
+                        .label("清理未用镜像")
+                        .on_click(cx.listener(|this, _, _, cx| this.do_prune(cx))),
+                ),
             )
             .children(self.error.as_ref().map(|e| {
-                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.danger)
+                    .child(e.clone())
             }))
             .child(if loading {
-                div().text_size(px(12.)).text_color(muted).child("加载中…").into_any_element()
+                div()
+                    .text_size(px(12.))
+                    .text_color(muted)
+                    .child("加载中…")
+                    .into_any_element()
             } else {
                 div().into_any_element()
             })
@@ -912,16 +999,37 @@ impl DockerPanel {
                             .border_1()
                             .border_color(border)
                             .rounded_md()
-                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).flex_1().child(format!("{}:{}", i.repository, i.tag)))
-                            .child(div().text_size(px(11.)).text_color(muted).child(i.size.clone()))
-                            .child(div().text_size(px(10.)).text_color(muted).child(i.created.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .flex_1()
+                                    .child(format!("{}:{}", i.repository, i.tag)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(muted)
+                                    .child(i.size.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(muted)
+                                    .child(i.created.clone()),
+                            )
                     })),
             )
             .into_any_element()
     }
 
     // ---- logs ---------------------------------------------------------------
-    fn render_logs(&self, theme: &gpui_component::Theme, idx: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_logs(
+        &self,
+        theme: &gpui_component::Theme,
+        idx: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let s = &self.sessions[idx];
         let this_ent = cx.entity();
         // Render logs via GPUI's native selectable TextView (markdown code
@@ -933,24 +1041,20 @@ impl DockerPanel {
             .min_h_0()
             .size_full()
             .child(
-                h_flex()
-                    .justify_end()
-                    .px_2()
-                    .py_1()
-                    .child(
-                        Button::new(format!("docker-logs-copy-{}", idx))
-                            .xsmall()
-                            .ghost()
-                            .label("复制全部")
-                            .on_click(move |_, _window, cx| {
-                                let _ = this_ent.update(cx, |this, cx| {
-                                    if let Some(s) = this.sessions.get(idx) {
-                                        let text = s.log_lines.join("\n");
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                                    }
-                                });
-                            }),
-                    ),
+                h_flex().justify_end().px_2().py_1().child(
+                    Button::new(format!("docker-logs-copy-{}", idx))
+                        .xsmall()
+                        .ghost()
+                        .label("复制全部")
+                        .on_click(move |_, _window, cx| {
+                            let _ = this_ent.update(cx, |this, cx| {
+                                if let Some(s) = this.sessions.get(idx) {
+                                    let text = s.log_lines.join("\n");
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                }
+                            });
+                        }),
+                ),
             )
             .child(
                 div()
@@ -1009,7 +1113,12 @@ impl DockerPanel {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child("Docker 主机管理"))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Docker 主机管理"),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("docker-add-host")
@@ -1030,7 +1139,10 @@ impl DockerPanel {
                     ),
             )
             .children(self.error.as_ref().map(|e| {
-                div().text_size(px(12.)).text_color(theme.danger).child(e.clone())
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.danger)
+                    .child(e.clone())
             }))
             .child(
                 v_flex()
@@ -1054,7 +1166,11 @@ impl DockerPanel {
                             .border_1()
                             .border_color(border)
                             .rounded_md()
-                            .bg(if is_active { theme.accent.opacity(0.15) } else { Hsla::transparent_black() })
+                            .bg(if is_active {
+                                theme.accent.opacity(0.15)
+                            } else {
+                                Hsla::transparent_black()
+                            })
                             .child(
                                 v_flex()
                                     .gap_0p5()
@@ -1065,20 +1181,24 @@ impl DockerPanel {
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(h.name.clone()),
                                     )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(muted)
-                                            .child(if let Some(ssh_id) = &h.ssh_host_id {
-                                                crate::ssh::host_store::find_host(ssh_id)
-                                                    .map(|s| format!("SSH 隧道 — {}@{}:{}", s.username, s.host, s.port))
-                                                    .unwrap_or_else(|| "SSH 隧道 (关联主机已删除)".into())
-                                            } else if h.host.is_empty() {
-                                                "(本地 daemon)".to_string()
-                                            } else {
-                                                h.host.clone()
-                                            }),
-                                    ),
+                                    .child(div().text_size(px(11.)).text_color(muted).child(
+                                        if let Some(ssh_id) = &h.ssh_host_id {
+                                            crate::ssh::host_store::find_host(ssh_id)
+                                                .map(|s| {
+                                                    format!(
+                                                        "SSH 隧道 — {}@{}:{}",
+                                                        s.username, s.host, s.port
+                                                    )
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    "SSH 隧道 (关联主机已删除)".into()
+                                                })
+                                        } else if h.host.is_empty() {
+                                            "(本地 daemon)".to_string()
+                                        } else {
+                                            h.host.clone()
+                                        },
+                                    )),
                             )
                             .when(is_ssh, |d| {
                                 d.child(

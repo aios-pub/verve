@@ -18,8 +18,8 @@ use futures::AsyncReadExt as _;
 use http_client::{AsyncBody, Builder, HttpClient, HttpRequestExt as _, Method, RedirectPolicy};
 use serde::Deserialize;
 
-use crate::state::models::Project;
 use crate::share::models::ShareConfig;
+use crate::state::models::Project;
 use crate::state::persistence::RemoteConfig;
 
 /// JSON response from `POST /admin/api/projects`.
@@ -77,7 +77,11 @@ pub fn mock_server_url(cfg: &RemoteConfig) -> String {
     if let Some(base) = remote_base_url(cfg) {
         return base;
     }
-    let host = if cfg.host == "0.0.0.0" { "127.0.0.1" } else { cfg.host.as_str() };
+    let host = if cfg.host == "0.0.0.0" {
+        "127.0.0.1"
+    } else {
+        cfg.host.as_str()
+    };
     format!("http://{}:{}", host, cfg.port)
 }
 
@@ -101,7 +105,10 @@ pub async fn push_share(
         .uri(&url)
         .method(Method::POST)
         .header("Content-Type", "application/json")
-        .header("User-Agent", format!("verve/{}", crate::updater::CURRENT_VERSION))
+        .header(
+            "User-Agent",
+            format!("verve/{}", crate::updater::CURRENT_VERSION),
+        )
         .follow_redirects(RedirectPolicy::FollowAll);
     if !token.is_empty() {
         builder = builder.header("Authorization", format!("Bearer {}", token));
@@ -127,7 +134,14 @@ pub async fn push_share(
     let mut form_parts = vec![
         ("project_id".to_string(), share.project_id.clone()),
         ("title".to_string(), share.title.clone()),
-        ("public".to_string(), if public { "1".to_string() } else { "0".to_string() }),
+        (
+            "public".to_string(),
+            if public {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
     ];
     if let Some(pw) = password {
         form_parts.push(("password".to_string(), pw));
@@ -139,7 +153,10 @@ pub async fn push_share(
         .uri(&url)
         .method(Method::POST)
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("User-Agent", format!("verve/{}", crate::updater::CURRENT_VERSION))
+        .header(
+            "User-Agent",
+            format!("verve/{}", crate::updater::CURRENT_VERSION),
+        )
         .follow_redirects(RedirectPolicy::FollowAll);
     if !token.is_empty() {
         builder = builder.header("Authorization", format!("Bearer {}", token));
@@ -156,7 +173,8 @@ pub async fn push_share(
             String::from_utf8_lossy(&body)
         );
     }
-    let resp: ShareCreateResponse = serde_json::from_slice(&body).context("parse share response")?;
+    let resp: ShareCreateResponse =
+        serde_json::from_slice(&body).context("parse share response")?;
     Ok(resp.id)
 }
 

@@ -11,9 +11,9 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::select::{Select, SelectState};
-use gpui_component::{h_flex, v_flex, ActiveTheme, Selectable as _, Sizable as _, WindowExt as _};
+use gpui_component::{ActiveTheme, Selectable as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 
-use crate::docker::{host_store, DockerHost};
+use crate::docker::{DockerHost, host_store};
 use crate::ssh::host_store as ssh_host_store;
 
 /// Connection mode selected in the dialog.
@@ -54,11 +54,7 @@ pub struct DockerHostDialogState {
 }
 
 impl DockerHostDialogState {
-    pub fn new(
-        editing: Option<&DockerHost>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
+    pub fn new(editing: Option<&DockerHost>, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let existing = editing.cloned();
 
         // Determine initial mode from the host being edited.
@@ -106,7 +102,8 @@ impl DockerHostDialogState {
         }
         // Find initial selected label by id (if editing an ssh-mode host).
         let init_label = init_ssh_id.and_then(|id| {
-            ssh_hosts.iter()
+            ssh_hosts
+                .iter()
                 .find(|h| h.id == id)
                 .map(|h| ssh_host_label(&h.name, &h.username, &h.host, h.port))
         });
@@ -150,12 +147,8 @@ impl Render for DockerHostDialogState {
 }
 
 /// Open the host dialog. `on_save` receives the finalized `DockerHost`.
-pub fn open_dialog<F>(
-    editing: Option<&DockerHost>,
-    on_save: F,
-    window: &mut Window,
-    cx: &mut App,
-) where
+pub fn open_dialog<F>(editing: Option<&DockerHost>, on_save: F, window: &mut Window, cx: &mut App)
+where
     F: Fn(DockerHost, &mut Window, &mut App) + 'static,
 {
     let on_save: std::sync::Arc<F> = std::sync::Arc::new(on_save);

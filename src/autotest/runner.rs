@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use crate::http;
 use crate::scripting;
 use crate::state::models::{
-    effective_variables, ApiRequest, KeyValue, Project, RequestBody, Response,
+    ApiRequest, KeyValue, Project, RequestBody, Response, effective_variables,
 };
 
 use super::models::*;
@@ -162,7 +162,10 @@ struct RunContext<'a> {
 
 /// Dispatch a step to its executor and append the result (recursing into
 /// if/loop bodies as needed). Uses `Box::pin` for recursive calls.
-fn execute_step<'a>(step: &'a TestCaseStep, ctx: &'a mut RunContext<'_>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+fn execute_step<'a>(
+    step: &'a TestCaseStep,
+    ctx: &'a mut RunContext<'_>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
         if ctx.hard_failed {
             return;
@@ -210,7 +213,10 @@ async fn execute_request_step(step: &RequestStep, ctx: &mut RunContext<'_>) {
             return;
         }
     };
-    let display_name = step.name_override.clone().unwrap_or_else(|| req.name.clone());
+    let display_name = step
+        .name_override
+        .clone()
+        .unwrap_or_else(|| req.name.clone());
 
     // 2. Build effective variable map for this step.
     let folder_vars_chain = ctx.project.folder_variables_chain(&folder_chain);
@@ -369,10 +375,18 @@ async fn execute_if_step(step: &IfStep, ctx: &mut RunContext<'_>) {
     if let Some(e) = &eval_err {
         logs.push(format!("if condition error: {e}"));
     } else {
-        logs.push(format!("条件判定: {} → {}", truncate(&step.condition, 60), if truthy { "真" } else { "假" }));
+        logs.push(format!(
+            "条件判定: {} → {}",
+            truncate(&step.condition, 60),
+            if truthy { "真" } else { "假" }
+        ));
     }
 
-    let chosen_branch = if truthy { &step.then_steps } else { &step.else_steps };
+    let chosen_branch = if truthy {
+        &step.then_steps
+    } else {
+        &step.else_steps
+    };
     let branch_label = if truthy { "then" } else { "else" };
 
     let mut branch_ctx = RunContext {
@@ -475,7 +489,10 @@ async fn execute_loop_step(step: &LoopStep, ctx: &mut RunContext<'_>) {
             let items = match arr_val.as_array() {
                 Some(a) => a.clone(),
                 None => {
-                    logs.push(format!("for-each source '{}' 不是数组", truncate(source, 40)));
+                    logs.push(format!(
+                        "for-each source '{}' 不是数组",
+                        truncate(source, 40)
+                    ));
                     let res = TestStepResult {
                         step_id: step.id.clone(),
                         request_name: "遍历循环".into(),
@@ -494,7 +511,11 @@ async fn execute_loop_step(step: &LoopStep, ctx: &mut RunContext<'_>) {
                     return;
                 }
             };
-            logs.push(format!("遍历 {} ({} 项)", truncate(source, 40), items.len()));
+            logs.push(format!(
+                "遍历 {} ({} 项)",
+                truncate(source, 40),
+                items.len()
+            ));
             for (i, item) in items.iter().enumerate() {
                 if ctx.hard_failed {
                     break;
@@ -580,7 +601,9 @@ async fn execute_loop_step(step: &LoopStep, ctx: &mut RunContext<'_>) {
         step_id: step.id.clone(),
         request_name: match &step.mode {
             LoopMode::Repeat { count } => format!("重复 {} 次", count),
-            LoopMode::ForEach { var, source } => format!("遍历 {} in {}", var, truncate(source, 30)),
+            LoopMode::ForEach { var, source } => {
+                format!("遍历 {} in {}", var, truncate(source, 30))
+            }
             LoopMode::While { condition } => format!("当 {}", truncate(condition, 30)),
         },
         status: 0,
@@ -633,14 +656,20 @@ async fn execute_script_step(step: &ScriptStep, ctx: &mut RunContext<'_>) {
                     ctx.scope.insert(name, value);
                 }
                 scripting::SideEffect::Log(line) => logs.push(line),
-                scripting::SideEffect::Assert { passed: ap, message } => {
+                scripting::SideEffect::Assert {
+                    passed: ap,
+                    message,
+                } => {
                     if ap {
                         assertions_passed += 1;
                     } else {
                         assertions_failed += 1;
                         passed = false;
                     }
-                    logs.push(format!("{}: {message}", if ap { "✓ PASS" } else { "✗ FAIL" }));
+                    logs.push(format!(
+                        "{}: {message}",
+                        if ap { "✓ PASS" } else { "✗ FAIL" }
+                    ));
                 }
             }
         }
@@ -825,7 +854,9 @@ mod tests {
                 };
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf);
-                let Ok(req_str) = std::str::from_utf8(&buf) else { continue };
+                let Ok(req_str) = std::str::from_utf8(&buf) else {
+                    continue;
+                };
                 let path = req_str
                     .lines()
                     .next()
@@ -836,16 +867,22 @@ mod tests {
                 let auth_hdr = req_str
                     .lines()
                     .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
-                    .map(|l| l.split_once(':').map(|x| x.1).unwrap_or("").trim().to_string())
+                    .map(|l| {
+                        l.split_once(':')
+                            .map(|x| x.1)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string()
+                    })
                     .unwrap_or_default();
 
                 let (status, body) = if path.starts_with("/login") {
-                    (200, r#"{"data":{"token":"secret123","items":[{"id":1},{"id":2}]}}"#.to_string())
-                } else if path.starts_with("/me") {
                     (
                         200,
-                        format!(r#"{{"ok":true,"auth":"{auth_hdr}"}}"#),
+                        r#"{"data":{"token":"secret123","items":[{"id":1},{"id":2}]}}"#.to_string(),
                     )
+                } else if path.starts_with("/me") {
+                    (200, format!(r#"{{"ok":true,"auth":"{auth_hdr}"}}"#))
                 } else {
                     (404, r#"{"error":"not found"}"#.to_string())
                 };
@@ -868,7 +905,8 @@ mod tests {
 
     #[test]
     fn walk_json_path_basic() {
-        let v: JsonValue = serde_json::from_str(r#"{"data":{"token":"abc","arr":[{"x":1}]}}"#).unwrap();
+        let v: JsonValue =
+            serde_json::from_str(r#"{"data":{"token":"abc","arr":[{"x":1}]}}"#).unwrap();
         assert_eq!(
             walk_json_path(&v, "data.token").and_then(|v| v.as_str()),
             Some("abc")
@@ -885,9 +923,17 @@ mod tests {
         let port = spawn_fixture_server();
         let client = build_client();
 
-        let mut login = ApiRequest::new("Login", RequestMethod::Get, format!("http://127.0.0.1:{port}/login"));
+        let mut login = ApiRequest::new(
+            "Login",
+            RequestMethod::Get,
+            format!("http://127.0.0.1:{port}/login"),
+        );
         login.tests_script = "apt.assert(response.status === 200);".into();
-        let mut me = ApiRequest::new("Me", RequestMethod::Get, format!("http://127.0.0.1:{port}/me"));
+        let mut me = ApiRequest::new(
+            "Me",
+            RequestMethod::Get,
+            format!("http://127.0.0.1:{port}/me"),
+        );
         me.headers
             .push(KeyValue::new("Authorization", "Bearer {{token}}"));
         me.tests_script = "apt.assert(response.json.auth === 'Bearer secret123');".into();
@@ -904,7 +950,8 @@ mod tests {
             path: "data.token".into(),
         });
         case.steps.push(TestCaseStep::Request(step1));
-        case.steps.push(TestCaseStep::Request(RequestStep::new(&me.id)));
+        case.steps
+            .push(TestCaseStep::Request(RequestStep::new(&me.id)));
 
         let (tx, _rx) = mpsc::unbounded_channel::<RunEvent>();
 
@@ -925,9 +972,17 @@ mod tests {
         let port = spawn_fixture_server();
         let client = build_client();
 
-        let mut login = ApiRequest::new("Login", RequestMethod::Get, format!("http://127.0.0.1:{port}/login"));
+        let mut login = ApiRequest::new(
+            "Login",
+            RequestMethod::Get,
+            format!("http://127.0.0.1:{port}/login"),
+        );
         login.tests_script = "apt.assert(response.status === 200);".into();
-        let mut me = ApiRequest::new("Me", RequestMethod::Get, format!("http://127.0.0.1:{port}/me"));
+        let mut me = ApiRequest::new(
+            "Me",
+            RequestMethod::Get,
+            format!("http://127.0.0.1:{port}/me"),
+        );
         me.headers
             .push(KeyValue::new("Authorization", "Bearer {{token}}"));
 
@@ -946,7 +1001,9 @@ mod tests {
 
         // Add an If step that runs "me" only if token exists.
         let mut if_step = IfStep::new("token && token.length > 0");
-        if_step.then_steps.push(TestCaseStep::Request(RequestStep::new(&me.id)));
+        if_step
+            .then_steps
+            .push(TestCaseStep::Request(RequestStep::new(&me.id)));
         case.steps.push(TestCaseStep::If(if_step));
 
         let (tx, _rx) = mpsc::unbounded_channel::<RunEvent>();
@@ -962,13 +1019,19 @@ mod tests {
         let port = spawn_fixture_server();
         let client = build_client();
 
-        let login = ApiRequest::new("Login", RequestMethod::Get, format!("http://127.0.0.1:{port}/login"));
+        let login = ApiRequest::new(
+            "Login",
+            RequestMethod::Get,
+            format!("http://127.0.0.1:{port}/login"),
+        );
         let mut project = Project::new("Test");
         project.requests.push(login.clone());
 
         let mut case = TestCase::new("loop-scenario");
         let mut loop_step = LoopStep::new(LoopMode::Repeat { count: 3 });
-        loop_step.body_steps.push(TestCaseStep::Request(RequestStep::new(&login.id)));
+        loop_step
+            .body_steps
+            .push(TestCaseStep::Request(RequestStep::new(&login.id)));
         case.steps.push(TestCaseStep::Loop(loop_step));
 
         let (tx, _rx) = mpsc::unbounded_channel::<RunEvent>();
@@ -983,7 +1046,8 @@ mod tests {
         let client = build_client();
         let project = Project::new("Empty");
         let mut case = TestCase::new("bad");
-        case.steps.push(TestCaseStep::Request(RequestStep::new("does-not-exist")));
+        case.steps
+            .push(TestCaseStep::Request(RequestStep::new("does-not-exist")));
         let (tx, _rx) = mpsc::unbounded_channel();
         let result = smol::block_on(run_case(&case, &project, &*client, tx, None)).unwrap();
         assert!(!result.passed);

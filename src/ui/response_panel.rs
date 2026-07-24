@@ -4,10 +4,11 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
+    ActiveTheme, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, IconName, Selectable as _, Sizable as _,
+    v_flex,
 };
 
 use crate::state::{AppEvent, AppState};

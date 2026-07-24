@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, TimeZone};
-use russh::client::{Handler, Handle};
+use russh::client::{Handle, Handler};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,7 +44,11 @@ pub enum TransferProgress {
         uploading: bool,
     },
     /// Bytes transferred so far.
-    Progress { id: String, transferred: u64, total: u64 },
+    Progress {
+        id: String,
+        transferred: u64,
+        total: u64,
+    },
     /// Transfer completed successfully.
     Completed { id: String },
     /// Transfer failed with an error.
@@ -216,23 +220,21 @@ impl SftpSessionWrapper {
                 // to treating it as a directory (covers mislabeled entries).
                 match self.remove_file(child).await {
                     Ok(()) => {}
-                    Err(file_err) => {
-                        match Box::pin(self.remove_dir_all(child)).await {
-                            Ok(()) => {}
-                            Err(dir_err) => {
-                                return Err(format!(
-                                    "删除 {} 失败（文件: {}；目录: {}）",
-                                    child, file_err, dir_err
-                                ));
-                            }
+                    Err(file_err) => match Box::pin(self.remove_dir_all(child)).await {
+                        Ok(()) => {}
+                        Err(dir_err) => {
+                            return Err(format!(
+                                "删除 {} 失败（文件: {}；目录: {}）",
+                                child, file_err, dir_err
+                            ));
                         }
-                    }
+                    },
                 }
             }
         }
-        self.remove_dir(path).await.map_err(|e| {
-            format!("删除目录 {} 失败（可能非空）: {}", path, e)
-        })
+        self.remove_dir(path)
+            .await
+            .map_err(|e| format!("删除目录 {} 失败（可能非空）: {}", path, e))
     }
 
     /// Rename (move) a remote path.
@@ -471,7 +473,13 @@ mod tests {
 
     #[test]
     fn join_paths() {
-        assert_eq!(SftpSessionWrapper::join_path("/home/user", "foo"), "/home/user/foo");
-        assert_eq!(SftpSessionWrapper::join_path("/home/user/", "foo"), "/home/user/foo");
+        assert_eq!(
+            SftpSessionWrapper::join_path("/home/user", "foo"),
+            "/home/user/foo"
+        );
+        assert_eq!(
+            SftpSessionWrapper::join_path("/home/user/", "foo"),
+            "/home/user/foo"
+        );
     }
 }

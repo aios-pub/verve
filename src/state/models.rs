@@ -1208,7 +1208,11 @@ impl Project {
         for req in &mut self.requests {
             out.push((String::new(), req));
         }
-        fn walk<'a>(folders: &'a mut [Folder], prefix: &str, out: &mut Vec<(String, &'a mut ApiRequest)>) {
+        fn walk<'a>(
+            folders: &'a mut [Folder],
+            prefix: &str,
+            out: &mut Vec<(String, &'a mut ApiRequest)>,
+        ) {
             for folder in folders {
                 let path = if prefix.is_empty() {
                     folder.name.clone()

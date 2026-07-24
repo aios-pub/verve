@@ -11,19 +11,19 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result as AnyResult};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui::{Pixels as Gpx, ScrollHandle};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::{
-    h_flex, v_flex, ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
-    WindowExt as _,
+    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, WindowExt as _, h_flex,
+    v_flex,
 };
 use image::{Frame as ImageFrame, RgbaImage};
 use pdfium_render::prelude::{
-    PdfColor, PdfDocument, PdfPagePaperSize, PdfPageObjectsCommon, PdfPageRenderRotation,
+    PdfColor, PdfDocument, PdfPageObjectsCommon, PdfPagePaperSize, PdfPageRenderRotation,
     PdfPoints, PdfRect, PdfRenderConfig, Pdfium, PdfiumError,
 };
-use gpui::{Pixels as Gpx, ScrollHandle};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditMode {
@@ -95,7 +95,10 @@ impl PdfPanel {
             }
         }
         let out_dir = env!("OUT_DIR");
-        let out_lib_path = PathBuf::from(out_dir).join("pdfium").join("lib").join(&lib_name);
+        let out_lib_path = PathBuf::from(out_dir)
+            .join("pdfium")
+            .join("lib")
+            .join(&lib_name);
         if out_lib_path.exists() {
             let bindings = Pdfium::bind_to_library(out_lib_path.to_string_lossy().as_ref())?;
             return Ok(Pdfium::new(bindings));
@@ -236,9 +239,7 @@ impl PdfPanel {
         cx.spawn(async move |_this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    Self::render_page_from_bytes(&bytes, page_idx, max_dim)
-                })
+                .spawn(async move { Self::render_page_from_bytes(&bytes, page_idx, max_dim) })
                 .await;
             let _ = ent.update(cx, |this, cx| {
                 this.rendering.remove(&page_idx);
@@ -381,7 +382,9 @@ impl PdfPanel {
                 .pages_mut()
                 .get(idx)
                 .map_err(|e| anyhow::anyhow!("get page: {e}"))?;
-            let current = page.rotation().map_err(|e| anyhow::anyhow!("rotation: {e}"))?;
+            let current = page
+                .rotation()
+                .map_err(|e| anyhow::anyhow!("rotation: {e}"))?;
             let current_val = match current {
                 PdfPageRenderRotation::None => 0,
                 PdfPageRenderRotation::Degrees90 => 1,
@@ -588,7 +591,9 @@ impl PdfPanel {
         self.scroll_handle.scroll_to_top_of_item(target as usize);
         self.current_page = target;
         // Directly render the target page and neighbors.
-        for i in target.saturating_sub(1)..=(target + 1).min(self.page_count.unwrap_or(0).saturating_sub(1)) {
+        for i in target.saturating_sub(1)
+            ..=(target + 1).min(self.page_count.unwrap_or(0).saturating_sub(1))
+        {
             if !self.page_cache.contains_key(&i) && !self.rendering.contains(&i) {
                 self.render_page(i, cx);
             }
@@ -645,11 +650,7 @@ impl PdfPanel {
         cx.notify();
     }
 
-    fn window_pos_to_pdf_points(
-        &self,
-        page_idx: u32,
-        win_pos: Point<Gpx>,
-    ) -> Option<(f32, f32)> {
+    fn window_pos_to_pdf_points(&self, page_idx: u32, win_pos: Point<Gpx>) -> Option<(f32, f32)> {
         let bounds = self.page_bounds.borrow().get(&page_idx).cloned()?;
         let pr = self.page_cache.get(&page_idx)?;
         let (img_w, img_h, page_w_pts, page_h_pts) = pr.meta;
@@ -724,9 +725,7 @@ impl PdfPanel {
                                     let text = input_f.read(cx).value().to_string();
                                     window.close_dialog(cx);
                                     let _ = ent_f.update(cx, |this, cx| {
-                                        this.add_text_at_impl(
-                                            cx, page_idx_u16, x_cap, y_cap, text,
-                                        );
+                                        this.add_text_at_impl(cx, page_idx_u16, x_cap, y_cap, text);
                                         this.set_mode(EditMode::View, cx);
                                     });
                                 }),
@@ -777,7 +776,6 @@ impl PdfPanel {
             }
         }
     }
-
 }
 
 impl Render for PdfPanel {
@@ -836,10 +834,9 @@ impl Render for PdfPanel {
                                 .title("Delete page")
                                 .content(move |c, _w, _cx| {
                                     c.child(
-                                        v_flex()
-                                            .p_4()
-                                            .w(px(320.))
-                                            .child("Delete the current page? This cannot be undone."),
+                                        v_flex().p_4().w(px(320.)).child(
+                                            "Delete the current page? This cannot be undone.",
+                                        ),
                                     )
                                 })
                                 .footer(
@@ -961,7 +958,9 @@ impl Render for PdfPanel {
                             .ghost()
                             .label("View")
                             .selected(mode == EditMode::View)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_mode(EditMode::View, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(EditMode::View, cx)),
+                            ),
                     )
                     .child(
                         Button::new("mode-text")
@@ -970,7 +969,9 @@ impl Render for PdfPanel {
                             .label("Text")
                             .selected(mode == EditMode::AddText)
                             .disabled(!has_doc)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_mode(EditMode::AddText, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(EditMode::AddText, cx)),
+                            ),
                     )
                     .child(
                         Button::new("mode-image")
@@ -979,7 +980,9 @@ impl Render for PdfPanel {
                             .label("Image")
                             .selected(mode == EditMode::AddImage)
                             .disabled(!has_doc)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_mode(EditMode::AddImage, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(EditMode::AddImage, cx)),
+                            ),
                     )
                     .child(
                         Button::new("mode-erase")
@@ -988,7 +991,9 @@ impl Render for PdfPanel {
                             .label("Erase")
                             .selected(mode == EditMode::Erase)
                             .disabled(!has_doc)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_mode(EditMode::Erase, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.set_mode(EditMode::Erase, cx)),
+                            ),
                     ),
             );
 
@@ -1046,25 +1051,27 @@ impl Render for PdfPanel {
                 .gap_3()
                 .p_4()
                 // Re-evaluate virtualization when scroll happens.
-                .on_scroll_wheel(cx.listener(|this: &mut Self, ev: &ScrollWheelEvent, _window, cx| {
-                    // Ctrl/Cmd + scroll wheel = zoom.
-                    if ev.modifiers.control || ev.modifiers.platform {
-                        let delta_y = match &ev.delta {
-                            gpui::ScrollDelta::Pixels(p) => p.y.as_f32(),
-                            gpui::ScrollDelta::Lines(l) => l.y * 20.0,
-                        };
-                        if delta_y > 1.0 {
-                            this.zoom_in(cx);
-                        } else if delta_y < -1.0 {
-                            this.zoom_out(cx);
+                .on_scroll_wheel(cx.listener(
+                    |this: &mut Self, ev: &ScrollWheelEvent, _window, cx| {
+                        // Ctrl/Cmd + scroll wheel = zoom.
+                        if ev.modifiers.control || ev.modifiers.platform {
+                            let delta_y = match &ev.delta {
+                                gpui::ScrollDelta::Pixels(p) => p.y.as_f32(),
+                                gpui::ScrollDelta::Lines(l) => l.y * 20.0,
+                            };
+                            if delta_y > 1.0 {
+                                this.zoom_in(cx);
+                            } else if delta_y < -1.0 {
+                                this.zoom_out(cx);
+                            }
+                            return;
                         }
-                        return;
-                    }
-                    // Render pages near the current scroll position. Since scroll wheel
-                    // events fire during scrolling, just re-render the pages around top_item.
-                    this.ensure_visible_pages_rendered(cx);
-                    cx.notify();
-                }));
+                        // Render pages near the current scroll position. Since scroll wheel
+                        // events fire during scrolling, just re-render the pages around top_item.
+                        this.ensure_visible_pages_rendered(cx);
+                        cx.notify();
+                    },
+                ));
 
             // Page cards for each known page index.
             if total > 0 {
@@ -1097,7 +1104,8 @@ impl Render for PdfPanel {
                                 )
                             }
                             (EditMode::Erase, None) => {
-                                "Click once to set rectangle start, then again to finish".to_string()
+                                "Click once to set rectangle start, then again to finish"
+                                    .to_string()
                             }
                         }),
                 )
@@ -1214,11 +1222,7 @@ impl PdfPanel {
         }
     }
 
-    fn rotate_item(
-        label: &'static str,
-        ent: WeakEntity<PdfPanel>,
-        delta: i32,
-    ) -> impl IntoElement {
+    fn rotate_item(label: &'static str, ent: WeakEntity<PdfPanel>, delta: i32) -> impl IntoElement {
         div()
             .w_full()
             .h(px(26.))
@@ -1229,12 +1233,9 @@ impl PdfPanel {
             .rounded(px(4.))
             .text_color(gpui::hsla(0.0, 0.0, 0.4, 1.0))
             .child(label.to_string())
-            .on_mouse_down(
-                MouseButton::Left,
-                move |_e, window, cx: &mut App| {
-                    let _ = ent.update(cx, |this, cx| this.rotate_current(cx, delta));
-                    window.refresh();
-                },
-            )
+            .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
+                let _ = ent.update(cx, |this, cx| this.rotate_current(cx, delta));
+                window.refresh();
+            })
     }
 }

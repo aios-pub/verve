@@ -1,7 +1,7 @@
 //! Bottom pane: request/response console log (history).
 
 use gpui::*;
-use gpui_component::{h_flex, v_flex, ActiveTheme};
+use gpui_component::{ActiveTheme, h_flex, v_flex};
 
 use crate::state::{AppEvent, AppState};
 
@@ -10,7 +10,10 @@ use crate::state::{AppEvent, AppState};
 pub enum ConsoleEvent {
     /// User clicked a history row; payload is (request_id, project_id).
     /// request_id may be None for legacy entries that predate the field.
-    OpenRequest { request_id: Option<String>, project_id: String },
+    OpenRequest {
+        request_id: Option<String>,
+        project_id: String,
+    },
 }
 
 pub struct ConsolePanel {

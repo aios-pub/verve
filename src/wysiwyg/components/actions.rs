@@ -745,29 +745,61 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
         // (cmd-s save, cmd-n new, cmd-q quit, cmd-w close, cmd-o open, ...).
         // verve owns those flows.
         //
-        // EXCEPTION: the viewport-scroll actions (PageUp/PageDown/JumpToTop/
-        // JumpToBottom) are also `context: None` in velotype, but they scroll
-        // the editor viewport rather than control the app window, so they must
-        // stay registered. They are re-scoped to the BlockEditor context so
-        // they only fire when the editor is focused.
-        if definition.context.is_none() && !is_viewport_navigation(definition.id) {
+        // EXCEPTIONS (also `context: None` in velotype, re-scoped to BlockEditor):
+        // - Viewport-scroll (PageUp/PageDown/JumpToTop/JumpToBottom): scroll the
+        //   editor, not the app window.
+        // - Editor-chrome toggles (ToggleViewMode / ToggleWorkspace): toggle the
+        //   editor's own Rendered↔Source mode and its outline drawer. Their
+        //   default keys clash with OS/app shortcuts (cmd-tab, ctrl-w) so they
+        //   are re-keyed below.
+        if definition.context.is_none()
+            && !is_viewport_navigation(definition.id)
+            && !is_editor_chrome_toggle(definition.id)
+        {
             continue;
         }
-        let context = if is_viewport_navigation(definition.id) {
+        let context = if definition.context.is_none() {
             BLOCK_CONTEXT
         } else {
             definition.context
         };
-        let keys = normalized
-            .get(definition.id)
-            .cloned()
-            .unwrap_or_else(|| default_keys(*definition));
+        // Re-key the chrome toggles to avoid OS/app clashes (velotype's
+        // cmd-tab/ctrl-w). User overrides via config still win.
+        let keys = if is_editor_chrome_toggle(definition.id) {
+            normalized.get(definition.id).cloned().unwrap_or_else(|| {
+                remapped_chrome_keys(definition.id)
+                    .iter()
+                    .map(|k| (*k).to_string())
+                    .collect()
+            })
+        } else {
+            normalized
+                .get(definition.id)
+                .cloned()
+                .unwrap_or_else(|| default_keys(*definition))
+        };
         bindings.extend(
             keys.iter()
                 .map(|key| key_binding_for(definition.command, key, context)),
         );
     }
     bindings
+}
+
+/// Default keys for the editor-chrome toggles in the embedded build, chosen to
+/// avoid clashes with the OS (cmd-tab) and verve's own bindings (ctrl-w).
+fn remapped_chrome_keys(id: &str) -> &'static [&'static str] {
+    match id {
+        "toggle_view_mode" => &["ctrl-shift-m"],
+        "toggle_workspace" => &["cmd-\\"],
+        _ => &[],
+    }
+}
+
+/// Whether the given action id toggles editor chrome (view mode / workspace
+/// drawer) rather than controlling the app window.
+fn is_editor_chrome_toggle(id: &str) -> bool {
+    matches!(id, "toggle_view_mode" | "toggle_workspace")
 }
 
 /// Whether the given action id is a viewport-scroll command that velotype

@@ -90,7 +90,7 @@ impl Editor {
         Self::write_export_bytes(format, &markdown, &theme, &title, path, source_base_dir)
     }
 
-    pub(crate) fn export_document_via_prompt(
+    pub fn export_document_via_prompt(
         &mut self,
         format: ExportFormat,
         window: &mut Window,

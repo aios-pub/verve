@@ -61,7 +61,7 @@ pub(super) struct WorkspaceState {
 }
 
 impl Editor {
-    pub(crate) fn toggle_workspace_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_workspace_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace.is_open {
             self.workspace.is_open = false;
         } else {
@@ -171,7 +171,29 @@ impl Editor {
     }
 
     fn select_outline_node(&mut self, id: String, cx: &mut Context<Self>) {
-        self.workspace.selected = Some(WorkspaceSelection::Outline(id));
+        self.workspace.selected = Some(WorkspaceSelection::Outline(id.clone()));
+        // Jump to the heading in the document: find the outline node by id,
+        // then locate the first visible Heading block whose title matches and
+        // focus + scroll it into view.
+        if let Some(label) = find_outline_label(&self.workspace.outline_tree, &id)
+            && let Some(block) = self.document.visible_blocks().iter().find_map(|vb| {
+                let block_ref = vb.entity.read(cx);
+                match &block_ref.record.kind {
+                    crate::wysiwyg::components::BlockKind::Heading { .. }
+                        if block_ref.record.title.visible_text() == label =>
+                    {
+                        Some(vb.entity.clone())
+                    }
+                    _ => None,
+                }
+            })
+        {
+            let entity_id = block.entity_id();
+            self.pending_focus = Some(entity_id);
+            self.active_entity_id = Some(entity_id);
+            self.pending_scroll_active_block_into_view = true;
+            self.pending_scroll_recheck_after_layout = true;
+        }
         cx.notify();
     }
 
@@ -595,6 +617,21 @@ fn collect_node_ids(nodes: &[WorkspaceTreeNode], ids: &mut HashSet<String>) {
         ids.insert(node.id.clone());
         collect_node_ids(&node.children, ids);
     }
+}
+
+/// Recursively searches the outline tree for the node with `id` and returns
+/// its label (the heading text). Used by `select_outline_node` to match the
+/// heading against a document block for click-to-scroll.
+fn find_outline_label(nodes: &[WorkspaceTreeNode], id: &str) -> Option<String> {
+    for node in nodes {
+        if node.id == id {
+            return Some(node.label.clone());
+        }
+        if let Some(found) = find_outline_label(&node.children, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn is_outline_node_id(id: &str) -> bool {

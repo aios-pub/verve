@@ -9,6 +9,7 @@ view:
   ssh: SSH 管理
   hosts: Hosts 编辑器
   notes: 记事本
+  markdown_editor: Markdown 编辑器
   json_format: JSON 格式化
   pdf_editor: PDF 编辑器
 
@@ -324,3 +325,14 @@ admin:
   create_ok: 创建成功，刷新页面查看
   create_fail: 创建失败
   confirm_delete: 确认删除？此操作不可撤销。
+
+markdown:
+  new: 新建
+  open: 打开
+  browse: 浏览文件...
+  save: 保存
+  save_as: 另存为
+  outline: 大纲
+  export_html: 导出 HTML
+  export_pdf: 导出 PDF
+  no_recent: 没有最近文件

@@ -13,7 +13,7 @@ mod pdf;
 
 /// Export target selected from the app menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExportFormat {
+pub enum ExportFormat {
     /// Full HTML document with embedded theme CSS.
     Html,
     /// PDF bytes rendered from the themed HTML document.

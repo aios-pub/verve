@@ -14,6 +14,7 @@ pub mod k8s_cluster_dialog;
 pub mod k8s_panel;
 pub mod kv_manager_view;
 pub mod kv_table;
+pub mod markdown_panel;
 pub mod method_colors;
 pub mod mock_console_panel;
 pub mod notes_panel;

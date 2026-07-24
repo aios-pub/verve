@@ -202,7 +202,7 @@ impl Editor {
         .detach();
     }
 
-    pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(path) = self.file_path.clone() {
             let should_close_after_save = self.pending_close_after_save;
             if self.save_to_existing_path(&path, window, cx) {
@@ -218,7 +218,7 @@ impl Editor {
         self.save_document_via_prompt(window, cx);
     }
 
-    pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_document_via_prompt(window, cx);
     }
 }

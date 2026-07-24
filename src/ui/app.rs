@@ -35,6 +35,7 @@ use crate::ui::docker_panel::DockerPanel;
 use crate::ui::hosts_panel::HostsPanel;
 use crate::ui::json_panel::JsonPanel;
 use crate::ui::k8s_panel::{K8sPanel, View as K8sView};
+use crate::ui::markdown_panel::MarkdownPanel;
 use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::notes_panel::NotesPanel;
 use crate::ui::pdf_panel::PdfPanel;
@@ -78,6 +79,8 @@ pub struct VerveApp {
     pub hosts: Entity<HostsPanel>,
     /// Notepad panel with markdown preview.
     pub notes: Entity<NotesPanel>,
+    /// Standalone WYSIWYG Markdown file editor panel.
+    pub markdown: Entity<MarkdownPanel>,
     /// JSON formatter / pretty printer panel.
     pub json: Entity<JsonPanel>,
     /// PDF viewer / editor panel.
@@ -232,6 +235,8 @@ pub enum SideView {
     Hosts,
     /// Notepad with markdown rendering.
     Notes,
+    /// Standalone WYSIWYG Markdown file editor.
+    MarkdownEditor,
     /// JSON formatter / pretty printer with collapsible tree.
     JsonFormat,
     /// PDF viewer / editor.
@@ -251,6 +256,7 @@ impl SideView {
         SideView::Docker,
         SideView::Hosts,
         SideView::Notes,
+        SideView::MarkdownEditor,
         SideView::JsonFormat,
         SideView::PdfEditor,
         SideView::Mock,
@@ -274,6 +280,7 @@ impl SideView {
             SideView::Ssh => "Ssh",
             SideView::Hosts => "Hosts",
             SideView::Notes => "Notes",
+            SideView::MarkdownEditor => "MarkdownEditor",
             SideView::JsonFormat => "JsonFormat",
             SideView::PdfEditor => "PdfEditor",
         }
@@ -294,6 +301,7 @@ impl SideView {
             "Ssh" => SideView::Ssh,
             "Hosts" => SideView::Hosts,
             "Notes" => SideView::Notes,
+            "MarkdownEditor" => SideView::MarkdownEditor,
             "JsonFormat" => SideView::JsonFormat,
             "PdfEditor" => SideView::PdfEditor,
             _ => SideView::Api,
@@ -316,6 +324,7 @@ impl SideView {
             SideView::Ssh => rust_i18n::t!("view.ssh").to_string(),
             SideView::Hosts => rust_i18n::t!("view.hosts").to_string(),
             SideView::Notes => rust_i18n::t!("view.notes").to_string(),
+            SideView::MarkdownEditor => rust_i18n::t!("view.markdown_editor").to_string(),
             SideView::JsonFormat => rust_i18n::t!("view.json_format").to_string(),
             SideView::PdfEditor => rust_i18n::t!("view.pdf_editor").to_string(),
         }
@@ -446,6 +455,7 @@ impl VerveApp {
         let docker = cx.new(|cx| DockerPanel::new(window, cx));
         let hosts = cx.new(|cx| HostsPanel::new(state.clone(), window, cx));
         let notes = cx.new(|cx| NotesPanel::new(state.clone(), window, cx));
+        let markdown = cx.new(|cx| MarkdownPanel::new(state.clone(), window, cx));
         let json = cx.new(|cx| JsonPanel::new(window, cx));
         let pdf = cx.new(|cx| PdfPanel::new(window, cx));
 
@@ -521,6 +531,7 @@ impl VerveApp {
             docker,
             hosts,
             notes,
+            markdown,
             json,
             pdf,
             share_server,
@@ -2013,6 +2024,7 @@ impl Render for VerveApp {
             | SideView::Ssh
             | SideView::Hosts
             | SideView::Notes
+            | SideView::MarkdownEditor
             | SideView::JsonFormat
             | SideView::PdfEditor
             | SideView::Mock => {
@@ -2091,6 +2103,7 @@ impl Render for VerveApp {
                 | SideView::Ssh
                 | SideView::Hosts
                 | SideView::Notes
+                | SideView::MarkdownEditor
                 | SideView::JsonFormat
                 | SideView::PdfEditor
         );
@@ -2108,6 +2121,7 @@ impl Render for VerveApp {
                 | SideView::Ssh
                 | SideView::Hosts
                 | SideView::Notes
+                | SideView::MarkdownEditor
                 | SideView::JsonFormat
                 | SideView::PdfEditor
                 | SideView::Mock
@@ -2142,6 +2156,7 @@ impl Render for VerveApp {
                             SideView::Docker => self.docker.clone().into_any_element(),
                             SideView::Hosts => self.hosts.clone().into_any_element(),
                             SideView::Notes => self.notes.clone().into_any_element(),
+                            SideView::MarkdownEditor => self.markdown.clone().into_any_element(),
                             SideView::JsonFormat => self.json.clone().into_any_element(),
                             SideView::PdfEditor => self.pdf.clone().into_any_element(),
                             SideView::Mock => self.mock_console.clone().into_any_element(),
@@ -2254,6 +2269,7 @@ impl VerveApp {
             SideView::Docker => vicon(DOCKER_ICON),
             SideView::Hosts => vicon(SERVER),
             SideView::Notes => vicon(NOTEBOOK),
+            SideView::MarkdownEditor => vicon(DOCS),
             SideView::ProjectManage => vicon(KANBAN),
             SideView::JsonFormat => vicon(BRACES_JSON),
             SideView::PdfEditor => vicon(FILE_PDF),
@@ -2599,6 +2615,7 @@ impl VerveApp {
             SideView::Docker => self.render_docker_title_bar(cx).into_any_element(),
             SideView::K8s => self.render_k8s_title_bar(cx).into_any_element(),
             SideView::Notes => self.render_notes_title_bar(cx).into_any_element(),
+            SideView::MarkdownEditor => self.render_markdown_title_bar(cx).into_any_element(),
             SideView::JsonFormat => self.render_json_title_bar(cx).into_any_element(),
             SideView::PdfEditor => self.render_pdf_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
@@ -4170,6 +4187,280 @@ impl VerveApp {
                     ),
             )
             .child(div().flex_1())
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// Markdown Editor title bar: rail toggle + filename (with dirty marker) +
+    /// New / Open (recent-files popover) / Save / Save-As / Outline / Export.
+    fn render_markdown_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_component::button::ButtonVariants as _;
+        use gpui_component::popover::Popover;
+        use gpui_component::{h_flex, v_flex};
+
+        let theme = cx.theme().clone();
+        let md = self.markdown.clone();
+        let (title, dirty, file_path, outline_open, open_popover, export_popover, recents) = {
+            let r = md.read(cx);
+            (
+                r.title(cx),
+                r.dirty(cx),
+                r.file_path(cx),
+                r.outline_open(cx),
+                r.open_popover_open(),
+                r.export_popover_open(),
+                r.recent_files().to_vec(),
+            )
+        };
+
+        // Button-target clones.
+        let md_new = md.clone();
+        let md_open = md.clone();
+        let md_save = md.clone();
+        let md_save_as = md.clone();
+        let md_outline = md.clone();
+        let md_export_html = md.clone();
+        let md_export_pdf = md.clone();
+        let md_open_pop = md.clone();
+        let md_export_pop = md.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // Icon + filename + dirty marker
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(div().text_color(theme.primary).child(vicon(DOCS)))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(title),
+                            )
+                            .when(dirty, |d| {
+                                d.child(div().text_color(theme.primary).child("●"))
+                            }),
+                    )
+                    .when_some(file_path, |this, path| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .truncate()
+                                .child(path),
+                        )
+                    }),
+            )
+            .child(div().flex_1())
+            // New
+            .child(
+                Button::new("md-title-new")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Plus)
+                    .tooltip(rust_i18n::t!("markdown.new").to_string())
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = md_new.update(cx, |p, cx| p.new_document(cx));
+                    })),
+            )
+            // Open (with recent-files popover)
+            .child(
+                Popover::new("md-open-pop")
+                    .anchor(gpui::Anchor::BottomRight)
+                    .open(open_popover)
+                    .on_open_change(cx.listener(move |_, open: &bool, _, cx| {
+                        let _ = md_open_pop.update(cx, |p, cx| p.set_open_popover(*open, cx));
+                    }))
+                    .trigger(
+                        Button::new("md-title-open")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Folder)
+                            .tooltip(rust_i18n::t!("markdown.open").to_string()),
+                    )
+                    .p(px(4.))
+                    .child({
+                        let md_pick = md_open.clone();
+                        let md_dialog = md_open.clone();
+                        v_flex()
+                            .w(px(260.))
+                            .gap(px(2.))
+                            .child(if recents.is_empty() {
+                                div()
+                                    .px_2()
+                                    .py_2()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(rust_i18n::t!("markdown.no_recent").to_string())
+                                    .into_any_element()
+                            } else {
+                                v_flex()
+                                    .gap(px(2.))
+                                    .children(recents.into_iter().enumerate().map(|(i, p)| {
+                                        let md_pick = md_pick.clone();
+                                        let label = p.display().to_string();
+                                        let path = p.clone();
+                                        div()
+                                            .id(gpui::ElementId::Name(
+                                                format!("md-recent-{i}").into(),
+                                            ))
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(theme.muted))
+                                            .child(div().text_xs().truncate().child(label))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |_, _, _, cx| {
+                                                    let _ = md_pick.update(cx, |panel, cx| {
+                                                        panel.set_open_popover(false, cx);
+                                                        panel.open_path(&path, cx);
+                                                    });
+                                                }),
+                                            )
+                                            .into_any_element()
+                                    }))
+                                    .into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .child(rust_i18n::t!("markdown.browse").to_string()),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, cx| {
+                                            let _ = md_dialog.update(cx, |p, cx| {
+                                                p.set_open_popover(false, cx);
+                                                p.open_file_dialog(cx);
+                                            });
+                                        }),
+                                    ),
+                            )
+                    }),
+            )
+            // Save
+            .child(
+                Button::new("md-title-save")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Check)
+                    .tooltip(rust_i18n::t!("markdown.save").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = md_save.update(cx, |p, cx| p.save(window, cx));
+                    })),
+            )
+            // Save As
+            .child(
+                Button::new("md-title-save-as")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Check)
+                    .tooltip(rust_i18n::t!("markdown.save_as").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = md_save_as.update(cx, |p, cx| p.save_as(window, cx));
+                    })),
+            )
+            // Outline toggle
+            .child(
+                Button::new("md-title-outline")
+                    .small()
+                    .ghost()
+                    .selected(outline_open)
+                    .icon(IconName::PanelLeft)
+                    .tooltip(rust_i18n::t!("markdown.outline").to_string())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
+                    })),
+            )
+            // Export popover (HTML / PDF)
+            .child(
+                Popover::new("md-export-pop")
+                    .anchor(gpui::Anchor::BottomRight)
+                    .open(export_popover)
+                    .on_open_change(cx.listener(move |_, open: &bool, _, cx| {
+                        let _ = md_export_pop.update(cx, |p, cx| p.set_export_popover(*open, cx));
+                    }))
+                    .trigger(
+                        Button::new("md-title-export")
+                            .small()
+                            .ghost()
+                            .icon({
+                                let mut icon = Icon::new(IconName::ExternalLink);
+                                icon = icon.path(EXPORT);
+                                icon
+                            })
+                            .tooltip(rust_i18n::t!("notes.export").to_string()),
+                    )
+                    .p(px(4.))
+                    .child(
+                        v_flex()
+                            .w(px(170.))
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted))
+                                    .child(
+                                        div().text_size(px(12.)).child(
+                                            rust_i18n::t!("markdown.export_html").to_string(),
+                                        ),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, window, cx| {
+                                            let _ = md_export_html
+                                                .update(cx, |p, cx| p.export_html(window, cx));
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted))
+                                    .child(
+                                        div().text_size(px(12.)).child(
+                                            rust_i18n::t!("markdown.export_pdf").to_string(),
+                                        ),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, window, cx| {
+                                            let _ = md_export_pdf
+                                                .update(cx, |p, cx| p.export_pdf(window, cx));
+                                        }),
+                                    ),
+                            ),
+                    ),
+            )
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }

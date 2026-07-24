@@ -45,9 +45,14 @@ pub(crate) fn install_cli_tool(_cx: &mut App) {}
 #[allow(dead_code)]
 pub(crate) fn uninstall_cli_tool(_cx: &mut App) {}
 
-/// No-op: verve tracks recent files in its own project store.
-#[allow(dead_code)]
-pub(crate) fn record_recent_file_from_editor(_path: &Path, _cx: &mut App) {}
+/// Records an opened/saved Markdown file in the recent-files history
+/// (`~/.verve/editor_packs/.history`). Called by the editor's file-drop/open
+/// path so the standalone markdown side-view can surface a "Recent" list.
+pub(crate) fn record_recent_file_from_editor(path: &Path, _cx: &mut App) {
+    if let Err(err) = crate::wysiwyg::config::record_recent_file(path) {
+        eprintln!("failed to record recent markdown file: {err}");
+    }
+}
 
 // Keep the Entity<Editor> import used so the stub compiles cleanly.
 #[allow(dead_code)]

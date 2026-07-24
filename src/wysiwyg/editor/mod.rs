@@ -82,11 +82,17 @@ pub struct Editor {
     pending_window_title_refresh: bool,
     document_dirty: bool,
     file_path: Option<PathBuf>,
-    /// Whether this editor is embedded inside another view (verve's notes
-    /// panel) rather than owning its own window. When true, the editor skips
-    /// all host-window mutations: no close guard, no `set_window_edited`, no
-    /// `set_window_title`, no in-window menu bar. Set via [`Self::embedded`].
-    embedded: bool,
+    /// Whether this editor owns its host window (standalone app mode). When
+    /// true the editor mutates the window: close guard, `set_window_edited`,
+    /// `set_window_title`, save-via-prompt, in-window menu bar. Embedded hosts
+    /// (verve's notes panel, the markdown side-view) set this false. See
+    /// [`Self::embedded`] / [`Self::side_view`].
+    owns_window: bool,
+    /// Whether to render the editor's own UI chrome: the status bar (word
+    /// count, view-mode switch, cursor position) and the workspace drawer
+    /// (outline / file tree). The standalone markdown side-view enables this;
+    /// the notes panel (which has its own header) disables it.
+    show_chrome: bool,
     scroll_handle: ScrollHandle,
     last_scroll_viewport_size: Option<Size<Pixels>>,
     /// Last frame's visible block ids, to detect structural edits so the height
@@ -313,7 +319,8 @@ impl Editor {
             pending_window_title_refresh: false,
             document_dirty: false,
             file_path,
-            embedded: false,
+            owns_window: false,
+            show_chrome: false,
             scroll_handle: ScrollHandle::new(),
             last_scroll_viewport_size: None,
             prev_visible_block_ids: Vec::new(),
@@ -369,13 +376,25 @@ impl Editor {
         editor
     }
 
-    /// Marks this editor as embedded inside another view (e.g. verve's notes
-    /// panel). An embedded editor does NOT mutate its host window: it skips the
-    /// close guard, the window "edited" dot, the window-title sync, and the
-    /// in-window menu bar. Hosts that own their own window chrome (verve) must
-    /// call this right after construction.
+    /// Embeds this editor inside another view that owns its own chrome and
+    /// persistence (verve's notes panel). The editor neither mutates the host
+    /// window nor renders its own status bar / workspace drawer — the host
+    /// provides the surrounding UI.
     pub fn embedded(mut self) -> Self {
-        self.embedded = true;
+        self.owns_window = false;
+        self.show_chrome = false;
+        self
+    }
+
+    /// Embeds this editor as a self-contained side-view (verve's standalone
+    /// markdown editor). The editor does NOT mutate the host window (no close
+    /// guard, no window-title/edited sync) but DOES render its own status bar
+    /// (word count, view-mode switch) and supports the workspace drawer
+    /// (document outline / file tree). The host drives save/open/export via
+    /// the public Editor API.
+    pub fn side_view(mut self) -> Self {
+        self.owns_window = false;
+        self.show_chrome = true;
         self
     }
 
@@ -437,8 +456,47 @@ impl Editor {
     }
 
     /// Returns the active view mode (Rendered WYSIWYG or raw Source).
-    #[allow(dead_code)]
     pub fn view_mode(&self) -> ViewMode {
         self.view_mode
+    }
+
+    /// Whether the document has unsaved edits. Hosts (e.g. the markdown
+    /// side-view title bar) read this to show a dirty marker.
+    pub fn document_dirty(&self) -> bool {
+        self.document_dirty
+    }
+
+    /// The backing file path, if any. `None` for an untitled document. Hosts
+    /// read this to decide Save vs Save-As and to display the filename.
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
+    }
+
+    /// The document title for display: the file stem, or "Untitled" when there
+    /// is no path. Hosts use this for their title bar.
+    pub fn display_title(&self) -> &str {
+        self.file_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+    }
+
+    /// Resets to a blank untitled document (file_path cleared, dirty cleared,
+    /// undo history cleared). Used by the markdown side-view's "New" button.
+    pub fn reset_to_blank(&mut self, cx: &mut Context<Self>) {
+        self.replace_document_from_markdown(String::new(), None, cx);
+    }
+
+    /// Opens a Markdown file: reads it from disk and replaces the document,
+    /// recording it in the recent-files history. Used by the markdown
+    /// side-view's "Open" button and recent-files list.
+    pub fn open_file(&mut self, path: &Path, cx: &mut Context<Self>) -> anyhow::Result<()> {
+        self.replace_document_from_path(path, cx)
+    }
+
+    /// Whether the workspace drawer (outline / file tree) is currently open.
+    pub fn workspace_open(&self) -> bool {
+        self.workspace.is_open
     }
 }

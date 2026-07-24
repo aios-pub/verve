@@ -9,6 +9,7 @@ view:
   ssh: SSH
   hosts: Hosts Editor
   notes: Notepad
+  markdown_editor: Markdown Editor
   json_format: JSON Formatter
   pdf_editor: PDF Editor
 
@@ -324,3 +325,14 @@ admin:
   create_ok: Created successfully, refresh page to view
   create_fail: Create failed
   confirm_delete: Confirm delete? This action cannot be undone.
+
+markdown:
+  new: New
+  open: Open
+  browse: Browse files...
+  save: Save
+  save_as: Save As
+  outline: Outline
+  export_html: Export as HTML
+  export_pdf: Export as PDF
+  no_recent: No recent files

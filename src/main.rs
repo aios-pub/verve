@@ -58,8 +58,12 @@ fn main() {
         // Apply locale early.
         if let Some(locale) = persistence::load_layout().and_then(|l| l.locale) {
             rust_i18n::set_locale(&locale);
+            // Keep the WYSIWYG editor's I18nManager in sync with the persisted
+            // locale (it defaults to the OS-detected language otherwise).
+            verve::wysiwyg::sync::sync_editor_language(&locale, cx);
         } else {
             rust_i18n::set_locale("zh-CN");
+            verve::wysiwyg::sync::sync_editor_language("zh-CN", cx);
         }
 
         // Decide whether to show bootstrap or main app.

@@ -82,6 +82,11 @@ pub struct Editor {
     pending_window_title_refresh: bool,
     document_dirty: bool,
     file_path: Option<PathBuf>,
+    /// Whether this editor is embedded inside another view (verve's notes
+    /// panel) rather than owning its own window. When true, the editor skips
+    /// all host-window mutations: no close guard, no `set_window_edited`, no
+    /// `set_window_title`, no in-window menu bar. Set via [`Self::embedded`].
+    embedded: bool,
     scroll_handle: ScrollHandle,
     last_scroll_viewport_size: Option<Size<Pixels>>,
     /// Last frame's visible block ids, to detect structural edits so the height
@@ -308,6 +313,7 @@ impl Editor {
             pending_window_title_refresh: false,
             document_dirty: false,
             file_path,
+            embedded: false,
             scroll_handle: ScrollHandle::new(),
             last_scroll_viewport_size: None,
             prev_visible_block_ids: Vec::new(),
@@ -361,6 +367,16 @@ impl Editor {
         editor.active_entity_id = editor.pending_focus;
         editor.refresh_stable_document_snapshot(cx);
         editor
+    }
+
+    /// Marks this editor as embedded inside another view (e.g. verve's notes
+    /// panel). An embedded editor does NOT mutate its host window: it skips the
+    /// close guard, the window "edited" dot, the window-title sync, and the
+    /// in-window menu bar. Hosts that own their own window chrome (verve) must
+    /// call this right after construction.
+    pub fn embedded(mut self) -> Self {
+        self.embedded = true;
+        self
     }
 
     // -----------------------------------------------------------------

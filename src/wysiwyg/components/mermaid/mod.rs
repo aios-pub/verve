@@ -6,7 +6,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, anyhow};
-use directories::ProjectDirs;
 
 const SIMPLE_MERMAID_LINE_LIMIT: usize = 8;
 const MERMAID_COMPLEX_TARGET_WIDTH_RATIO: f32 = 0.9;
@@ -501,10 +500,11 @@ fn svg_root_attrs(root_tag: &str) -> Vec<SvgRootAttr> {
 }
 
 fn mermaid_cache_dir() -> anyhow::Result<PathBuf> {
-    let root = ProjectDirs::from("com", "manyougz", "Velotype")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir().join("Velotype"));
-    let dir = root.join("mermaid-svg");
+    // Cache under verve's own data dir so no "Velotype" path leaks onto the
+    // user's filesystem. Falls back to the OS temp dir if unavailable.
+    let root = crate::state::persistence::data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("verve"));
+    let dir = root.join("cache").join("mermaid-svg");
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create Mermaid SVG cache '{}'", dir.display()))?;
     Ok(dir)

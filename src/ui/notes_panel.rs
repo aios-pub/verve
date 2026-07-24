@@ -66,8 +66,9 @@ impl NotesPanel {
         // The WYSIWYG block editor (ported from velotype). Content is loaded as
         // Markdown and edited as rendered blocks; `markdown()` serializes it
         // back out on save.
-        let editor =
-            cx.new(|cx| crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None));
+        let editor = cx.new(|cx| {
+            crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None).embedded()
+        });
 
         let search = cx.new(|cx| {
             let mut input = InputState::new(window, cx);

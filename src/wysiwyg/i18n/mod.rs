@@ -1775,6 +1775,7 @@ fn language_id_for_locale(locale: &str) -> Option<&'static str> {
 }
 
 /// Global singleton that holds the current UI language strings.
+#[derive(Clone)]
 pub struct I18nManager {
     current_language_id: String,
     strings: Arc<I18nStrings>,

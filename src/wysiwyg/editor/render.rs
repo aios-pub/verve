@@ -1494,14 +1494,23 @@ impl Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.install_close_guard(cx, window);
+        // An embedded editor (verve's notes panel) never mutates the host
+        // window: no close guard, no "edited" dot, no window-title sync, no
+        // save-via-prompt, no in-window menu bar. The host owns all of that.
+        if !self.embedded {
+            self.install_close_guard(cx, window);
+        }
         self.apply_pending_focus(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
-        self.sync_pending_save(window, cx);
-        self.sync_pending_save_as(window, cx);
+        if !self.embedded {
+            self.sync_pending_save(window, cx);
+            self.sync_pending_save_as(window, cx);
+        }
         self.sync_pending_open_link(window, cx);
-        self.sync_window_edited_state(window);
+        if !self.embedded {
+            self.sync_window_edited_state(window);
+        }
 
         let viewport_bounds = self.scroll_handle.bounds();
         let viewport_size = viewport_bounds.size;
@@ -1509,15 +1518,23 @@ impl Render for Editor {
 
         let theme = cx.global::<ThemeManager>().current_arc();
         let strings = cx.global::<I18nManager>().strings_arc();
-        self.sync_window_title(window, &strings);
+        if !self.embedded {
+            self.sync_window_title(window, &strings);
+        }
 
         let d = &theme.dimensions;
         let visible_blocks = self.document.visible_blocks().to_vec();
         let editor = cx.entity().downgrade();
-        let has_menus = cx
-            .get_menus()
-            .map(|menus| !menus.is_empty())
-            .unwrap_or(false);
+        // The in-window menu bar is only relevant when the editor owns the
+        // window (standalone). Embedded mode forces has_menus = false so the
+        // menu bar never reserves space.
+        let has_menus = if self.embedded {
+            false
+        } else {
+            cx.get_menus()
+                .map(|menus| !menus.is_empty())
+                .unwrap_or(false)
+        };
         let titlebar_height = custom_titlebar_height(window, d);
         let menu_bar_height =
             in_window_menu_bar_height_for_target_os(std::env::consts::OS, has_menus, d);
@@ -2081,8 +2098,16 @@ impl Render for Editor {
             main_content
         };
         let base = base.child(main_content.child(content_area));
-        let base = if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
-            base.child(status_bar)
+        // The status bar (word count, mode switch, sidebar toggle) belongs to
+        // the standalone app. In embedded mode verve's notes panel provides its
+        // own header/affordances, so the editor's status bar would only add a
+        // misleading sidebar-toggle button that opens an empty workspace drawer.
+        let base = if !self.embedded {
+            if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
+                base.child(status_bar)
+            } else {
+                base
+            }
         } else {
             base
         };

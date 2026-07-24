@@ -196,8 +196,6 @@ tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optiona
 tree-sitter-highlight = { version = "0.26", optional = true }
 # `toml` is needed by config::preferences once the settings layer is ported.
 toml = "1"
-# `directories` for wysiwyg config/theme data dirs.
-directories = "6"
 # JSON Schema generation for GPUI action types (SelectTheme/SelectLanguage/...).
 schemars = "1"
 # `sys-locale` to detect the OS locale for wysiwyg i18n.

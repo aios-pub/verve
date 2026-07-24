@@ -6,7 +6,6 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use anyhow::{Context as _, anyhow};
-use directories::ProjectDirs;
 use gpui::{Hsla, Rgba};
 
 const DISPLAY_MATH_SCALE: f32 = 1.25;
@@ -136,10 +135,12 @@ fn strip_display_indent(line: &str) -> Option<&str> {
 }
 
 fn latex_cache_dir() -> anyhow::Result<PathBuf> {
-    let root = ProjectDirs::from("com", "manyougz", "Velotype")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir().join("Velotype"));
-    let dir = root.join("latex-svg");
+    // Cache under verve's own data dir so no "Velotype" path leaks onto the
+    // user's filesystem. Falls back to the OS temp dir if the data dir is
+    // unavailable.
+    let root = crate::state::persistence::data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("verve"));
+    let dir = root.join("cache").join("latex-svg");
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create LaTeX SVG cache '{}'", dir.display()))?;
     Ok(dir)

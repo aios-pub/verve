@@ -1,12 +1,8 @@
 //! WYSIWYG Markdown block editor, ported from velotype.
 //!
-//! Migration stages:
-//! - **Stage 1** (done): pure-logic markdown syntax models (`components::markdown`)
-//!   and the HTTP client for remote image loading (`net`).
-//! - **Stage 2** (done): theme/i18n/config globals + block runtime + rendering.
-//! - **Stage 3** (current): the `Editor` controller, adapted for embedding.
-//! - Stage 4: integration into the notes panel.
-//! - Stage 5: theme mapping, font alignment, polish.
+//! Embedded inside verve's notes panel. The editor ships its own theme and
+//! i18n globals (they predate gpui-component); the [`sync`] helpers keep them
+//! aligned with verve's `rust-i18n` locale and gpui-component theme mode.
 
 pub mod app_menu;
 pub mod components;
@@ -15,5 +11,6 @@ pub mod editor;
 pub mod export;
 pub mod i18n;
 pub mod net;
+pub mod sync;
 pub mod theme;
 pub mod window_chrome;

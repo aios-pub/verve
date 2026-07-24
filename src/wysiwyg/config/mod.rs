@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
-use directories::ProjectDirs;
 use serde_json::{Map, Value};
 
 pub(crate) mod preferences;
@@ -20,16 +19,18 @@ pub(crate) struct VelotypeConfigDirs {
 }
 
 impl VelotypeConfigDirs {
-    /// Resolves the platform-specific app config directory.
+    /// Resolves the editor's pack directory under verve's own data dir
+    /// (`~/.verve/editor_packs`).
     ///
-    /// GPUI does not currently expose an app config path, so user-imported
-    /// language and theme packs are stored under the OS location returned by
-    /// `directories::ProjectDirs`.
+    /// velotype originally used `directories::ProjectDirs` keyed to the
+    /// "Velotype" identity, which leaked the upstream app's name onto the
+    /// user's filesystem and could collide with a standalone velotype
+    /// install. verve reuses its existing `~/.verve/` layout instead, so all
+    /// editor state lives alongside the rest of verve's data.
     pub(crate) fn from_system() -> anyhow::Result<Self> {
-        let dirs = ProjectDirs::from("com", "manyougz", "Velotype")
-            .context("failed to resolve the Velotype config directory")?;
+        let root = crate::state::persistence::data_dir().context("resolve verve data dir")?;
         Ok(Self {
-            root: dirs.config_dir().to_path_buf(),
+            root: root.join("editor_packs"),
         })
     }
 

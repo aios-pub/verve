@@ -741,23 +741,43 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
     let mut bindings = Vec::new();
     for definition in SHORTCUT_DEFINITIONS {
         // In the embedded verve build, skip window/application-level actions
-        // (context == None: save, new window, open file, quit, close, export,
-        // workspace). verve owns those flows and registering their global
-        // keybindings here would shadow verve's own (e.g. cmd-s, cmd-n, cmd-q,
-        // cmd-w). Only block-scoped editor actions are registered.
-        if definition.context.is_none() {
+        // (context == None) so they don't shadow verve's own global bindings
+        // (cmd-s save, cmd-n new, cmd-q quit, cmd-w close, cmd-o open, ...).
+        // verve owns those flows.
+        //
+        // EXCEPTION: the viewport-scroll actions (PageUp/PageDown/JumpToTop/
+        // JumpToBottom) are also `context: None` in velotype, but they scroll
+        // the editor viewport rather than control the app window, so they must
+        // stay registered. They are re-scoped to the BlockEditor context so
+        // they only fire when the editor is focused.
+        if definition.context.is_none() && !is_viewport_navigation(definition.id) {
             continue;
         }
+        let context = if is_viewport_navigation(definition.id) {
+            BLOCK_CONTEXT
+        } else {
+            definition.context
+        };
         let keys = normalized
             .get(definition.id)
             .cloned()
             .unwrap_or_else(|| default_keys(*definition));
         bindings.extend(
             keys.iter()
-                .map(|key| key_binding_for(definition.command, key, definition.context)),
+                .map(|key| key_binding_for(definition.command, key, context)),
         );
     }
     bindings
+}
+
+/// Whether the given action id is a viewport-scroll command that velotype
+/// scopes globally but which should still be registered (re-scoped to the
+/// BlockEditor context) in the embedded build.
+fn is_viewport_navigation(id: &str) -> bool {
+    matches!(
+        id,
+        "page_up" | "page_down" | "jump_to_top" | "jump_to_bottom"
+    )
 }
 
 pub(crate) fn install_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<String>>) {

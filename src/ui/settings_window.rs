@@ -264,6 +264,10 @@ impl SettingsWindow {
             if let Some(&(code, _)) = LANGUAGES.get(idx.row) {
                 rust_i18n::set_locale(code);
                 Self::save_locale(code);
+                // Keep the WYSIWYG editor's I18nManager in sync so its context
+                // menus / dialogs follow the new language immediately.
+                crate::wysiwyg::sync::sync_editor_language(code, cx);
+                cx.refresh_windows();
                 cx.notify();
             }
         }

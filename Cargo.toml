@@ -1,8 +1,8 @@
 [package]
 name = "verve"
 version = "0.1.0"
-edition = "2021"
-description = "Verve — an offline-first API co-development platform built with gpui-component."
+edition = "2024"
+description = "Verve — an offline-first, one-stop developer workbench built with Rust."
 publish = false
 authors = ["Verve"]
 # Closed-source proprietary software (All Rights Reserved). Source is not distributed.
@@ -18,11 +18,11 @@ version = "0.1.0"
 resources = []
 copyright = "Copyright (c) 2026 Verve. All rights reserved."
 category = "Developer Tool"
-short_description = "API co-development platform"
+short_description = "One-stop developer workbench"
 long_description = """
-Verve is an offline-first API co-development platform with HTTP debugging,
-SSH terminal, document sharing, and git sync — built with Rust + GPUI.
-"""
+Verve is an offline-first, one-stop developer workbench built with Rust —
+unifying API debugging, SSH triage, Docker/K8s log inspection, stress testing,
+mock & capture, notes, hosts, and JSON tools in a single native window."""
 
 # macOS bundle settings
 [package.metadata.bundle.osx]
@@ -50,8 +50,9 @@ assets = [
     ["assets/verve.desktop", "usr/share/applications/verve.desktop", "644"],
 ]
 extended-description = """
-Verve is an offline-first API co-development platform with HTTP debugging,
-SSH terminal, document sharing, and git sync."""
+Verve is an offline-first, one-stop developer workbench built with Rust —
+unifying API debugging, SSH triage, Docker/K8s log inspection, stress testing,
+mock & capture, notes, hosts, and JSON tools in a single native window."""
 
 
 # Windows installer metadata (cargo-wix / cargo-bundle)
@@ -156,6 +157,89 @@ clap = { version = "4", features = ["derive"] }
 # Markdown parser (CommonMark compliant) for the notepad live preview.
 pulldown-cmark = "0.12"
 
+# --- WYSIWYG markdown editor (ported from velotype) -------------------------
+# CSS color parsing for inline HTML style attributes (e.g. <span style="color:#f00">).
+cssparser = "0.37"
+# Grapheme/segmentation for correct caret movement in the block text editor.
+unicode-segmentation = "1.13"
+# base64 decoding for inline HTML data: URLs and embedded images.
+base64 = "0.22"
+# HTML structure validation via tree-sitter (gates semantic HTML rendering vs raw fallback).
+tree-sitter = { version = "0.26", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+# LaTeX math rendering for $$...$$ and $...$ blocks.
+ratex-layout = "0.1.9"
+ratex-parser = "0.1.9"
+ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }
+# Mermaid diagram rendering.
+mermaid-rs-renderer = { version = "0.3.0", default-features = false }
+# Tree-sitter grammar crates for code-block syntax highlighting.
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-md = { version = "0.5", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-php = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+# TOML grammar; published under the `adot-tree-sitter-toml` package name but
+# exposed as the `tree_sitter_toml` crate (matches velotype).
+tree-sitter-toml = { package = "adot-tree-sitter-toml", version = "0.1", optional = true }
+tree-sitter-highlight = { version = "0.26", optional = true }
+# `toml` is needed by config::preferences once the settings layer is ported.
+toml = "1"
+# `directories` for wysiwyg config/theme data dirs.
+directories = "6"
+# JSON Schema generation for GPUI action types (SelectTheme/SelectLanguage/...).
+schemars = "1"
+# `sys-locale` to detect the OS locale for wysiwyg i18n.
+sys-locale = "0.3"
+
+[features]
+default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
+# WYSIWYG block runtime + rendering layer (stage 2+). The pure-logic markdown
+# models in stage 1 compile without it; once the block runtime is wired up the
+# feature is always on.
+wysiwyg-render = []
+# velotype's gpui `test-support`-based integration tests (block/editor). Off
+# by default — verve's zed-fork gpui does not expose the test helpers these
+# rely on; they will be re-ported in stage 5.
+wysiwyg-gpui-tests = []
+code-highlight-core = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
+html-native = ["dep:tree-sitter", "dep:tree-sitter-html"]
+code-highlight-official = [
+    "code-highlight-core",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-json",
+    "dep:tree-sitter-md",
+    "dep:tree-sitter-bash",
+    "dep:tree-sitter-c",
+    "dep:tree-sitter-cpp",
+    "dep:tree-sitter-c-sharp",
+    "dep:tree-sitter-css",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-html",
+    "dep:tree-sitter-java",
+    "dep:tree-sitter-php",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-ruby",
+]
+code-highlight-config = [
+    "code-highlight-core",
+    "dep:tree-sitter-yaml",
+    "dep:tree-sitter-toml",
+]
+
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
@@ -175,6 +259,13 @@ module_inception = "allow"
 type_complexity = "allow"
 too_many_arguments = "allow"
 result_large_err = "allow"
+# The WYSIWYG editor (ported from velotype) uses these patterns intentionally;
+# mirroring velotype's own lint allows keeps the port diff-clean.
+manual_div_ceil = "allow"
+manual_checked_ops = "allow"
+manual_clamp = "allow"
+let_underscore_future = "allow"
+map_identity = "allow"
 
 # rustc dead-code lints: the project has many roadmap features that produce
 # unused-function/field warnings until wired up. Allow at the workspace level.

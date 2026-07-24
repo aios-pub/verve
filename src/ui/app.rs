@@ -4234,7 +4234,6 @@ impl VerveApp {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            .child(self.render_rail_toggle(cx))
             // Icon + filename + dirty marker
             .child(
                 h_flex()
@@ -4383,23 +4382,16 @@ impl VerveApp {
                         let _ = md_save_as.update(cx, |p, cx| p.save_as(window, cx));
                     })),
             )
-            // Outline toggle — same collapse/expand affordance as the API-tree
-            // sidebar toggle (PanelLeft when open, PanelLeftOpen when closed).
+            // Outline toggle — opens the document-outline drawer inside the
+            // editor (headings tree on the left). Distinct from the activity-rail
+            // toggle (which is not shown in this title bar).
             .child(
                 Button::new("md-title-outline")
                     .small()
                     .ghost()
                     .selected(outline_open)
-                    .icon(if outline_open {
-                        IconName::PanelLeft
-                    } else {
-                        IconName::PanelLeftOpen
-                    })
-                    .tooltip(if outline_open {
-                        rust_i18n::t!("markdown.collapse_outline").to_string()
-                    } else {
-                        rust_i18n::t!("markdown.outline").to_string()
-                    })
+                    .icon(IconName::Menu)
+                    .tooltip(rust_i18n::t!("markdown.outline").to_string())
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
                     })),

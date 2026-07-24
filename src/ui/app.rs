@@ -7,7 +7,7 @@ use gpui::{img, *};
 actions!(verve, [SaveWorkspace, NewRequest]);
 use crate::assets::{
     BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
-    K8S as K8S_ICON, KANBAN, NOTEBOOK, REFRESH_CW, SERVER, SHARE,
+    K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
 };
 use gpui_component::Size::Medium;
 use gpui_component::select::{SelectEvent, SelectState};
@@ -2269,7 +2269,7 @@ impl VerveApp {
             SideView::Docker => vicon(DOCKER_ICON),
             SideView::Hosts => vicon(SERVER),
             SideView::Notes => vicon(NOTEBOOK),
-            SideView::MarkdownEditor => vicon(DOCS),
+            SideView::MarkdownEditor => vicon(MARKDOWN),
             SideView::ProjectManage => vicon(KANBAN),
             SideView::JsonFormat => vicon(BRACES_JSON),
             SideView::PdfEditor => vicon(FILE_PDF),
@@ -4366,7 +4366,7 @@ impl VerveApp {
                 Button::new("md-title-save")
                     .small()
                     .ghost()
-                    .icon(IconName::Check)
+                    .icon(Icon::new(IconName::File).path(SAVE))
                     .tooltip(rust_i18n::t!("markdown.save").to_string())
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_save.update(cx, |p, cx| p.save(window, cx));
@@ -4377,20 +4377,29 @@ impl VerveApp {
                 Button::new("md-title-save-as")
                     .small()
                     .ghost()
-                    .icon(IconName::Check)
+                    .icon(Icon::new(IconName::File).path(SAVE_AS))
                     .tooltip(rust_i18n::t!("markdown.save_as").to_string())
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_save_as.update(cx, |p, cx| p.save_as(window, cx));
                     })),
             )
-            // Outline toggle
+            // Outline toggle — same collapse/expand affordance as the API-tree
+            // sidebar toggle (PanelLeft when open, PanelLeftOpen when closed).
             .child(
                 Button::new("md-title-outline")
                     .small()
                     .ghost()
                     .selected(outline_open)
-                    .icon(IconName::PanelLeft)
-                    .tooltip(rust_i18n::t!("markdown.outline").to_string())
+                    .icon(if outline_open {
+                        IconName::PanelLeft
+                    } else {
+                        IconName::PanelLeftOpen
+                    })
+                    .tooltip(if outline_open {
+                        rust_i18n::t!("markdown.collapse_outline").to_string()
+                    } else {
+                        rust_i18n::t!("markdown.outline").to_string()
+                    })
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
                     })),

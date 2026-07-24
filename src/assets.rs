@@ -46,6 +46,9 @@ pub const SERVER: &str = "icons/verve/server.svg";
 pub const NOTEBOOK: &str = "icons/verve/notebook-pen.svg";
 pub const BRACES_JSON: &str = "icons/verve/braces-json.svg";
 pub const FILE_PDF: &str = "icons/verve/file-pdf.svg";
+pub const MARKDOWN: &str = "icons/verve/markdown.svg";
+pub const SAVE: &str = "icons/verve/save.svg";
+pub const SAVE_AS: &str = "icons/verve/save-as.svg";
 
 /// Prefix under which bundled fonts are exposed to gpui's SVG renderer.
 const FONTS_PREFIX: &str = "fonts/";

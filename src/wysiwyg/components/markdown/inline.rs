@@ -578,6 +578,16 @@ impl InlineTextTree {
         self.markdown_offset_map().markdown
     }
 
+    /// Serializes a visible-text range back to canonical Markdown, preserving
+    /// any formatting markers (bold/italic/code/links/...) that fall inside the
+    /// range. Used by copy/cut so that pasting the result round-trips with
+    /// styling intact (the plain `visible_text()` slice would drop all markers).
+    pub fn serialize_markdown_range(&self, range: std::ops::Range<usize>) -> String {
+        let (_, tail) = self.split_at(range.start);
+        let (middle, _) = tail.split_at(range.end.saturating_sub(range.start));
+        middle.serialize_markdown()
+    }
+
     pub(crate) fn markdown_offset_map(&self) -> InlineMarkdownOffsetMap {
         if self.fragments.is_empty() {
             return InlineMarkdownOffsetMap {

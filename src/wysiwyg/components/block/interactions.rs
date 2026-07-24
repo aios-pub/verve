@@ -885,20 +885,32 @@ impl Block {
         self.select_to(self.visible_len(), cx);
     }
 
+    /// Returns the selected range serialized as Markdown (preserving bold /
+    /// italic / code / link markers). Raw/code blocks fall back to the literal
+    /// display text since they have no inline formatting to preserve.
+    pub(crate) fn selected_markdown(&self) -> String {
+        if self.selected_range.is_empty() {
+            return String::new();
+        }
+        if self.uses_raw_text_editing() {
+            self.display_text()[self.selected_range.clone()].to_string()
+        } else {
+            self.record
+                .title
+                .serialize_markdown_range(self.selected_range.clone())
+        }
+    }
+
     pub(crate) fn on_copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.display_text()[self.selected_range.clone()].to_string(),
-            ));
+            cx.write_to_clipboard(ClipboardItem::new_string(self.selected_markdown()));
         }
     }
 
     pub(crate) fn on_cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.display_text()[self.selected_range.clone()].to_string(),
-            ));
+            cx.write_to_clipboard(ClipboardItem::new_string(self.selected_markdown()));
             self.replace_text_in_range(None, "", window, cx);
         }
     }

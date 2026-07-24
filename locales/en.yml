@@ -333,6 +333,7 @@ markdown:
   save: Save
   save_as: Save As
   outline: Outline
+  collapse_outline: Collapse Outline
   export_html: Export as HTML
   export_pdf: Export as PDF
   no_recent: No recent files

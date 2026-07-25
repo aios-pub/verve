@@ -1754,21 +1754,21 @@ impl Editor {
                     cx,
                 );
 
-                let new_quote = Self::new_block(
+                // Break out of the quote into a plain paragraph. Previously the
+                // root-quote branch inserted another empty Quote (so Enter could
+                // never leave a top-level quote) and the nested branch inserted a
+                // paragraph + a fresh quote (re-entering). Both made it impossible
+                // to exit a quote via Enter. Now we always land on a plain
+                // paragraph after the quote.
+                let new_paragraph =
+                    Self::new_block(cx, BlockRecord::paragraph(String::new()));
+                self.document.insert_blocks_at(
+                    parent,
+                    insert_index,
+                    vec![new_paragraph.clone()],
                     cx,
-                    BlockRecord::new(BlockKind::Quote, InlineTextTree::plain(String::new())),
                 );
-                let blocks = if parent.is_none() {
-                    vec![new_quote.clone()]
-                } else {
-                    vec![
-                        Self::new_block(cx, BlockRecord::paragraph(String::new())),
-                        new_quote.clone(),
-                    ]
-                };
-                self.document
-                    .insert_blocks_at(parent, insert_index, blocks, cx);
-                self.focus_block(new_quote.entity_id());
+                self.focus_block(new_paragraph.entity_id());
                 self.normalize_rendered_quote_structure(cx);
                 self.mark_dirty(cx);
                 self.finalize_pending_undo_capture(cx);
@@ -2394,7 +2394,7 @@ mod tests {
     use gpui::{App, AppContext, Entity, TestAppContext};
 
     #[gpui::test]
-    async fn request_quote_break_creates_new_root_leaf_quote_group(cx: &mut TestAppContext) {
+    async fn request_quote_break_exits_to_paragraph(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| Editor::from_markdown(cx, "> first".to_string(), None));
 
         editor.update(cx, |editor, cx| {
@@ -2405,10 +2405,11 @@ mod tests {
             assert_eq!(visible.len(), 2);
             assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Quote);
             assert_eq!(visible[0].entity.read(cx).display_text(), "first");
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Quote);
+            // Breaking out of a quote lands on a plain paragraph, not another quote.
+            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
             assert_eq!(visible[1].entity.read(cx).display_text(), "");
-            assert_eq!(visible[1].entity.read(cx).quote_depth, 1);
-            assert_eq!(editor.document.markdown_text(cx), "> first\n\n> ");
+            assert_eq!(visible[1].entity.read(cx).quote_depth, 0);
+            assert_eq!(editor.document.markdown_text(cx), "> first\n");
             assert_eq!(editor.pending_focus, Some(visible[1].entity.entity_id()));
         });
     }
@@ -4346,7 +4347,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn request_quote_break_creates_nested_leaf_quote_group(cx: &mut TestAppContext) {
+    async fn request_quote_break_exits_nested_quote_to_paragraph(cx: &mut TestAppContext) {
         let editor = cx.new(|cx| Editor::from_markdown(cx, "> outer\n>> inner".to_string(), None));
 
         editor.update(cx, |editor, cx| {
@@ -4354,23 +4355,21 @@ mod tests {
             editor.on_block_event(nested_quote, &BlockEvent::RequestQuoteBreak, cx);
 
             let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 4);
+            assert_eq!(visible.len(), 3);
             assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Quote);
             assert_eq!(visible[0].entity.read(cx).display_text(), "outer");
             assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Quote);
             assert_eq!(visible[1].entity.read(cx).display_text(), "inner");
             assert_eq!(visible[1].entity.read(cx).quote_depth, 2);
+            // Breaking out of the nested quote lands on a plain paragraph.
             assert_eq!(visible[2].entity.read(cx).kind(), BlockKind::Paragraph);
             assert_eq!(visible[2].entity.read(cx).display_text(), "");
-            assert_eq!(visible[2].entity.read(cx).quote_depth, 1);
-            assert_eq!(visible[3].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[3].entity.read(cx).display_text(), "");
-            assert_eq!(visible[3].entity.read(cx).quote_depth, 2);
+            assert_eq!(visible[2].entity.read(cx).quote_depth, 0);
             assert_eq!(
                 editor.document.markdown_text(cx),
-                "> outer\n> > inner\n> \n> > "
+                "> outer\n> > inner\n"
             );
-            assert_eq!(editor.pending_focus, Some(visible[3].entity.entity_id()));
+            assert_eq!(editor.pending_focus, Some(visible[2].entity.entity_id()));
         });
     }
 

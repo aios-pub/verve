@@ -349,6 +349,10 @@ markdown:
 toolbar:
   paragraph: Paragraph
   format: Format
+  bold: Bold
+  italic: Italic
+  underline: Underline
+  strikethrough: Strikethrough
   heading_4: Heading 4
   heading_5: Heading 5
   heading_6: Heading 6

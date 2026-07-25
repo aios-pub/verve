@@ -349,6 +349,10 @@ markdown:
 toolbar:
   paragraph: 段落
   format: 格式
+  bold: 加粗
+  italic: 斜体
+  underline: 下划线
+  strikethrough: 删除线
   heading_4: 四级标题
   heading_5: 五级标题
   heading_6: 六级标题

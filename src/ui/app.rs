@@ -2984,6 +2984,11 @@ impl VerveApp {
 
         let style = &snap.style;
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
+            (rust_i18n::t!("toolbar.bold").to_string(), style.bold, command_keycap(ShortcutCommand::BoldSelection), false, ToolbarAction::Bold),
+            (rust_i18n::t!("toolbar.italic").to_string(), style.italic, command_keycap(ShortcutCommand::ItalicSelection), false, ToolbarAction::Italic),
+            (rust_i18n::t!("toolbar.underline").to_string(), style.underline, command_keycap(ShortcutCommand::UnderlineSelection), false, ToolbarAction::Underline),
+            (rust_i18n::t!("toolbar.strikethrough").to_string(), style.strikethrough, command_keycap(ShortcutCommand::StrikethroughSelection), false, ToolbarAction::Strikethrough),
+            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
             (rust_i18n::t!("toolbar.superscript").to_string(), style.script == InlineScript::Superscript, None, false, ToolbarAction::Superscript),
             (rust_i18n::t!("toolbar.subscript").to_string(), style.script == InlineScript::Subscript, None, false, ToolbarAction::Subscript),
             (rust_i18n::t!("toolbar.highlight").to_string(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),

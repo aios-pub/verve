@@ -26,6 +26,8 @@ pub struct NotesPanel {
     state: Entity<AppState>,
     store: NotesStore,
     editor: Entity<crate::wysiwyg::editor::Editor>,
+    /// Resizable state for the left note-list sidebar width.
+    sidebar_resize: Entity<gpui_component::resizable::ResizableState>,
     search: Entity<InputState>,
     title_input: Entity<InputState>,
     editing_title_id: Option<String>,
@@ -98,6 +100,7 @@ impl NotesPanel {
             state,
             store,
             editor,
+            sidebar_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             search,
             title_input,
             tree,
@@ -639,7 +642,6 @@ impl NotesPanel {
         let view = cx.entity().clone();
 
         v_flex()
-            .w(px(260.))
             .h_full()
             .flex_shrink_0()
             .border_r_1()
@@ -1391,7 +1393,37 @@ impl Render for NotesPanel {
                 h_flex()
                     .w_full()
                     .h_full()
-                    .when(!self.list_collapsed, |h| h.child(self.render_note_list(cx)))
+                    .when(!self.list_collapsed, |h| {
+                        // Resizable left note-list sidebar.
+                        let saved = crate::state::persistence::load_layout()
+                            .and_then(|l| l.side_widths)
+                            .and_then(|w| w.first().copied())
+                            .filter(|&w| w > 0.0)
+                            .map(gpui::px)
+                            .unwrap_or_else(|| gpui::px(260.));
+                        let state = self.sidebar_resize.clone();
+                        h.child(
+                            gpui_component::resizable::h_resizable("notes-sidebar")
+                                .with_state(&state)
+                                .on_resize(|state, _, cx| {
+                                    let sizes = state.read(cx).sizes();
+                                    if let Some(w) = sizes.first() {
+                                        let mut layout =
+                                            crate::state::persistence::load_layout().unwrap_or_default();
+                                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                                        arr[0] = w.as_f32();
+                                        layout.side_widths = Some(arr);
+                                        let _ = crate::state::persistence::save_layout(&layout);
+                                    }
+                                })
+                                .child(
+                                    gpui_component::resizable::resizable_panel()
+                                        .size(saved)
+                                        .size_range(gpui::px(180.)..gpui::px(520.))
+                                        .child(self.render_note_list(cx)),
+                                ),
+                        )
+                    })
                     .when(self.list_collapsed, |h| {
                         // Collapsed: show a thin vertical strip with an expand button.
                         h.child(

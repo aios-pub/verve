@@ -316,6 +316,13 @@ pub struct PanelLayout {
     /// Whether the notes panel's left-side note tree is collapsed.
     #[serde(default)]
     pub notes_collapsed: bool,
+    /// Left-sidebar widths (px) for panels with a fixed left tree/list:
+    /// [notes, autotest, stress]. Each is optional so absent = panel default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_widths: Option<[f32; 3]>,
+    /// Workspace-drawer (outline) width (px) for the markdown editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_drawer_width: Option<f32>,
     /// Custom WYSIWYG editor keyboard shortcuts, keyed by shortcut id (e.g.
     /// "bold_selection") → list of key strings (e.g. ["cmd-b", "ctrl-b"]).
     /// Applied at startup via `init_with_keybindings`. Absent = use defaults.

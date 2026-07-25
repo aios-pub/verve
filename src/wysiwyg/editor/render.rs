@@ -6,13 +6,17 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 use gpui_component::ActiveTheme as _;
+use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::ButtonVariants as _;
 
 use super::{Editor, InfoDialogKind, workspace::workspace_panel_width_for_viewport};
 use crate::wysiwyg::app_menu::dispatch_menu_action_for_editor;
 use crate::wysiwyg::components::CalloutVariant;
-use crate::wysiwyg::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
+use crate::wysiwyg::components::{
+    AddLanguageConfig, AddThemeConfig, Block, DismissTransientUi, Find, FindNext, FindPrevious,
+    NoRecentFiles,
+};
 use crate::wysiwyg::i18n::{I18nManager, I18nStrings};
 use crate::wysiwyg::theme::{Theme, ThemeDimensions, ThemeManager};
 use crate::wysiwyg::window_chrome::{custom_titlebar_height, render_custom_titlebar};
@@ -1493,6 +1497,96 @@ impl Editor {
                     ),
             )
     }
+
+    /// Top-right find bar overlay (Cmd/Ctrl+F). Shows the query input, a
+    /// `n/total` match counter, prev/next buttons, and a close button. The bar
+    /// carries the `EditorFindBar` key context so FindNext/FindPrevious
+    /// bindings fire while the query field is focused.
+    fn render_find_bar(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use gpui_component::h_flex;
+        use gpui_component::input::Input;
+        use gpui_component::button::Button;
+
+        let state = self.find_state.as_ref()?;
+        let c = &theme.colors;
+        let total = state.matches.len();
+        let current_label = if total == 0 {
+            "0/0".to_string()
+        } else {
+            format!("{}/{}", state.current + 1, total)
+        };
+        let input = state.input.clone();
+
+        Some(
+            div()
+                .id("editor-find-bar")
+                .absolute()
+                .top(px(8.))
+                .right(px(16.))
+                .occlude()
+                // Scope FindNext/FindPrevious bindings to the bar while focused.
+                .key_context("EditorFindBar")
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .pl(px(8.))
+                .pr(px(4.))
+                .py(px(4.))
+                .rounded(px(6.))
+                .border(px(1.))
+                .border_color(c.dialog_border)
+                .bg(c.dialog_surface)
+                .child(
+                    h_flex()
+                        .w(px(220.))
+                        .child(Input::new(&input).small()),
+                )
+                .child(
+                    div()
+                        .min_w(px(40.))
+                        .text_size(px(12.))
+                        .text_color(c.dialog_body)
+                        .child(current_label),
+                )
+                .child(
+                    Button::new("find-prev")
+                        .small()
+                        .ghost()
+                        .label("↑")
+                        .disabled(total == 0)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_find_previous(&FindPrevious, window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("find-next")
+                        .small()
+                        .ghost()
+                        .label("↓")
+                        .disabled(total == 0)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_find_next(&FindNext, window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("find-close")
+                        .small()
+                        .ghost()
+                        .label("×")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.close_find_bar(window, cx);
+                        })),
+                )
+                .on_action(cx.listener(|this, _: &DismissTransientUi, window, cx| {
+                    this.close_find_bar(window, cx);
+                }))
+                .into_any_element(),
+        )
+    }
 }
 
 impl Render for Editor {
@@ -2042,6 +2136,9 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_insert_horizontal_rule))
             .on_action(cx.listener(Self::on_insert_table))
             .on_action(cx.listener(Self::on_insert_image))
+            .on_action(cx.listener(Self::on_find))
+            .on_action(cx.listener(Self::on_find_next))
+            .on_action(cx.listener(Self::on_find_previous))
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))
@@ -2169,6 +2266,11 @@ impl Render for Editor {
         };
         let base = if let Some(table_dialog) = self.render_table_insert_dialog_overlay(&theme, cx) {
             base.child(table_dialog)
+        } else {
+            base
+        };
+        let base = if let Some(find_bar) = self.render_find_bar(&theme, cx) {
+            base.child(find_bar)
         } else {
             base
         };

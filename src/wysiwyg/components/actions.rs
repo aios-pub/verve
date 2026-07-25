@@ -70,6 +70,9 @@ actions!(
         InsertImage,
         InsertHorizontalRule,
         InsertTable,
+        Find,
+        FindNext,
+        FindPrevious,
         SaveDocument,
         NewWindow,
         OpenFile,
@@ -191,6 +194,9 @@ pub enum ShortcutCommand {
     InsertImage,
     InsertHorizontalRule,
     InsertTable,
+    Find,
+    FindNext,
+    FindPrevious,
     SaveDocument,
     SaveDocumentAs,
     NewWindow,
@@ -212,6 +218,10 @@ pub struct ShortcutDefinition {
 }
 
 const BLOCK_CONTEXT: Option<&str> = Some("BlockEditor");
+/// Key context active while the in-editor find bar holds focus. Find-next /
+/// find-previous bindings live here so Enter / arrow keys inside the search
+/// field can drive navigation without conflicting with block editing.
+const FIND_BAR_CONTEXT: Option<&str> = Some("EditorFindBar");
 const SELECT_ALL_ID: &str = "select_all";
 const LEGACY_SELECT_ALL_IDS: &[&str] = &[
     "select_all_source_text",
@@ -629,6 +639,29 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::Find,
+        id: "find",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-f", "ctrl-f"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FindNext,
+        id: "find_next",
+        category: ShortcutCategory::Edit,
+        // Cmd-G on macOS, F3 elsewhere; both fire only while the find bar
+        // holds focus (EditorFindBar context).
+        default_keys: &["cmd-g", "f3"],
+        context: FIND_BAR_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FindPrevious,
+        id: "find_previous",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-shift-g", "shift-f3"],
+        context: FIND_BAR_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::SaveDocument,
         id: "save_document",
         category: ShortcutCategory::File,
@@ -757,6 +790,9 @@ pub fn shortcut_label(id: &str) -> &'static str {
         "insert_image" => "Insert image",
         "insert_horizontal_rule" => "Horizontal rule",
         "insert_table" => "Insert table",
+        "find" => "Find",
+        "find_next" => "Find next",
+        "find_previous" => "Find previous",
         "toggle_view_mode" => "Toggle Rendered / Source",
         "toggle_workspace" => "Toggle outline drawer",
         _ => "",
@@ -995,6 +1031,9 @@ fn key_binding_for(
             KeyBinding::new(key, InsertHorizontalRule, context)
         }
         ShortcutCommand::InsertTable => KeyBinding::new(key, InsertTable, context),
+        ShortcutCommand::Find => KeyBinding::new(key, Find, context),
+        ShortcutCommand::FindNext => KeyBinding::new(key, FindNext, context),
+        ShortcutCommand::FindPrevious => KeyBinding::new(key, FindPrevious, context),
         ShortcutCommand::SaveDocument => KeyBinding::new(key, SaveDocument, context),
         ShortcutCommand::SaveDocumentAs => KeyBinding::new(key, SaveDocumentAs, context),
         ShortcutCommand::NewWindow => KeyBinding::new(key, NewWindow, context),

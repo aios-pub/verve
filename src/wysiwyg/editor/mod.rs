@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use gpui::*;
 
 use self::context_menu::{ContextMenuState, TableInsertDialogState};
+use self::find::FindState;
 use self::tree::DocumentTree;
 use crate::wysiwyg::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
@@ -28,6 +29,7 @@ mod context_menu;
 mod document;
 mod events;
 mod export;
+mod find;
 mod file_drop;
 mod history;
 mod persistence;
@@ -128,6 +130,8 @@ pub struct Editor {
     status_bar: StatusBarState,
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
+    /// Open in-editor find bar (Cmd/Ctrl+F). `None` when the bar is closed.
+    find_state: Option<FindState>,
     context_menu_submenu_close_task: Option<Task<()>>,
     table_axis_preview: Option<TableAxisSelection>,
     table_axis_selection: Option<TableAxisSelection>,
@@ -344,6 +348,7 @@ impl Editor {
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,
+            find_state: None,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,

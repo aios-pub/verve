@@ -2790,6 +2790,52 @@ impl VerveApp {
         }
         bar = bar.child(toolbar_divider(&theme));
 
+        // Additional flat buttons: ordered list, bullet list, quote, code block,
+        // table, image, clear formatting. Short text labels (no fitting icons in
+        // the asset set) — same shape as the heading/format buttons.
+        let flat_buttons: [(&str, ToolbarAction); 7] = [
+            ("1.", ToolbarAction::NumberedList),
+            ("•", ToolbarAction::BulletedList),
+            ("\"", ToolbarAction::Quote),
+            ("</>", ToolbarAction::CodeBlock),
+            ("Tbl", ToolbarAction::InsertTable),
+            ("Img", ToolbarAction::InsertImage),
+            ("Clr", ToolbarAction::ClearFormatting),
+        ];
+        let block_kind = &snap.block_kind;
+        let flat_active = |a: &ToolbarAction| match a {
+            ToolbarAction::NumberedList => matches!(block_kind, Some(BlockKindSnapshot::NumberedList)),
+            ToolbarAction::BulletedList => matches!(block_kind, Some(BlockKindSnapshot::BulletedList)),
+            ToolbarAction::Quote => matches!(block_kind, Some(BlockKindSnapshot::Quote)),
+            ToolbarAction::CodeBlock => matches!(block_kind, Some(BlockKindSnapshot::CodeBlock)),
+            _ => false,
+        };
+        for (glyph, action) in flat_buttons {
+            let active = flat_active(&action);
+            let ed = editor.clone();
+            bar = bar.child(
+                div()
+                    .id(ElementId::Name(format!("tb-flat-{glyph}").into()))
+                    .px(px(6.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .hover(|t| t.bg(hover_bg))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .text_color(if active { active_fg } else { idle_fg })
+                    .child(glyph.to_string())
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        let _ = ed.update(cx, |e, cx| e.toolbar_apply(action.clone(), w, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        bar = bar.child(toolbar_divider(&theme));
+
         // Paragraph / Format dropdown triggers
         for (label, dropdown) in [
             (rust_i18n::t!("toolbar.paragraph").to_string(), ToolbarDropdown::Paragraph),
@@ -2813,9 +2859,12 @@ impl VerveApp {
                     .text_color(idle_fg)
                     .child(label.to_string())
                     .child(div().text_size(px(10.)).child(if is_open { "▲" } else { "▼" }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = ed.update(cx, |e, cx| e.toolbar_toggle_dropdown(dropdown, cx));
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        let _ = ed.update(cx, |e, cx| {
+                            e.toolbar_toggle_dropdown(dropdown, f32::from(event.position.x), cx)
+                        });
                         cx.notify();
+                        cx.stop_propagation();
                     })),
             );
         }
@@ -2838,6 +2887,7 @@ impl VerveApp {
         let theme = cx.theme().clone();
         let snap = editor.read(cx).toolbar_snapshot(cx);
         let open = editor.read(cx).toolbar_open_dropdown()?;
+        let anchor_x = editor.read(cx).dropdown_anchor_x().unwrap_or(260.0);
         let panel = match open {
             ToolbarDropdown::Paragraph => self.render_paragraph_panel(editor, &snap, &theme, cx),
             ToolbarDropdown::Format => self.render_format_panel(editor, &snap, &theme, cx),
@@ -2858,13 +2908,12 @@ impl VerveApp {
                         let _ = ed.update(cx, |e, cx| e.close_toolbar_dropdown(cx));
                     }),
                 )
-                // Anchor the panel just under the title bar, left-aligned with
-                // the toolbar (approx where the dropdown trigger sits).
+                // Anchor the panel just under the title bar, beneath the trigger.
                 .child(
                     div()
                         .absolute()
                         .top(px(40.))
-                        .left(px(260.))
+                        .left(px(anchor_x))
                         .child(panel),
                 )
                 .into_any_element(),
@@ -2897,9 +2946,6 @@ impl VerveApp {
             (rust_i18n::t!("toolbar.heading_5").to_string(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
             (rust_i18n::t!("toolbar.heading_6").to_string(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // separator marker
-            (rust_i18n::t!("toolbar.promote_heading").to_string(), false, None, level.is_none() || level == Some(1), ToolbarAction::PromoteHeading),
-            (rust_i18n::t!("toolbar.demote_heading").to_string(), false, None, level.is_none() || level == Some(6), ToolbarAction::DemoteHeading),
-            ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
             (rust_i18n::t!("toolbar.table").to_string(), false, command_keycap(ShortcutCommand::InsertTable), false, ToolbarAction::InsertTable),
             (rust_i18n::t!("toolbar.code_fences").to_string(), matches!(kind, Some(BlockKindSnapshot::CodeBlock)), command_keycap(ShortcutCommand::ConvertToCodeBlock), false, ToolbarAction::CodeBlock),
             (rust_i18n::t!("toolbar.quote_block").to_string(), matches!(kind, Some(BlockKindSnapshot::Quote)), command_keycap(ShortcutCommand::ConvertToQuote), false, ToolbarAction::Quote),
@@ -2909,7 +2955,6 @@ impl VerveApp {
             (rust_i18n::t!("toolbar.ordered_list").to_string(), matches!(kind, Some(BlockKindSnapshot::NumberedList)), command_keycap(ShortcutCommand::ConvertToNumberedList), false, ToolbarAction::NumberedList),
             (rust_i18n::t!("toolbar.bullet_list").to_string(), matches!(kind, Some(BlockKindSnapshot::BulletedList)), command_keycap(ShortcutCommand::ConvertToBulletedList), false, ToolbarAction::BulletedList),
             (rust_i18n::t!("toolbar.task_list").to_string(), matches!(kind, Some(BlockKindSnapshot::TaskList)), command_keycap(ShortcutCommand::ConvertToTaskList), false, ToolbarAction::TaskList),
-            (rust_i18n::t!("toolbar.loose_list_item").to_string(), false, None, true, ToolbarAction::Paragraph), // disabled placeholder
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
             (rust_i18n::t!("toolbar.paragraph_restore").to_string(), matches!(kind, Some(BlockKindSnapshot::Paragraph)), command_keycap(ShortcutCommand::ConvertToParagraph), false, ToolbarAction::Paragraph),
             (rust_i18n::t!("toolbar.horizontal_rule").to_string(), matches!(kind, Some(BlockKindSnapshot::Separator)), command_keycap(ShortcutCommand::InsertHorizontalRule), false, ToolbarAction::InsertHorizontalRule),

@@ -23,11 +23,17 @@ pub enum ToolbarDropdown {
 /// re-renders and stays co-located with the editing state.
 pub struct ToolbarState {
     pub open_dropdown: Option<ToolbarDropdown>,
+    /// Window-space x of the dropdown trigger's click, used to anchor the
+    /// floating panel horizontally so it appears under the trigger.
+    pub dropdown_anchor_x: Option<f32>,
 }
 
 impl ToolbarState {
     pub fn new() -> Self {
-        Self { open_dropdown: None }
+        Self {
+            open_dropdown: None,
+            dropdown_anchor_x: None,
+        }
     }
 }
 
@@ -222,19 +228,34 @@ impl Editor {
         }
     }
 
-    pub fn toolbar_toggle_dropdown(&mut self, dropdown: ToolbarDropdown, cx: &mut Context<Self>) {
-        self.toolbar.open_dropdown = if self.toolbar.open_dropdown == Some(dropdown) {
-            None
+    /// Toggle a dropdown open/closed, recording the trigger's window-space x so
+    /// the floating panel can be anchored beneath it.
+    pub fn toolbar_toggle_dropdown(
+        &mut self,
+        dropdown: ToolbarDropdown,
+        anchor_x: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if self.toolbar.open_dropdown == Some(dropdown) {
+            self.toolbar.open_dropdown = None;
+            self.toolbar.dropdown_anchor_x = None;
         } else {
-            Some(dropdown)
-        };
+            self.toolbar.open_dropdown = Some(dropdown);
+            self.toolbar.dropdown_anchor_x = Some(anchor_x);
+        }
         cx.notify();
+    }
+
+    /// Window-space x where the open dropdown's trigger was clicked, if any.
+    pub fn dropdown_anchor_x(&self) -> Option<f32> {
+        self.toolbar.dropdown_anchor_x
     }
 
     /// Close any open dropdown (called after an action fires, or by the
     /// dropdown's outside-click overlay).
     pub fn close_toolbar_dropdown(&mut self, cx: &mut Context<Self>) {
         if self.toolbar.open_dropdown.take().is_some() {
+            self.toolbar.dropdown_anchor_x = None;
             cx.notify();
         }
     }

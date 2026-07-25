@@ -2306,6 +2306,22 @@ impl Block {
         }
     }
 
+    /// Whether the caret sits on an empty line within the block's visible text
+    /// (a line bounded by newlines, or by the text start/end). Used by the
+    /// quote Enter handler to decide whether to break out of the quote.
+    pub(crate) fn cursor_on_empty_quote_line(&self) -> bool {
+        let text = self.display_text();
+        let cursor = self.cursor_offset().min(text.len());
+        // The line's start is just after the preceding '\n' (or 0).
+        let line_start = text[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        // The line's end is the next '\n' (or text len).
+        let line_end = text[cursor..]
+            .find('\n')
+            .map(|i| cursor + i)
+            .unwrap_or(text.len());
+        text[line_start..line_end].trim().is_empty()
+    }
+
     pub(crate) fn end_pointer_selection_session(&mut self) -> bool {
         let changed = self.is_selecting || self.code_language_is_selecting;
         self.is_selecting = false;

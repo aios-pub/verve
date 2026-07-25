@@ -369,6 +369,15 @@ impl Block {
         }
 
         if self.kind() == BlockKind::Quote {
+            // "Enter on an empty quote line exits the quote": if the caret sits
+            // on an empty line (newline-or-start before it, newline-or-end after
+            // it), pressing Enter breaks out to a paragraph instead of appending
+            // yet another blank line. This is the standard Typora/Obsidian
+            // behavior and stops quotes from growing unbounded on Enter.
+            if self.selected_range.is_empty() && self.cursor_on_empty_quote_line() {
+                cx.emit(BlockEvent::RequestQuoteBreak);
+                return;
+            }
             if !self.selected_range.is_empty() {
                 self.replace_text_in_range(None, "", window, cx);
             }

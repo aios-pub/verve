@@ -50,6 +50,8 @@ actions!(
         UnderlineSelection,
         StrikethroughSelection,
         HighlightSelection,
+        SuperscriptSelection,
+        SubscriptSelection,
         CodeSelection,
         IndentBlock,
         OutdentBlock,
@@ -177,6 +179,8 @@ pub enum ShortcutCommand {
     UnderlineSelection,
     StrikethroughSelection,
     HighlightSelection,
+    SuperscriptSelection,
+    SubscriptSelection,
     CodeSelection,
     IndentBlock,
     OutdentBlock,
@@ -505,10 +509,24 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::SuperscriptSelection,
+        id: "superscript_selection",
+        category: ShortcutCategory::Markdown,
+        default_keys: &["cmd-shift-.", "ctrl-shift-."],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SubscriptSelection,
+        id: "subscript_selection",
+        category: ShortcutCategory::Markdown,
+        default_keys: &["cmd-shift-,", "ctrl-shift-,"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::CodeSelection,
         id: "code_selection",
         category: ShortcutCategory::Markdown,
-        default_keys: &["cmd-`", "ctrl-`"],
+        default_keys: &["cmd-e", "ctrl-e"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
@@ -806,6 +824,8 @@ pub fn shortcut_label(id: &str) -> &'static str {
         "underline_selection" => "Underline",
         "strikethrough_selection" => "Strikethrough",
         "highlight_selection" => "Highlight",
+        "superscript_selection" => "Superscript",
+        "subscript_selection" => "Subscript",
         "code_selection" => "Inline code",
         "indent_block" => "Indent / nest",
         "outdent_block" => "Outdent / unnest",
@@ -1044,6 +1064,10 @@ fn key_binding_for(
             KeyBinding::new(key, StrikethroughSelection, context)
         }
         ShortcutCommand::HighlightSelection => KeyBinding::new(key, HighlightSelection, context),
+        ShortcutCommand::SuperscriptSelection => {
+            KeyBinding::new(key, SuperscriptSelection, context)
+        }
+        ShortcutCommand::SubscriptSelection => KeyBinding::new(key, SubscriptSelection, context),
         ShortcutCommand::CodeSelection => KeyBinding::new(key, CodeSelection, context),
         ShortcutCommand::IndentBlock => KeyBinding::new(key, IndentBlock, context),
         ShortcutCommand::OutdentBlock => KeyBinding::new(key, OutdentBlock, context),

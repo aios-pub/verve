@@ -2992,8 +2992,8 @@ impl VerveApp {
             (rust_i18n::t!("toolbar.underline").to_string(), style.underline, command_keycap(ShortcutCommand::UnderlineSelection), false, ToolbarAction::Underline),
             (rust_i18n::t!("toolbar.strikethrough").to_string(), style.strikethrough, command_keycap(ShortcutCommand::StrikethroughSelection), false, ToolbarAction::Strikethrough),
             ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            (rust_i18n::t!("toolbar.superscript").to_string(), style.script == InlineScript::Superscript, None, false, ToolbarAction::Superscript),
-            (rust_i18n::t!("toolbar.subscript").to_string(), style.script == InlineScript::Subscript, None, false, ToolbarAction::Subscript),
+            (rust_i18n::t!("toolbar.superscript").to_string(), style.script == InlineScript::Superscript, command_keycap(ShortcutCommand::SuperscriptSelection), false, ToolbarAction::Superscript),
+            (rust_i18n::t!("toolbar.subscript").to_string(), style.script == InlineScript::Subscript, command_keycap(ShortcutCommand::SubscriptSelection), false, ToolbarAction::Subscript),
             (rust_i18n::t!("toolbar.highlight").to_string(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),
             ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
             (rust_i18n::t!("toolbar.inline_code").to_string(), style.code, command_keycap(ShortcutCommand::CodeSelection), false, ToolbarAction::InlineCode),

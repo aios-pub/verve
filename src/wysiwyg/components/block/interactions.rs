@@ -20,8 +20,8 @@ use crate::wysiwyg::components::{
     InsertLink, ItalicSelection, MoveLeft,
     MoveRight, Newline, OutdentBlock, Paste, PastePlainText, SelectAll, SelectEnd, SelectHome,
     SelectLeft,
-    SelectRight, StrikethroughSelection, UnderlineSelection, WordDeleteBack, WordDeleteForward,
-    WordMoveLeft,
+    SelectRight, StrikethroughSelection, SubscriptSelection, SuperscriptSelection,
+    UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft,
     WordMoveRight, WordSelectLeft, WordSelectRight,
 };
 
@@ -1838,6 +1838,24 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         self.toggle_inline_format(InlineFormat::Code, cx);
+    }
+
+    pub(crate) fn on_superscript_selection(
+        &mut self,
+        _: &SuperscriptSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Superscript, cx);
+    }
+
+    pub(crate) fn on_subscript_selection(
+        &mut self,
+        _: &SubscriptSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Subscript, cx);
     }
 
     pub(crate) fn on_insert_link(

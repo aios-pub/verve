@@ -386,6 +386,18 @@ impl Block {
             return;
         }
 
+        // A block nested inside a quote (quote_depth > 0, e.g. a paragraph or
+        // list item living under a Quote container) also exits the quote on
+        // Enter at an empty line — otherwise quotes grow unbounded because the
+        // block's own newline path keeps producing more nested siblings.
+        if self.quote_depth > 0
+            && self.selected_range.is_empty()
+            && self.cursor_on_empty_quote_line()
+        {
+            cx.emit(BlockEvent::RequestQuoteBreak);
+            return;
+        }
+
         if matches!(self.kind(), BlockKind::Callout(_)) {
             cx.emit(BlockEvent::RequestEnterCalloutBody);
             return;

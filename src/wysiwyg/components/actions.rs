@@ -613,7 +613,10 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::ConvertToQuote,
         id: "convert_to_quote",
         category: ShortcutCategory::Markdown,
-        default_keys: &["cmd-shift-q", "ctrl-shift-q"],
+        // Cmd/Ctrl+Shift+Q clashes with the macOS system Shift-Cmd-Q (force
+        // quit / log out). Cmd+Option+Q / Ctrl+Alt+Q avoids that and the app
+        // quit (Cmd+Q) binding.
+        default_keys: &["cmd-alt-q", "ctrl-alt-q"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {

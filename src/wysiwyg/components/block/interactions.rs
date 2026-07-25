@@ -18,7 +18,8 @@ use crate::wysiwyg::components::{
     Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
     Heading2, Heading3, Heading4, Heading5, Heading6, HighlightSelection, Home, IndentBlock,
     InsertLink, ItalicSelection, MoveLeft,
-    MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft,
+    MoveRight, Newline, OutdentBlock, Paste, PastePlainText, SelectAll, SelectEnd, SelectHome,
+    SelectLeft,
     SelectRight, StrikethroughSelection, UnderlineSelection, WordDeleteBack, WordDeleteForward,
     WordMoveLeft,
     WordMoveRight, WordSelectLeft, WordSelectRight,
@@ -1071,6 +1072,52 @@ impl Block {
             self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
             self.replace_text_in_range(None, &text, window, cx);
         }
+    }
+
+    /// Paste clipboard contents as plain text (Cmd/Ctrl+Shift+V).  Unlike
+    /// [`on_paste`], this never interprets Markdown structure (no table/fence
+    /// splitting, no image detection, no block split) and never applies paste
+    /// correction: the raw text is inserted verbatim, with CRLF/CR normalized
+    /// to LF.  Rich-text blocks still re-normalize inline markers as usual.
+    pub(crate) fn on_paste_plain_text(
+        &mut self,
+        _: &PastePlainText,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.kind().is_separator() && !self.uses_raw_text_editing() {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let Some(text) = item.text() else {
+            return;
+        };
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+
+        // A cross-block editor selection routes through the same replace flow
+        // the regular paste uses, just without marking the inserted text.
+        if self.editor_selection_range.is_some() {
+            cx.emit(BlockEvent::RequestReplaceCrossBlockSelection {
+                text: normalized,
+                selected_range_relative: None,
+                mark_inserted_text: false,
+                undo_kind: UndoCaptureKind::NonCoalescible,
+            });
+            return;
+        }
+
+        if self.is_table_cell() {
+            // Tables cannot contain newlines; collapse to spaces like on_paste.
+            let flattened = normalized.replace('\n', " ");
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            self.replace_text_in_range(None, &flattened, window, cx);
+            return;
+        }
+
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.replace_text_in_range(None, &normalized, window, cx);
     }
 
     pub(crate) fn on_code_language_newline(

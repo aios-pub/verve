@@ -10,9 +10,10 @@ use std::ops::Range;
 
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
+use gpui::EntityInputHandler as _;
 
 use super::Editor;
-use crate::wysiwyg::components::{Find, FindNext, FindPrevious};
+use crate::wysiwyg::components::{Find, FindNext, FindPrevious, Replace, ReplaceAll};
 
 /// One query match, located inside a specific block's visible text.
 #[derive(Clone, Debug)]
@@ -27,6 +28,10 @@ pub(super) struct FindMatch {
 pub(super) struct FindState {
     /// The query text input.
     pub input: Entity<InputState>,
+    /// The replacement text input (shown when the bar is in replace mode).
+    pub replace_input: Entity<InputState>,
+    /// Whether the replacement row is visible (toggled by Cmd/Ctrl+H).
+    pub replace_mode: bool,
     /// Matches for the current query, in document order.
     pub matches: Vec<FindMatch>,
     /// Index into `matches` of the currently highlighted match.
@@ -136,6 +141,8 @@ impl Editor {
     pub(super) fn on_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
         if self.find_state.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find..."));
+            let replace_input =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Replace..."));
             let input_for_sub = input.clone();
             // Recompute matches on every keystroke so the bar stays live.
             cx.subscribe(
@@ -150,6 +157,8 @@ impl Editor {
             .detach();
             self.find_state = Some(FindState {
                 input,
+                replace_input,
+                replace_mode: false,
                 matches: Vec::new(),
                 current: 0,
             });
@@ -157,6 +166,132 @@ impl Editor {
         // Focus the query input so the user can type immediately.
         if let Some(state) = self.find_state.as_ref() {
             state.input.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        self.refresh_find_matches(cx);
+        cx.notify();
+    }
+
+    /// Toggle the replace row open (Cmd/Ctrl+H). Opens the find bar if needed
+    /// and focuses the replacement field.
+    pub(super) fn on_replace(&mut self, _: &Replace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_state.is_none() {
+            // Open the bar first (without stealing focus to the query field).
+            self.on_find(&Find, window, cx);
+        }
+        if let Some(state) = self.find_state.as_mut() {
+            state.replace_mode = true;
+        }
+        if let Some(state) = self.find_state.as_ref() {
+            state
+                .replace_input
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Replace the current match with the replacement text and advance.
+    pub(super) fn on_replace_one(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (block, range, replacement) = match self.find_state.as_ref() {
+            Some(state) if !state.matches.is_empty() => {
+                let m = &state.matches[state.current];
+                let replacement = state.replace_input.read(cx).value().to_string();
+                let Some(block) = self.document.block_entity_by_id(m.block) else {
+                    return;
+                };
+                (block, m.range.clone(), replacement)
+            }
+            _ => return,
+        };
+        // Select the match, then replace the selection with the replacement.
+        self.focus_block_range(&block, range.clone(), cx);
+        block.update(cx, |block, cx| {
+            block.selected_range = range;
+            cx.notify();
+        });
+        // Drive the replacement through the block's own text-replace path so
+        // undo/history stay consistent.
+        block.update(cx, |block, cx| {
+            block.replace_text_in_range(None, &replacement, _window, cx);
+        });
+        self.refresh_find_matches(cx);
+        cx.notify();
+    }
+
+    /// Replace every match in the document, then close replace mode.
+    pub(super) fn on_replace_all(
+        &mut self,
+        _: &ReplaceAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Snapshot the matches + replacement up front, since each replacement
+        // mutates block text and shifts offsets. We re-derive matches per block
+        // rather than trusting stale ranges.
+        let Some(state) = self.find_state.as_ref() else {
+            return;
+        };
+        let query = state.input.read(cx).value().to_string();
+        let replacement = state.replace_input.read(cx).value().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let case_sensitive = query.chars().any(|c| c.is_uppercase());
+        let needle = if case_sensitive {
+            query.clone()
+        } else {
+            query.to_lowercase()
+        };
+
+        // Collect the distinct blocks that contain at least one match, then
+        // replace within each from the end so earlier ranges stay valid.
+        let mut blocks: Vec<gpui::Entity<crate::wysiwyg::components::Block>> = Vec::new();
+        for visible in self.document.visible_blocks() {
+            if self
+                .document
+                .visible_index_for_entity_id(visible.entity.entity_id())
+                .is_some()
+            {
+                blocks.push(visible.entity.clone());
+            }
+        }
+        for block in blocks {
+            let text = block.read(cx).display_text().to_string();
+            let haystack = if case_sensitive {
+                text.clone()
+            } else {
+                text.to_lowercase()
+            };
+            // Collect match ranges (byte offsets into visible text) from the end.
+            let mut ranges: Vec<Range<usize>> = Vec::new();
+            let mut from = 0;
+            while let Some(rel) = haystack[from..].find(&needle) {
+                let start = from + rel;
+                let end = start + needle.len();
+                ranges.push(start..end);
+                from = end.max(start + 1);
+            }
+            if ranges.is_empty() {
+                continue;
+            }
+            // Apply replacements from right to left so byte offsets stay valid.
+            // We rebuild the visible text, then splice it back as one edit.
+            let mut new_text = text.clone();
+            for range in ranges.iter().rev() {
+                new_text.replace_range(range.clone(), &replacement);
+            }
+            block.update(cx, |b, cx| {
+                b.selected_range = 0..b.display_text().len();
+                cx.notify();
+            });
+            block.update(cx, |block, cx| {
+                block.replace_text_in_range(None, &new_text, window, cx);
+            });
         }
         self.refresh_find_matches(cx);
         cx.notify();

@@ -15,7 +15,7 @@ use crate::wysiwyg::app_menu::dispatch_menu_action_for_editor;
 use crate::wysiwyg::components::CalloutVariant;
 use crate::wysiwyg::components::{
     AddLanguageConfig, AddThemeConfig, Block, DismissTransientUi, Find, FindNext, FindPrevious,
-    NoRecentFiles,
+    NoRecentFiles, Replace, ReplaceAll,
 };
 use crate::wysiwyg::i18n::{I18nManager, I18nStrings};
 use crate::wysiwyg::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -1508,6 +1508,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use gpui_component::h_flex;
+        use gpui_component::v_flex;
         use gpui_component::input::Input;
         use gpui_component::button::Button;
 
@@ -1520,6 +1521,41 @@ impl Editor {
             format!("{}/{}", state.current + 1, total)
         };
         let input = state.input.clone();
+        let replace_input = state.replace_input.clone();
+        let replace_mode = state.replace_mode;
+
+        // Optional replacement row: replacement input + Replace / Replace-all
+        // buttons. Only rendered while the bar is in replace mode (Cmd/Ctrl+H).
+        let replace_row = replace_mode.then(|| {
+            h_flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    h_flex()
+                        .w(px(220.))
+                        .child(Input::new(&replace_input).small()),
+                )
+                .child(
+                    Button::new("find-replace")
+                        .small()
+                        .ghost()
+                        .label("Replace")
+                        .disabled(total == 0)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_replace_one(window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("find-replace-all")
+                        .small()
+                        .ghost()
+                        .label("All")
+                        .disabled(total == 0)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_replace_all(&ReplaceAll, window, cx);
+                        })),
+                )
+        });
 
         Some(
             div()
@@ -1528,58 +1564,65 @@ impl Editor {
                 .top(px(8.))
                 .right(px(16.))
                 .occlude()
-                // Scope FindNext/FindPrevious bindings to the bar while focused.
+                // Scope FindNext/FindPrevious/Replace bindings to the bar.
                 .key_context("EditorFindBar")
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .pl(px(8.))
-                .pr(px(4.))
-                .py(px(4.))
-                .rounded(px(6.))
-                .border(px(1.))
-                .border_color(c.dialog_border)
-                .bg(c.dialog_surface)
                 .child(
-                    h_flex()
-                        .w(px(220.))
-                        .child(Input::new(&input).small()),
-                )
-                .child(
-                    div()
-                        .min_w(px(40.))
-                        .text_size(px(12.))
-                        .text_color(c.dialog_body)
-                        .child(current_label),
-                )
-                .child(
-                    Button::new("find-prev")
-                        .small()
-                        .ghost()
-                        .label("↑")
-                        .disabled(total == 0)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.on_find_previous(&FindPrevious, window, cx);
-                        })),
-                )
-                .child(
-                    Button::new("find-next")
-                        .small()
-                        .ghost()
-                        .label("↓")
-                        .disabled(total == 0)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.on_find_next(&FindNext, window, cx);
-                        })),
-                )
-                .child(
-                    Button::new("find-close")
-                        .small()
-                        .ghost()
-                        .label("×")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.close_find_bar(window, cx);
-                        })),
+                    v_flex()
+                        .gap(px(6.))
+                        .pl(px(8.))
+                        .pr(px(4.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .border(px(1.))
+                        .border_color(c.dialog_border)
+                        .bg(c.dialog_surface)
+                        .children(replace_row)
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(
+                                    h_flex()
+                                        .w(px(220.))
+                                        .child(Input::new(&input).small()),
+                                )
+                                .child(
+                                    div()
+                                        .min_w(px(40.))
+                                        .text_size(px(12.))
+                                        .text_color(c.dialog_body)
+                                        .child(current_label),
+                                )
+                                .child(
+                                    Button::new("find-prev")
+                                        .small()
+                                        .ghost()
+                                        .label("↑")
+                                        .disabled(total == 0)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.on_find_previous(&FindPrevious, window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("find-next")
+                                        .small()
+                                        .ghost()
+                                        .label("↓")
+                                        .disabled(total == 0)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.on_find_next(&FindNext, window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("find-close")
+                                        .small()
+                                        .ghost()
+                                        .label("×")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.close_find_bar(window, cx);
+                                        })),
+                                ),
+                        ),
                 )
                 .on_action(cx.listener(|this, _: &DismissTransientUi, window, cx| {
                     this.close_find_bar(window, cx);
@@ -2139,6 +2182,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_find))
             .on_action(cx.listener(Self::on_find_next))
             .on_action(cx.listener(Self::on_find_previous))
+            .on_action(cx.listener(Self::on_replace))
+            .on_action(cx.listener(Self::on_replace_all))
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))

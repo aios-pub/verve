@@ -1624,6 +1624,7 @@ impl Block {
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_cut))
             .on_action(cx.listener(Self::on_paste))
+            .on_action(cx.listener(Self::on_paste_plain_text))
             .on_action(cx.listener(Self::on_exit_code_block))
             .on_key_down(cx.listener(Self::on_block_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))

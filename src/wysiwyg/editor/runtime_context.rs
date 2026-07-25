@@ -251,7 +251,31 @@ impl Editor {
                 .map(|cell| cell.entity_id())
                 .or_else(|| Some(first_root.entity_id()));
         }
-        Some(first_root.entity_id())
+
+        // Auto-focusing a "source-raw" block (HtmlBlock/MathBlock/MermaidBlock/
+        // RawMarkdown/Comment) flips it into raw-source display mode. That is
+        // wrong on file open: a README that starts with `<div align=center>`
+        // would show as raw `<div>` source instead of the rendered wrapper. So
+        // prefer the first block that stays rendered when focused (paragraph,
+        // heading, list, …). Fall back to the first root if every block is a
+        // source-raw type so the editor still gets an anchor.
+        let mut fallback = first_root.entity_id();
+        for visible in self.document.visible_blocks() {
+            let kind = visible.entity.read(cx).kind();
+            if !matches!(
+                kind,
+                BlockKind::HtmlBlock
+                    | BlockKind::MathBlock
+                    | BlockKind::MermaidBlock
+                    | BlockKind::RawMarkdown
+                    | BlockKind::Comment
+                    | BlockKind::CodeBlock { .. }
+            ) {
+                return Some(visible.entity.entity_id());
+            }
+            fallback = visible.entity.entity_id();
+        }
+        Some(fallback)
     }
 
     pub(super) fn focused_edit_target_entity_id(

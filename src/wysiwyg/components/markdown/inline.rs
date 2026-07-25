@@ -12,8 +12,8 @@ use super::footnote::{
     superscript_ordinal,
 };
 use super::html::{
-    HtmlAttr, HtmlInlineStyle, HtmlNode, HtmlNodeKind, has_dangerous_attrs, is_inline_tag,
-    parse_html_attrs, style_for_node,
+    HtmlAttr, HtmlInlineStyle, HtmlNode, HtmlNodeKind, has_dangerous_attrs, is_block_html_tag,
+    is_inline_tag, parse_html_attrs, style_for_node,
 };
 use super::link::{LinkReferenceDefinition, LinkReferenceDefinitions, parse_link_target};
 
@@ -2047,7 +2047,16 @@ fn parse_inline_html_container(
     reference_definitions: &LinkReferenceDefinitions,
 ) -> Option<usize> {
     let tag = locate_inline_html_open_tag(tokens, index)?;
-    if tag.self_closing || !is_inline_tag(&tag.name) || has_dangerous_attrs(&tag.attrs) {
+    // Block-level tags (div/p/section/...) appearing mid-paragraph can't form a
+    // real block there, but we still degrade them gracefully: treat them like a
+    // style-only inline container so their inner text is parsed as Markdown and
+    // their color/font-size/text-align style is applied, instead of leaving the
+    // literal `<div>...</div>` text on screen.
+    let is_degradable_block = is_block_html_tag(&tag.name);
+    if tag.self_closing
+        || (!is_inline_tag(&tag.name) && !is_degradable_block)
+        || has_dangerous_attrs(&tag.attrs)
+    {
         return None;
     }
 
@@ -2055,7 +2064,10 @@ fn parse_inline_html_container(
         locate_matching_inline_html_close(tokens, tag.end_index + 1, &tag.name)?;
     let tag_style = inline_html_semantic_style(&tag.name, extra_style);
     let html_style = merge_html_styles(extra_html_style, inline_html_style(&tag));
-    if tag_style == extra_style && html_style == extra_html_style {
+    // For a plain (style-less) degradable block tag like `<div>x</div>` we
+    // still want to drop the tag markers and keep the inner text, so bypass the
+    // "no style change → leave as literal" shortcut in that case.
+    if tag_style == extra_style && html_style == extra_html_style && !is_degradable_block {
         return None;
     }
 

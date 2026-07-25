@@ -156,6 +156,13 @@ oha = { version = "1.15.0", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive"] }
 # Markdown parser (CommonMark compliant) for the notepad live preview.
 pulldown-cmark = "0.12"
+# Spec-compliant HTML5 parser (servo's). Used to parse raw-HTML blocks in the
+# WYSIWYG editor so README-style wrappers (with Markdown text like "<1 秒",
+# "<100MB", "> quote" mixed into HTML) classify correctly. The hand-written
+# tokenizer mis-tokenizes a `<` followed by a digit/space as a tag start,
+# which is text per the HTML5 spec (tag names must start with an ASCII letter).
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
 
 # --- WYSIWYG markdown editor (ported from velotype) -------------------------
 # CSS color parsing for inline HTML style attributes (e.g. <span style="color:#f00">).
@@ -202,7 +209,7 @@ schemars = "1"
 sys-locale = "0.3"
 
 [features]
-default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config", "html-native"]
+default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config"]
 # WYSIWYG block runtime + rendering layer (stage 2+). The pure-logic markdown
 # models in stage 1 compile without it; once the block runtime is wired up the
 # feature is always on.
@@ -212,7 +219,6 @@ wysiwyg-render = []
 # rely on; they will be re-ported in stage 5.
 wysiwyg-gpui-tests = []
 code-highlight-core = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
-html-native = ["dep:tree-sitter", "dep:tree-sitter-html"]
 code-highlight-official = [
     "code-highlight-core",
     "dep:tree-sitter-rust",

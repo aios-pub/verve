@@ -103,6 +103,12 @@
                                 <Extension Id='mdx' ContentType='text/markdown'>
                                     <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
                                 </Extension>
+                                <Extension Id='html' ContentType='text/html'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='htm' ContentType='text/html'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
                             </ProgId>
 
                             <!-- Bind each extension's HKCR\.ext to our ProgId so
@@ -116,6 +122,8 @@
                             <RegistryValue Root='HKCR' Key='.mkdn\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
                             <RegistryValue Root='HKCR' Key='.txt\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
                             <RegistryValue Root='HKCR' Key='.mdx\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.html\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.htm\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
                         </Component>
                     </Directory>
                 </Directory>

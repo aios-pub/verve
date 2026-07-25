@@ -11,12 +11,12 @@ const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::wysiwyg::components::{
-    HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, TableAxisHighlight,
-    TableAxisKind, TableAxisMarker, TableCellInlineImageSegment, TableColumnLayout, attr_value,
-    display_math_font_size, inline_math_font_size, parse_display_math_source,
-    parse_html_image_block, parse_mermaid_fence_source, parse_table_cell_inline_images,
-    render_display_math_svg, render_inline_math_svg, render_mermaid_svg_for_display,
-    resolve_image_source, style_for_node,
+    HtmlBoxEdges, HtmlCssColor, HtmlDocument, HtmlInlineStyle, HtmlLength, HtmlNode, HtmlNodeKind,
+    InlineScript, TableAxisHighlight, TableAxisKind, TableAxisMarker,
+    TableCellInlineImageSegment, TableColumnLayout, attr_value, display_math_font_size,
+    inline_math_font_size, parse_display_math_source, parse_html_image_block,
+    parse_mermaid_fence_source, parse_table_cell_inline_images, render_display_math_svg,
+    render_inline_math_svg, render_mermaid_svg_for_display, resolve_image_source, style_for_node,
 };
 use crate::wysiwyg::i18n::{I18nManager, I18nStrings};
 use crate::wysiwyg::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -375,12 +375,19 @@ struct HtmlComputedStyle {
     color: Hsla,
     font_size: f32,
     root_font_size: f32,
+    /// Available content width for resolving `%`-based CSS lengths. Root uses
+    /// a best-effort default; nested nodes inherit the parent's resolved width.
+    parent_width: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct HtmlNodeVisualStyle {
     computed: HtmlComputedStyle,
     background: Option<Hsla>,
+    /// The full inline `style` (color/bg/font-size already folded into
+    /// `computed`/`background`; the rest — text-align, padding, margin, width,
+    /// border, radius — is applied by `apply_html_box_style`).
+    inline: HtmlInlineStyle,
 }
 
 impl HtmlComputedStyle {
@@ -389,6 +396,9 @@ impl HtmlComputedStyle {
             color: theme.colors.text_default,
             font_size: theme.typography.text_size,
             root_font_size: theme.typography.text_size,
+            // A reasonable default for the markdown editor's content column;
+            // exact width is not critical since % lengths are uncommon here.
+            parent_width: 720.0,
         }
     }
 }
@@ -403,6 +413,72 @@ fn html_css_color_to_hsla(color: HtmlCssColor, current_color: Hsla) -> Hsla {
             a: color.alpha.clamp(0.0, 1.0),
         }),
     }
+}
+
+/// Resolves a CSS length to pixels against the parent's font-size / width.
+fn html_length_to_px(length: HtmlLength, font_size: f32, parent_width: f32) -> f32 {
+    match length {
+        HtmlLength::Px(v) => v,
+        // `em` is relative to the element's own font size.
+        HtmlLength::Em(v) => v * font_size,
+        HtmlLength::Percent(v) => parent_width * (v / 100.0),
+    }
+    .max(0.0)
+}
+
+/// Applies text-align + box-model styles (padding/margin/width/max-width/border/
+/// radius) from an `HtmlInlineStyle` onto a `Div`-based element. Returns the
+/// element so it can be chained.
+fn apply_html_box_style(
+    mut element: Div,
+    style: &HtmlInlineStyle,
+    computed: &HtmlComputedStyle,
+) -> Div {
+    use crate::wysiwyg::components::markdown::html::HtmlTextAlign;
+    if let Some(align) = style.text_align {
+        element = match align {
+            HtmlTextAlign::Center => element.text_center(),
+            HtmlTextAlign::Right => element.text_right(),
+            HtmlTextAlign::Left | HtmlTextAlign::Justify => element.text_left(),
+        };
+    }
+    if let Some(edges) = style.padding {
+        element = element.px(px(edges.left + edges.right)).py(px(edges.top + edges.bottom));
+    }
+    if let Some(edges) = style.margin {
+        element = element.mx(px(edges.left + edges.right)).my(px(edges.top + edges.bottom));
+    }
+    if let Some(width) = style.width {
+        let px_val = html_length_to_px(width, computed.font_size, computed.parent_width);
+        if px_val > 0.0 {
+            element = element.w(px(px_val));
+        }
+    }
+    if let Some(width) = style.max_width {
+        let px_val = html_length_to_px(width, computed.font_size, computed.parent_width);
+        if px_val > 0.0 {
+            element = element.max_w(px(px_val));
+        }
+    }
+    if let Some(radius) = style.border_radius {
+        element = element.rounded(px(html_length_to_px(
+            radius,
+            computed.font_size,
+            computed.parent_width,
+        )));
+    }
+    if let Some(edges) = style.border_width {
+        // GPUI's border() applies uniform width; use the max side as the width
+        // and rely on the color for visibility.
+        let width = edges.top.max(edges.right).max(edges.bottom).max(edges.left);
+        if width > 0.0 {
+            element = element.border(px(width));
+            if let Some(color) = style.border_color {
+                element = element.border_color(html_css_color_to_hsla(color, computed.color));
+            }
+        }
+    }
+    element
 }
 
 fn html_node_visual_style(
@@ -448,6 +524,7 @@ fn html_node_visual_style(
     HtmlNodeVisualStyle {
         computed,
         background,
+        inline: inline_style,
     }
 }
 
@@ -1183,11 +1260,8 @@ impl Block {
         }
 
         if node.tag_name == "#text" {
-            return div()
-                .min_w(px(0.0))
-                .text_size(px(inherited_style.font_size))
-                .text_color(inherited_style.color)
-                .child(SharedString::from(node.raw_source.clone()))
+            return self
+                .render_html_markdown_text(node, inherited_style, theme, cx)
                 .into_any_element();
         }
 
@@ -1369,21 +1443,214 @@ impl Block {
                 }
                 element.into_any_element()
             }
+            // Block-level container tags: render as a vertical flex column so
+            // block children stack rather than overlap. This also covers tags
+            // not matched above (section, article, header, footer, ...). Apply
+            // the inline box model (padding/margin/width/border/text-align/...)
+            // on top of the inherited text styles.
             _ => {
-                let mut element =
-                    div()
-                        .w_full()
-                        .text_size(px(node_style.computed.font_size))
-                        .text_color(node_style.computed.color)
-                        .children(node.children.iter().map(|child| {
-                            self.render_html_node(child, theme, node_style.computed, cx)
-                        }));
+                let mut element = div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme.dimensions.block_gap * 0.3))
+                    .text_size(px(node_style.computed.font_size))
+                    .text_color(node_style.computed.color)
+                    .children(node.children.iter().map(|child| {
+                        self.render_html_node(child, theme, node_style.computed, cx)
+                    }));
+                element = apply_html_box_style(element, &node_style.inline, &node_style.computed);
                 if let Some(bg) = node_style.background {
                     element = element.bg(bg);
                 }
                 element.into_any_element()
             }
         }
+    }
+
+    /// Renders an HTML `#text` node, but instead of emitting the raw text it
+    /// re-parses the text as Markdown. This makes `<div align="center">`
+    /// wrappers from README-style HTML render their inner `# headings`,
+    /// `**bold**`, `> quotes`, `- lists`, `---` rules, and inline code instead
+    /// of showing the literal Markdown syntax.
+    ///
+    /// Block-level constructs that fit on one line (ATX headings, thematic
+    /// breaks, single-line blockquotes, single-line list items) get a
+    /// dedicated visual treatment; everything else is parsed as inline Markdown
+    /// (`**bold**`, `*italic*`, `` `code` ``, links) and rendered as a wrapped
+    /// paragraph. Multi-line block constructs (nested lists, multi-row tables,
+    /// multi-paragraph blockquotes) are degraded to inline text in this phase.
+    fn render_html_markdown_text(
+        &self,
+        node: &HtmlNode,
+        inherited_style: HtmlComputedStyle,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let text = &node.raw_source;
+
+        // Empty / whitespace-only text → invisible spacer (keeps layout stable).
+        if text.trim().is_empty() {
+            return div().min_w(px(0.0));
+        }
+
+        let base_color = inherited_style.color;
+        let base_size = inherited_style.font_size;
+
+        // Render each line independently. GPUI wraps inline runs that are a
+        // direct child of a flex container, so each line becomes its own
+        // flex-row paragraph.
+        let mut lines: Vec<AnyElement> = Vec::new();
+        for raw_line in text.split('\n') {
+            // Skip leading/trailing blank lines (common when a <div> wraps a
+            // newline-separated block) but preserve internal blank lines.
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // 1) ATX heading: `#`, `##`, ... `######`.
+            if let Some((level, heading_text)) = BlockKind::parse_atx_heading_line(raw_line) {
+                let size = match level {
+                    1 => base_size * 1.8,
+                    2 => base_size * 1.45,
+                    3 => base_size * 1.25,
+                    4 => base_size * 1.1,
+                    _ => base_size,
+                };
+                let tree = self.inline_tree_from_markdown_with_context(&heading_text);
+                lines.push(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_wrap()
+                        .text_size(px(size))
+                        .text_color(base_color)
+                        .font_weight(FontWeight::BOLD)
+                        .mt(px(if lines.is_empty() { 0.0 } else { d.block_gap * 0.5 }))
+                        .children(self.render_inline_tree_children(
+                            &tree,
+                            theme,
+                            base_color,
+                            size,
+                            FontWeight::BOLD,
+                            cx,
+                        ))
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            // 2) Thematic break (`---`, `***`, `___`).
+            if BlockKind::parse_separator_line(trimmed) {
+                lines.push(
+                    div()
+                        .w_full()
+                        .h(px(d.separator_thickness))
+                        .my(px(d.separator_margin_y))
+                        .bg(c.separator_color)
+                        .rounded(px(999.0))
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            // 3) Single-line blockquote: `> text`.
+            if let Some(stripped) = strip_one_blockquote_prefix(raw_line) {
+                let tree = self.inline_tree_from_markdown_with_context(&stripped);
+                lines.push(
+                    div()
+                        .w_full()
+                        .pl(px(d.quote_padding_left))
+                        .border_l(px(d.quote_border_width))
+                        .border_color(c.border_quote)
+                        .text_size(px(base_size))
+                        .text_color(c.text_quote)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .min_w(px(0.0))
+                                .children(self.render_inline_tree_children(
+                                    &tree,
+                                    theme,
+                                    c.text_quote,
+                                    base_size,
+                                    FontWeight::NORMAL,
+                                    cx,
+                                )),
+                        )
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            // 4) Single-line list item: `- `, `* `, `+ `, `1. `, `2) `.
+            if let Some((marker, item_text)) = parse_inline_list_item(raw_line) {
+                let tree = self.inline_tree_from_markdown_with_context(&item_text);
+                lines.push(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_wrap()
+                        .gap_0()
+                        .text_size(px(base_size))
+                        .text_color(base_color)
+                        .child(div().mr(px(6.0)).child(SharedString::from(marker)))
+                        .children(self.render_inline_tree_children(
+                            &tree,
+                            theme,
+                            base_color,
+                            base_size,
+                            FontWeight::NORMAL,
+                            cx,
+                        ))
+                        .into_any_element(),
+                );
+                continue;
+            }
+
+            // 5) Default: parse the line as inline Markdown and wrap it.
+            let tree = self.inline_tree_from_markdown_with_context(raw_line);
+            lines.push(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_wrap()
+                    .text_size(px(base_size))
+                    .text_color(base_color)
+                    .children(self.render_inline_tree_children(
+                        &tree,
+                        theme,
+                        base_color,
+                        base_size,
+                        FontWeight::NORMAL,
+                        cx,
+                    ))
+                    .into_any_element(),
+            );
+        }
+
+        // If nothing rendered (e.g. only blank lines), still produce a stable
+        // placeholder so flex layout doesn't collapse the parent unexpectedly.
+        if lines.is_empty() {
+            return div().min_w(px(0.0));
+        }
+
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(d.block_gap * 0.25))
+            .text_size(px(base_size))
+            .text_color(base_color)
+            .children(lines)
     }
 
     fn render_html_inline_container(
@@ -3091,6 +3358,50 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
         return vec![text];
     }
     text.split_inclusive(char::is_whitespace).collect()
+}
+
+/// Strips a single leading `>` (with optional space) from a Markdown blockquote
+/// line. Returns the inner text, or `None` if the line is not a quote line.
+fn strip_one_blockquote_prefix(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix('>')?;
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
+    if rest.is_empty() {
+        Some(String::new())
+    } else {
+        Some(rest.to_string())
+    }
+}
+
+/// Detects a single-line Markdown list item (`- `, `* `, `+ `, `1. `, `2) `)
+/// and returns `(marker_to_render, item_text)`. Used to give list items inside
+/// an HTML wrapper a leading bullet/number without a full list-block parse.
+fn parse_inline_list_item(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim_start();
+    let (marker, rest) = if let Some(rest) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
+        ("•".to_string(), rest)
+    } else {
+        // Ordered: digits followed by `.` or `)` then a space.
+        let bytes = trimmed.as_bytes();
+        let mut idx = 0;
+        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+            idx += 1;
+        }
+        if idx == 0 || idx >= bytes.len() {
+            return None;
+        }
+        let sep = bytes[idx];
+        if (sep != b'.' && sep != b')') || idx + 1 >= bytes.len() || bytes[idx + 1] != b' ' {
+            return None;
+        }
+        let number = &trimmed[..idx];
+        (format!("{number}."), &trimmed[idx + 2..])
+    };
+    Some((marker, rest.trim_start().to_string()))
 }
 
 #[cfg(all(test, feature = "wysiwyg-gpui-tests"))]

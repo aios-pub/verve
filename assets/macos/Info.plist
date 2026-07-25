@@ -51,6 +51,7 @@
       <array>
         <string>net.daringfireball.markdown</string>
         <string>public.plain-text</string>
+        <string>public.html</string>
       </array>
       <key>CFBundleTypeExtensions</key>
       <array>
@@ -61,6 +62,8 @@
         <string>mkdn</string>
         <string>txt</string>
         <string>mdx</string>
+        <string>html</string>
+        <string>htm</string>
       </array>
     </dict>
   </array>

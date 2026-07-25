@@ -14,6 +14,30 @@ use crate::wysiwyg::components::{
     serialize_table_markdown_lines,
 };
 
+/// Snaps a byte index down to the nearest UTF-8 char boundary so the resulting
+/// index is always safe for string slicing. Selection/markdown offset maps can
+/// produce indices that land inside a multi-byte character (e.g. CJK text with
+/// 3-byte chars); slicing at such an index would panic, so callers must floor
+/// the index first. On stable Rust there is no `str::floor_char_boundary`, so
+/// this walks back until the index is a valid boundary.
+fn floor_char_boundary(s: &str, mut index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Safe substring slice: snaps both ends to char boundaries first.
+fn safe_slice(s: &str, start: usize, end: usize) -> &str {
+    let start = floor_char_boundary(s, start);
+    let end = floor_char_boundary(s, end.max(start));
+    &s[start..end]
+}
+
+
 /// Cross-block selection with endpoints ordered by visible block position.
 #[derive(Clone, Copy)]
 struct NormalizedCrossBlockSelection {
@@ -809,7 +833,7 @@ impl Editor {
                     cx,
                 )
                 .unwrap_or(mapping.full_source_range.end);
-            return source[start.min(end)..start.max(end)].to_string();
+            return safe_slice(source, start.min(end), start.max(end)).to_string();
         }
 
         let block = entity.read(cx);
@@ -895,7 +919,10 @@ impl Editor {
             let start = markdown_range.start.min(full_markdown.len());
             let end = markdown_range.end.min(full_markdown.len());
             if start < end {
-                return Some(full_markdown[start..end].to_owned());
+                // `start`/`end` come from an offset map that may not be aligned
+                // to UTF-8 char boundaries (e.g. inside a CJK char). Snap to the
+                // nearest boundary before slicing or the slice panics.
+                return Some(safe_slice(&full_markdown, start, end).to_owned());
             }
         }
 
@@ -905,9 +932,7 @@ impl Editor {
 
 #[cfg(all(test, feature = "wysiwyg-gpui-tests"))]
 mod tests {
-    use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};
-
-    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
+    use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
     use crate::wysiwyg::components::{Cut, Undo, UndoCaptureKind};
     use crate::wysiwyg::i18n::I18nManager;
     use crate::wysiwyg::theme::ThemeManager;
@@ -1321,5 +1346,46 @@ mod tests {
             assert_eq!(text.trim(), "gamma");
         });
         cx.quit();
+    }
+}
+
+/// Pure-logic tests for the char-boundary helpers. Not GPUI-dependent, so they
+/// run under the default test profile (the rest of this file's tests are gated
+/// behind `wysiwyg-gpui-tests`).
+#[cfg(test)]
+mod boundary_tests {
+    use super::{floor_char_boundary, safe_slice};
+
+    #[test]
+    fn floor_char_boundary_snaps_into_cjk_char() {
+        // '正' occupies bytes 1739..1742 in the crash report's string. Model a
+        // 3-byte CJK char at the start of the string for a deterministic check.
+        let s = "正abc";
+        assert_eq!(s.len(), 6); // '正' = 3 bytes + 3 ascii
+        // Index 1 and 2 are inside '正' → snap to 0.
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 1), 0);
+        assert_eq!(floor_char_boundary(s, 2), 0);
+        // Index 3..6 are boundaries.
+        assert_eq!(floor_char_boundary(s, 3), 3);
+        assert_eq!(floor_char_boundary(s, 6), 6);
+        // Out of range clamps to len.
+        assert_eq!(floor_char_boundary(s, 99), 6);
+    }
+
+    #[test]
+    fn safe_slice_never_panics_on_mid_char_indices() {
+        let s = "a正b"; // bytes: a(0) 正(1..4) b(4) → len 5
+        // Mid-char start and end must not panic; result is a valid substring.
+        let out = safe_slice(s, 2, 3);
+        assert!(s.contains(out) || out.is_empty());
+        // End before start is handled.
+        let _ = safe_slice(s, 4, 1);
+    }
+
+    #[test]
+    fn safe_slice_returns_exact_text_for_aligned_indices() {
+        assert_eq!(safe_slice("hello", 1, 4), "ell");
+        assert_eq!(safe_slice("a正b", 1, 4), "正");
     }
 }

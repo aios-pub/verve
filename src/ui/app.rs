@@ -2942,6 +2942,9 @@ impl VerveApp {
             _ => ShortcutCommand::Heading6,
         };
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
+            (rust_i18n::t!("toolbar.heading_1").to_string(), level == Some(1), command_keycap(mk(1)), false, ToolbarAction::Heading(1)),
+            (rust_i18n::t!("toolbar.heading_2").to_string(), level == Some(2), command_keycap(mk(2)), false, ToolbarAction::Heading(2)),
+            (rust_i18n::t!("toolbar.heading_3").to_string(), level == Some(3), command_keycap(mk(3)), false, ToolbarAction::Heading(3)),
             (rust_i18n::t!("toolbar.heading_4").to_string(), level == Some(4), command_keycap(mk(4)), false, ToolbarAction::Heading(4)),
             (rust_i18n::t!("toolbar.heading_5").to_string(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
             (rust_i18n::t!("toolbar.heading_6").to_string(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),

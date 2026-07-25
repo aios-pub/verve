@@ -1743,10 +1743,9 @@ impl Editor {
                 }
             }
             BlockEvent::RequestQuoteBreak => {
-                let Some((parent, insert_index)) =
-                    self.quote_break_insertion_target(block.entity_id(), cx)
-                else {
-                    return;
+                let quote_ancestor = match self.nearest_quote_ancestor(block.entity_id(), cx) {
+                    Some(q) => q,
+                    None => return,
                 };
 
                 self.prepare_undo_capture(
@@ -1754,17 +1753,30 @@ impl Editor {
                     cx,
                 );
 
-                // Break out of the quote into a plain paragraph. Previously the
-                // root-quote branch inserted another empty Quote (so Enter could
-                // never leave a top-level quote) and the nested branch inserted a
-                // paragraph + a fresh quote (re-entering). Both made it impossible
-                // to exit a quote via Enter. Now we always land on a plain
-                // paragraph after the quote.
+                // If the triggering block is empty (the user pressed Enter on an
+                // empty quote line to leave), remove that empty quote line so the
+                // exit doesn't leave a dangling blank quote behind.
+                let trigger_is_empty = block.read(cx).display_text().trim().is_empty();
+                if trigger_is_empty {
+                    self.document
+                        .with_structure_mutation(cx, |document, cx| {
+                            document.remove_block_by_id_raw(block.entity_id(), cx)
+                        });
+                }
+
+                // Insert a plain paragraph after the quote ancestor. Re-resolve
+                // its location after the optional removal above (the index may
+                // have shifted if the empty trigger was the ancestor itself).
+                let Some(ancestor_location) =
+                    self.document.find_block_location(quote_ancestor.entity_id())
+                else {
+                    return;
+                };
                 let new_paragraph =
                     Self::new_block(cx, BlockRecord::paragraph(String::new()));
                 self.document.insert_blocks_at(
-                    parent,
-                    insert_index,
+                    ancestor_location.parent,
+                    ancestor_location.index + 1,
                     vec![new_paragraph.clone()],
                     cx,
                 );

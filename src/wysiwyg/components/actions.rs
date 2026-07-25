@@ -647,14 +647,14 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::Find,
         id: "find",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         default_keys: &["cmd-f", "ctrl-f"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
         command: ShortcutCommand::FindNext,
         id: "find_next",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         // Cmd-G on macOS, F3 elsewhere; both fire only while the find bar
         // holds focus (EditorFindBar context).
         default_keys: &["cmd-g", "f3"],
@@ -663,14 +663,14 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::FindPrevious,
         id: "find_previous",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         default_keys: &["cmd-shift-g", "shift-f3"],
         context: FIND_BAR_CONTEXT,
     },
     ShortcutDefinition {
         command: ShortcutCommand::Replace,
         id: "replace",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         // Bound at the block level (not the find-bar context) so Cmd/Ctrl+H
         // opens the find/replace bar directly from the editor without first
         // requiring Cmd+F. The handler enables replace mode and focuses the
@@ -681,7 +681,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::ReplaceAll,
         id: "replace_all",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         // No default keybinding: triggered from the find/replace bar's UI to
         // avoid clashing with common editor bindings.
         default_keys: &[],
@@ -690,7 +690,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
     ShortcutDefinition {
         command: ShortcutCommand::PastePlainText,
         id: "paste_plain_text",
-        category: ShortcutCategory::Edit,
+        category: ShortcutCategory::Markdown,
         default_keys: &["cmd-shift-v", "ctrl-shift-v"],
         context: BLOCK_CONTEXT,
     },

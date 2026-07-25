@@ -27,8 +27,8 @@ use super::{
     parse_standalone_image, resolve_image_source,
 };
 use crate::wysiwyg::components::markdown::inline::{
-    InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineRenderCache, InlineSpan,
-    InlineStyle, InlineTextTree, StyleFlag,
+    InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineRenderCache, InlineScript,
+    InlineSpan, InlineStyle, InlineTextTree, StyleFlag,
 };
 use crate::wysiwyg::components::{
     TableAxisHighlight, TableAxisMarker, TableCellPosition, TableColumnAlignment, TableRuntime,
@@ -47,6 +47,10 @@ pub(crate) enum InlineFormat {
     Strikethrough,
     /// Toggle highlight formatting.
     Highlight,
+    /// Toggle superscript formatting.
+    Superscript,
+    /// Toggle subscript formatting.
+    Subscript,
     /// Toggle inline code formatting.
     Code,
 }
@@ -1943,12 +1947,79 @@ impl Block {
             InlineFormat::Underline => next_title.toggle_underline(selection.clone()),
             InlineFormat::Strikethrough => next_title.toggle_strikethrough(selection.clone()),
             InlineFormat::Highlight => next_title.toggle_highlight(selection.clone()),
+            InlineFormat::Superscript => next_title.toggle_superscript(selection.clone()),
+            InlineFormat::Subscript => next_title.toggle_subscript(selection.clone()),
             InlineFormat::Code => next_title.toggle_code(selection.clone()),
         };
         if !changed {
             return;
         }
 
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.apply_title_edit(
+            next_title,
+            selection.end,
+            None,
+            Some(selection),
+            Some(self.selection_reversed),
+            false,
+            cx,
+        );
+    }
+
+    /// Strip every inline format (bold/italic/underline/strikethrough/highlight/
+    /// code/superscript/subscript) from the current selection.  Each currently
+    /// enabled flag is toggled off; absent flags are left untouched.  An empty
+    /// selection does nothing.
+    pub(crate) fn clear_inline_formatting(&mut self, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() || self.uses_raw_text_editing() {
+            return;
+        }
+        let selection = self.selection_clean_range();
+        let mut next_title = self.record.title.clone();
+        // Collect the flags present somewhere in the selection so we toggle off
+        // only those (toggling an absent flag would add it).
+        let overlapping: Vec<_> = self
+            .current_cache()
+            .spans()
+            .iter()
+            .filter(|span| span.range.start < selection.end && span.range.end > selection.start)
+            .collect();
+        let flags_to_clear: Vec<StyleFlag> = [
+            (StyleFlag::Bold, overlapping.iter().any(|s| s.style.bold)),
+            (StyleFlag::Italic, overlapping.iter().any(|s| s.style.italic)),
+            (
+                StyleFlag::Underline,
+                overlapping.iter().any(|s| s.style.underline),
+            ),
+            (
+                StyleFlag::Strikethrough,
+                overlapping.iter().any(|s| s.style.strikethrough),
+            ),
+            (
+                StyleFlag::Highlight,
+                overlapping.iter().any(|s| s.style.highlight),
+            ),
+            (StyleFlag::Code, overlapping.iter().any(|s| s.style.code)),
+            (
+                StyleFlag::Superscript,
+                overlapping
+                    .iter()
+                    .any(|s| s.style.script == InlineScript::Superscript),
+            ),
+            (
+                StyleFlag::Subscript,
+                overlapping
+                    .iter()
+                    .any(|s| s.style.script == InlineScript::Subscript),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(flag, on)| on.then_some(flag))
+        .collect();
+        for flag in flags_to_clear {
+            next_title.toggle_style(selection.clone(), flag);
+        }
         self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
         self.apply_title_edit(
             next_title,
@@ -2001,6 +2072,42 @@ impl Block {
             selection.start + visible_text.len(),
             None,
             Some(selection.start..selection.start + visible_text.len()),
+            Some(self.selection_reversed),
+            false,
+            cx,
+        );
+    }
+
+    /// Wrap the current selection in an inline math span `$...$`.  With an empty
+    /// selection this inserts `$x$` and selects the `x` placeholder so the user
+    /// can type the formula.  The literal markdown is spliced in and the
+    /// normalizer re-parses it into an inline-math fragment.
+    pub(crate) fn insert_inline_math_at_selection(&mut self, cx: &mut Context<Self>) {
+        if self.uses_raw_text_editing() {
+            return;
+        }
+        let selection = self.selection_clean_range();
+        let (body, post_sel_len) = if selection.is_empty() {
+            ("x".to_string(), 1)
+        } else {
+            (self.display_text()[selection.clone()].to_string(), selection.len())
+        };
+        let math_markdown = format!("${body}$");
+
+        let next_title = self.record.title.clone();
+        let result = next_title.replace_visible_range_with_link_references(
+            selection.clone(),
+            &math_markdown,
+            InlineInsertionAttributes::default(),
+            &self.link_reference_definitions,
+        );
+
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.apply_title_edit(
+            result.tree,
+            selection.start + post_sel_len,
+            None,
+            Some(selection.start..selection.start + post_sel_len),
             Some(self.selection_reversed),
             false,
             cx,

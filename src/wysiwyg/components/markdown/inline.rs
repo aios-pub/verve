@@ -1060,6 +1060,14 @@ impl InlineTextTree {
         self.toggle_style(range, StyleFlag::Code)
     }
 
+    pub fn toggle_superscript(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Superscript)
+    }
+
+    pub fn toggle_subscript(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Subscript)
+    }
+
     pub fn unwrap_styles_on_fragments(&mut self, targets: &[(usize, StyleFlag)]) {
         if targets.is_empty() {
             return;
@@ -1182,7 +1190,7 @@ impl InlineTextTree {
         }
     }
 
-    fn toggle_style(&mut self, range: Range<usize>, flag: StyleFlag) -> bool {
+    pub(crate) fn toggle_style(&mut self, range: Range<usize>, flag: StyleFlag) -> bool {
         if range.is_empty() {
             return false;
         }

@@ -117,7 +117,7 @@ impl Editor {
     /// land: after the currently focused block, or appended to the document root
     /// when nothing is focused.  Mirrors the target resolution the context-menu
     /// table-insert flow already uses.
-    fn insert_target_from_focus(&self, window: &Window, cx: &App) -> TableInsertTarget {
+    pub(super) fn insert_target_from_focus(&self, window: &Window, cx: &App) -> TableInsertTarget {
         match self.document.focused_block_entity_id(window, cx) {
             Some(entity_id) => TableInsertTarget::After(entity_id),
             None => TableInsertTarget::Append,
@@ -127,7 +127,7 @@ impl Editor {
     /// Inserts a new structural block (e.g. separator, image) at `target` and
     /// lands the caret on the trailing paragraph that follows it.  Shared by the
     /// horizontal-rule and image insert actions.
-    fn insert_structural_block(
+    pub(super) fn insert_structural_block(
         &mut self,
         target: TableInsertTarget,
         record: crate::wysiwyg::components::BlockRecord,

@@ -234,6 +234,12 @@ impl Editor {
         })
     }
 
+    /// The currently focused block entity id, for toolbar state detection and
+    /// execution helpers that fire from click handlers (no Window required).
+    pub(super) fn active_entity_id_for_toolbar(&self) -> Option<EntityId> {
+        self.active_entity_id.or(self.pending_focus)
+    }
+
     pub(super) fn first_focusable_entity_id(&self, cx: &App) -> Option<EntityId> {
         let first_root = self.document.first_root()?.clone();
         if first_root.read(cx).kind() == BlockKind::Table {

@@ -2288,7 +2288,23 @@ impl Render for Editor {
         } else {
             main_content
         };
-        let base = base.child(main_content.child(content_area));
+        // Wrap the editor content column with the formatting toolbar on top.
+        // The toolbar sits at the editor viewport's top edge (the empty
+        // title-bar slot); render_toolbar returns None in source mode.
+        let editor_column = if let Some(toolbar) = self.render_toolbar(&theme, window, cx) {
+            div()
+                .h_full()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .child(toolbar)
+                .child(content_area)
+                .into_any_element()
+        } else {
+            content_area.into_any_element()
+        };
+        let base = base.child(main_content.child(editor_column));
         // The status bar (word count, view-mode switch, cursor position,
         // sidebar toggle) is rendered when `show_chrome` is set — i.e. for the
         // standalone markdown side-view. The notes panel disables it (it has

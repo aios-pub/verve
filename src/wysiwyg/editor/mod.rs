@@ -14,6 +14,7 @@ use gpui::*;
 
 use self::context_menu::{ContextMenuState, ImageInsertDialogState, TableInsertDialogState};
 use self::find::FindState;
+use self::toolbar::ToolbarState;
 use self::tree::DocumentTree;
 use crate::wysiwyg::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
@@ -39,6 +40,7 @@ mod selection;
 mod source_mapping;
 mod status_bar;
 mod table_edit;
+mod toolbar;
 // velotype's editor integration tests (`tests.rs`) depend on gpui's
 // `test-support` feature, which verve's zed-fork gpui does not expose. The
 // file is copied but gated off until re-ported against verve's test harness
@@ -128,6 +130,8 @@ pub struct Editor {
     update_check_in_progress: bool,
     workspace: WorkspaceState,
     status_bar: StatusBarState,
+    /// Top formatting toolbar (H1-3 / B I S U / Paragraph / Format dropdowns).
+    toolbar: ToolbarState,
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
     image_insert_dialog: Option<ImageInsertDialogState>,
@@ -347,6 +351,7 @@ impl Editor {
             update_check_in_progress: false,
             workspace: WorkspaceState::default(),
             status_bar: StatusBarState::default(),
+            toolbar: ToolbarState::new(),
             context_menu: None,
             table_insert_dialog: None,
             image_insert_dialog: None,

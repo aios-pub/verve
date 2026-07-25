@@ -40,7 +40,7 @@ mod selection;
 mod source_mapping;
 mod status_bar;
 mod table_edit;
-mod toolbar;
+pub mod toolbar;
 // velotype's editor integration tests (`tests.rs`) depend on gpui's
 // `test-support` feature, which verve's zed-fork gpui does not expose. The
 // file is copied but gated off until re-ported against verve's test harness

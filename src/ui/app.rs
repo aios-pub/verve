@@ -56,6 +56,7 @@ use crate::ui::share_dialog;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
+use crate::wysiwyg::editor::toolbar::{ToolbarAction, ToolbarDropdown, ToolbarSnapshot};
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -2654,6 +2655,322 @@ impl VerveApp {
         }
     }
 
+    /// Render the WYSIWYG formatting toolbar (H1-3 / B I S U / Paragraph /
+    /// Format dropdowns) for embedding in a title bar. `editor` is the focused
+    /// editor entity. Returns an empty element when the editor is in source
+    /// mode (toolbar hidden).
+    fn render_editor_toolbar(
+        &mut self,
+        editor: &Entity<crate::wysiwyg::editor::Editor>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::wysiwyg::editor::toolbar::{
+            BlockKindSnapshot, ToolbarAction, ToolbarDropdown, ToolbarSnapshot,
+        };
+        use crate::wysiwyg::components::actions::{resolved_shortcut_keys, ShortcutCommand};
+        use gpui_component::kbd::Kbd;
+
+        let theme = cx.theme().clone();
+        let snap = editor.read(cx).toolbar_snapshot(cx);
+        let open = editor.read(cx).toolbar_open_dropdown();
+        let editor_for_actions = editor.clone();
+
+        // Active background/text colors.
+        let active_bg = theme.accent.opacity(0.2);
+        let active_fg = theme.accent;
+        let idle_fg = theme.foreground;
+        let hover_bg = theme.muted;
+
+        // ---- flat button builder ----
+        let mut bar = h_flex().gap(px(2.)).items_center();
+
+        // H1 / H2 / H3
+        for level in [1u8, 2, 3] {
+            let active = snap.heading_level == Some(level);
+            let ed = editor.clone();
+            bar = bar.child(
+                div()
+                    .id(ElementId::NamedInteger("tb-h".into(), level as u64))
+                    .px(px(8.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(4.))
+                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .hover(|t| t.bg(hover_bg))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(if active { active_fg } else { idle_fg })
+                    .child(format!("H{level}"))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        let _ = ed.update(cx, |e, cx| {
+                            e.toolbar_apply(ToolbarAction::Heading(level), w, cx)
+                        });
+                        cx.notify();
+                    })),
+            );
+        }
+        bar = bar.child(toolbar_divider(&theme));
+
+        // B / I / S / U (glyphs decorated via the format itself)
+        let inline_buttons: [(char, ToolbarAction, ShortcutCommand, fn(gpui::Div) -> gpui::Div); 4] = [
+            ('B', ToolbarAction::Bold, ShortcutCommand::BoldSelection, |d: gpui::Div| {
+                d.font_weight(FontWeight::BOLD)
+            }),
+            ('I', ToolbarAction::Italic, ShortcutCommand::ItalicSelection, |d: gpui::Div| {
+                d.italic()
+            }),
+            (
+                'U',
+                ToolbarAction::Underline,
+                ShortcutCommand::UnderlineSelection,
+                |d: gpui::Div| d.underline(),
+            ),
+            (
+                'S',
+                ToolbarAction::Strikethrough,
+                ShortcutCommand::StrikethroughSelection,
+                |d: gpui::Div| d.line_through(),
+            ),
+        ];
+        let style_active = |a: &ToolbarAction| match a {
+            ToolbarAction::Bold => snap.style.bold,
+            ToolbarAction::Italic => snap.style.italic,
+            ToolbarAction::Underline => snap.style.underline,
+            ToolbarAction::Strikethrough => snap.style.strikethrough,
+            _ => false,
+        };
+        for (glyph, action, _cmd, decorate) in inline_buttons {
+            let active = style_active(&action);
+            let ed = editor.clone();
+            bar = bar.child(
+                div()
+                    .id(ElementId::Name(format!("tb-fmt-{glyph}").into()))
+                    .w(px(28.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .hover(|t| t.bg(hover_bg))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .text_color(if active { active_fg } else { idle_fg })
+                    .child(decorate(div()).child(glyph.to_string()))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        let _ = ed.update(cx, |e, cx| e.toolbar_apply(action.clone(), w, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        bar = bar.child(toolbar_divider(&theme));
+
+        // Paragraph / Format dropdown triggers
+        for (label, dropdown) in [
+            ("Paragraph", ToolbarDropdown::Paragraph),
+            ("Format", ToolbarDropdown::Format),
+        ] {
+            let is_open = open == Some(dropdown);
+            let ed = editor.clone();
+            bar = bar.child(
+                div()
+                    .id(ElementId::Name(format!("tb-dd-{label}").into()))
+                    .px(px(8.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .rounded(px(4.))
+                    .bg(if is_open { hover_bg } else { hsla(0., 0., 0., 0.) })
+                    .hover(|t| t.bg(hover_bg))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .text_color(idle_fg)
+                    .child(label.to_string())
+                    .child(div().text_size(px(10.)).child(if is_open { "▲" } else { "▼" }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let _ = ed.update(cx, |e, cx| e.toolbar_toggle_dropdown(dropdown, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+
+        // The dropdown panel (only when one is open).
+        let panel = match open {
+            Some(ToolbarDropdown::Paragraph) => {
+                Some(self.render_paragraph_panel(editor, &snap, &theme, cx))
+            }
+            Some(ToolbarDropdown::Format) => Some(self.render_format_panel(editor, &snap, &theme, cx)),
+            None => None,
+        };
+
+        let mut wrapper = h_flex().gap(px(2.)).items_center().child(bar);
+        if let Some(panel) = panel {
+            // Outside-click overlay to dismiss.
+            let ed = editor.clone();
+            wrapper = wrapper.child(
+                div()
+                    .id("tb-dropdown-overlay")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, _, _, cx| {
+                        let _ = ed.update(cx, |e, cx| e.close_toolbar_dropdown(cx));
+                    }))
+                    .child(panel),
+            );
+        }
+        wrapper.into_any_element()
+    }
+
+    /// Paragraph dropdown panel (block-level actions).
+    fn render_paragraph_panel(
+        &mut self,
+        editor: &Entity<crate::wysiwyg::editor::Editor>,
+        snap: &ToolbarSnapshot,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::wysiwyg::components::actions::ShortcutCommand;
+        use crate::wysiwyg::editor::toolbar::BlockKindSnapshot;
+
+        let level = snap.heading_level;
+        let kind = snap.block_kind.as_ref();
+        let mk = |level: u8| match level {
+            1 => ShortcutCommand::Heading1,
+            2 => ShortcutCommand::Heading2,
+            3 => ShortcutCommand::Heading3,
+            4 => ShortcutCommand::Heading4,
+            5 => ShortcutCommand::Heading5,
+            _ => ShortcutCommand::Heading6,
+        };
+        let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
+            ("Heading 4".into(), level == Some(4), command_keycap(mk(4)), false, ToolbarAction::Heading(4)),
+            ("Heading 5".into(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
+            ("Heading 6".into(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),
+            ("".into(), false, None, false, ToolbarAction::Paragraph), // separator marker
+            ("Promote Heading".into(), false, None, level.is_none() || level == Some(1), ToolbarAction::PromoteHeading),
+            ("Demote Heading".into(), false, None, level.is_none() || level == Some(6), ToolbarAction::DemoteHeading),
+            ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
+            ("Table".into(), false, command_keycap(ShortcutCommand::InsertTable), false, ToolbarAction::InsertTable),
+            ("Code Fences".into(), matches!(kind, Some(BlockKindSnapshot::CodeBlock)), command_keycap(ShortcutCommand::ConvertToCodeBlock), false, ToolbarAction::CodeBlock),
+            ("Quote Block".into(), matches!(kind, Some(BlockKindSnapshot::Quote)), command_keycap(ShortcutCommand::ConvertToQuote), false, ToolbarAction::Quote),
+            ("Math Block".into(), matches!(kind, Some(BlockKindSnapshot::MathBlock)), None, false, ToolbarAction::InsertMathBlock),
+            ("Html Block".into(), matches!(kind, Some(BlockKindSnapshot::HtmlBlock)), None, false, ToolbarAction::InsertHtmlBlock),
+            ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
+            ("Ordered List".into(), matches!(kind, Some(BlockKindSnapshot::NumberedList)), command_keycap(ShortcutCommand::ConvertToNumberedList), false, ToolbarAction::NumberedList),
+            ("Bullet List".into(), matches!(kind, Some(BlockKindSnapshot::BulletedList)), command_keycap(ShortcutCommand::ConvertToBulletedList), false, ToolbarAction::BulletedList),
+            ("Task List".into(), matches!(kind, Some(BlockKindSnapshot::TaskList)), command_keycap(ShortcutCommand::ConvertToTaskList), false, ToolbarAction::TaskList),
+            ("Loose List Item".into(), false, None, true, ToolbarAction::Paragraph), // disabled placeholder
+            ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
+            ("Paragraph".into(), matches!(kind, Some(BlockKindSnapshot::Paragraph)), command_keycap(ShortcutCommand::ConvertToParagraph), false, ToolbarAction::Paragraph),
+            ("Horizontal Rule".into(), matches!(kind, Some(BlockKindSnapshot::Separator)), command_keycap(ShortcutCommand::InsertHorizontalRule), false, ToolbarAction::InsertHorizontalRule),
+        ];
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        for (label, checked, keycap, disabled, action) in items {
+            if label.is_empty() {
+                rows.push(dropdown_separator(theme));
+            } else {
+                rows.push(self.render_dropdown_item(editor, &label, checked, keycap, disabled, action, theme, cx));
+            }
+        }
+        dropdown_panel("paragraph-dropdown", rows, theme)
+    }
+
+    /// Format dropdown panel (inline actions).
+    fn render_format_panel(
+        &mut self,
+        editor: &Entity<crate::wysiwyg::editor::Editor>,
+        snap: &ToolbarSnapshot,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::wysiwyg::components::actions::ShortcutCommand;
+        use crate::wysiwyg::components::markdown::inline::InlineScript;
+
+        let style = &snap.style;
+        let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
+            ("Superscript".into(), style.script == InlineScript::Superscript, None, false, ToolbarAction::Superscript),
+            ("Subscript".into(), style.script == InlineScript::Subscript, None, false, ToolbarAction::Subscript),
+            ("Highlight".into(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),
+            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
+            ("Inline Code".into(), style.code, command_keycap(ShortcutCommand::CodeSelection), false, ToolbarAction::InlineCode),
+            ("Inline Math".into(), false, None, false, ToolbarAction::InlineMath),
+            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
+            ("Hyperlink".into(), false, command_keycap(ShortcutCommand::InsertLink), false, ToolbarAction::InsertLink),
+            ("Image".into(), false, command_keycap(ShortcutCommand::InsertImage), false, ToolbarAction::InsertImage),
+            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
+            ("Clear Formatting".into(), false, None, false, ToolbarAction::ClearFormatting),
+        ];
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        for (label, checked, keycap, disabled, action) in items {
+            if label.is_empty() {
+                rows.push(dropdown_separator(theme));
+            } else {
+                rows.push(self.render_dropdown_item(editor, &label, checked, keycap, disabled, action, theme, cx));
+            }
+        }
+        dropdown_panel("format-dropdown", rows, theme)
+    }
+
+    /// One dropdown row: ✓ (when active) + label (left), keycap (right).
+    #[allow(clippy::too_many_arguments)]
+    fn render_dropdown_item(
+        &mut self,
+        editor: &Entity<crate::wysiwyg::editor::Editor>,
+        label: &str,
+        checked: bool,
+        keycap: Option<AnyElement>,
+        disabled: bool,
+        action: ToolbarAction,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accent = theme.accent;
+        let fg = theme.foreground;
+        let hover_bg = theme.muted;
+        let mut row = div()
+            .id(ElementId::Name(format!("tb-item-{label}").into()))
+            .w_full()
+            .h(px(28.))
+            .px(px(10.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(16.))
+            .rounded(px(4.));
+        if disabled {
+            row = row.opacity(0.4);
+        } else {
+            row = row.hover(|t| t.bg(hover_bg)).cursor_pointer();
+        }
+        row = row.child(
+            h_flex()
+                .items_center()
+                .gap(px(6.))
+                .child(div().w(px(14.)).text_color(accent).child(if checked { "✓" } else { "" }))
+                .child(div().text_size(px(13.)).text_color(fg).child(label.to_string())),
+        );
+        row = row.child(h_flex().gap(px(2.)).when_some(keycap, |t, k| t.child(k)));
+        if disabled {
+            row.into_any_element()
+        } else {
+            let editor = editor.clone();
+            row.on_click(cx.listener(move |this, _, w, cx| {
+                let _ = editor.update(cx, |e, cx| e.toolbar_apply(action.clone(), w, cx));
+                cx.notify();
+            }))
+            .into_any_element()
+        }
+    }
+
     fn render_api_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let st = self.state.read(cx);
@@ -3800,6 +4117,11 @@ impl VerveApp {
                             ),
                     ),
             )
+            // WYSIWYG formatting toolbar (H1-3 / B I S U / Paragraph / Format).
+            .child({
+                let editor = notes.read(cx).editor().clone();
+                self.render_editor_toolbar(&editor, cx)
+            })
             .child(div().flex_1())
             // Import button.
             .child(
@@ -3991,6 +4313,58 @@ fn menu_item(
 /// A thin separator between menu groups.
 fn menu_separator(theme: &gpui_component::Theme) -> impl IntoElement {
     div().w_full().h(px(1.)).my(px(2.)).bg(theme.border)
+}
+
+/// A Kbd keycap for a command's primary binding (for dropdown rows), or None.
+fn command_keycap(
+    command: crate::wysiwyg::components::actions::ShortcutCommand,
+) -> Option<AnyElement> {
+    use crate::wysiwyg::components::actions::resolved_shortcut_keys;
+    use gpui_component::kbd::Kbd;
+    let cfg = crate::state::persistence::load_shortcuts();
+    resolved_shortcut_keys(&cfg, command)
+        .first()
+        .and_then(|k| Keystroke::parse(k).ok())
+        .map(|ks| Kbd::new(ks).into_any_element())
+}
+
+/// A thin vertical divider between toolbar button groups.
+fn toolbar_divider(theme: &gpui_component::Theme) -> impl IntoElement {
+    div().mx(px(4.)).w(px(1.)).h(px(16.)).bg(theme.border)
+}
+
+/// A horizontal separator inside a dropdown panel.
+fn dropdown_separator(theme: &gpui_component::Theme) -> AnyElement {
+    div()
+        .mx(px(6.))
+        .my(px(3.))
+        .h(px(1.))
+        .bg(theme.border)
+        .into_any_element()
+}
+
+/// The floating dropdown panel container.
+fn dropdown_panel(id: &'static str, items: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
+    div()
+        .id(id)
+        .absolute()
+        .top(px(34.))
+        .left(px(0.))
+        .w(px(240.))
+        .max_h(px(420.))
+        .overflow_y_scroll()
+        .p(px(4.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .bg(theme.background)
+        .border(px(1.))
+        .border_color(theme.border)
+        .rounded(px(6.))
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .children(items)
+        .into_any_element()
 }
 
 /// Show the "share created" result dialog with the given URL. Used by both
@@ -4352,6 +4726,11 @@ impl VerveApp {
                     }),
             )
             .child(div().flex_1())
+            // WYSIWYG formatting toolbar (H1-3 / B I S U / Paragraph / Format).
+            .child({
+                let editor = md.read(cx).editor().clone();
+                self.render_editor_toolbar(&editor, cx)
+            })
             // New
             .child(
                 Button::new("md-title-new")

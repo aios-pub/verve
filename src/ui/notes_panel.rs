@@ -363,6 +363,11 @@ impl NotesPanel {
     }
 
     /// Number of notes in the store (used for the title-bar badge).
+    /// The embedded WYSIWYG editor entity (used by the title-bar toolbar).
+    pub fn editor(&self) -> &Entity<crate::wysiwyg::editor::Editor> {
+        &self.editor
+    }
+
     pub fn note_count(&self) -> usize {
         self.store.notes.len()
     }

@@ -2791,16 +2791,16 @@ impl VerveApp {
         bar = bar.child(toolbar_divider(&theme));
 
         // Additional flat buttons: ordered list, bullet list, quote, code block,
-        // table, image, clear formatting. Short text labels (no fitting icons in
-        // the asset set) — same shape as the heading/format buttons.
-        let flat_buttons: [(&str, ToolbarAction); 7] = [
-            ("1.", ToolbarAction::NumberedList),
-            ("•", ToolbarAction::BulletedList),
-            ("\"", ToolbarAction::Quote),
-            ("</>", ToolbarAction::CodeBlock),
-            ("Tbl", ToolbarAction::InsertTable),
-            ("Img", ToolbarAction::InsertImage),
-            ("Clr", ToolbarAction::ClearFormatting),
+        // table, image, clear formatting. Rendered as custom SVG icons (see
+        // assets/verve_icons/), inheriting the button's text color.
+        let flat_buttons: [(&str, &str, ToolbarAction); 7] = [
+            (crate::assets::TB_LIST_ORDERED, "ordered", ToolbarAction::NumberedList),
+            (crate::assets::TB_LIST, "bullet", ToolbarAction::BulletedList),
+            (crate::assets::TB_QUOTE, "quote", ToolbarAction::Quote),
+            (crate::assets::TB_CODE, "code", ToolbarAction::CodeBlock),
+            (crate::assets::TB_TABLE, "table", ToolbarAction::InsertTable),
+            (crate::assets::TB_IMAGE, "image", ToolbarAction::InsertImage),
+            (crate::assets::TB_ERASER, "clear", ToolbarAction::ClearFormatting),
         ];
         let block_kind = &snap.block_kind;
         let flat_active = |a: &ToolbarAction| match a {
@@ -2810,12 +2810,12 @@ impl VerveApp {
             ToolbarAction::CodeBlock => matches!(block_kind, Some(BlockKindSnapshot::CodeBlock)),
             _ => false,
         };
-        for (glyph, action) in flat_buttons {
+        for (icon_path, id_label, action) in flat_buttons {
             let active = flat_active(&action);
             let ed = editor.clone();
             bar = bar.child(
                 div()
-                    .id(ElementId::Name(format!("tb-flat-{glyph}").into()))
+                    .id(ElementId::Name(format!("tb-flat-{id_label}").into()))
                     .px(px(6.))
                     .h(px(26.))
                     .flex()
@@ -2825,9 +2825,12 @@ impl VerveApp {
                     .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
                     .hover(|t| t.bg(hover_bg))
                     .cursor_pointer()
-                    .text_size(px(12.))
                     .text_color(if active { active_fg } else { idle_fg })
-                    .child(glyph.to_string())
+                    .child(
+                        gpui_component::Icon::from(gpui_component::IconName::Redo)
+                            .path(icon_path)
+                            .small(),
+                    )
                     .on_click(cx.listener(move |this, _, w, cx| {
                         let _ = ed.update(cx, |e, cx| e.toolbar_apply(action.clone(), w, cx));
                         cx.notify();

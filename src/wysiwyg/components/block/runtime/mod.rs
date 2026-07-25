@@ -1935,7 +1935,77 @@ impl Block {
     ///
     /// Serializers later translate these flags back to markers on export.
     pub(crate) fn toggle_inline_format(&mut self, format: InlineFormat, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() || self.uses_raw_text_editing() {
+        if self.uses_raw_text_editing() {
+            return;
+        }
+
+        // No selection: insert a small placeholder carrying the format and
+        // select it, so the user can type over it (the "insert marker pair,
+        // caret inside" convention). The placeholder is chosen per format.
+        if self.selected_range.is_empty() {
+            let placeholder = match format {
+                InlineFormat::Code => "code",
+                InlineFormat::Bold => "text",
+                InlineFormat::Italic => "text",
+                _ => "text",
+            };
+            let style = match format {
+                InlineFormat::Bold => InlineStyle {
+                    bold: true,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Italic => InlineStyle {
+                    italic: true,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Underline => InlineStyle {
+                    underline: true,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Strikethrough => InlineStyle {
+                    strikethrough: true,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Highlight => InlineStyle {
+                    highlight: true,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Superscript => InlineStyle {
+                    script: InlineScript::Superscript,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Subscript => InlineStyle {
+                    script: InlineScript::Subscript,
+                    ..InlineStyle::default()
+                },
+                InlineFormat::Code => InlineStyle {
+                    code: true,
+                    ..InlineStyle::default()
+                },
+            };
+            let attributes = InlineInsertionAttributes {
+                style,
+                ..InlineInsertionAttributes::default()
+            };
+            let selection = self.selection_clean_range();
+            let next_title = self.record.title.clone();
+            let result = next_title.replace_visible_range_with_link_references(
+                selection.clone(),
+                placeholder,
+                attributes,
+                &self.link_reference_definitions,
+            );
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            let ph_len = placeholder.chars().count();
+            self.apply_title_edit(
+                result.tree,
+                selection.start + ph_len,
+                None,
+                Some(selection.start..selection.start + ph_len),
+                Some(self.selection_reversed),
+                false,
+                cx,
+            );
             return;
         }
 

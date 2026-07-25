@@ -1780,8 +1780,27 @@ impl Editor {
                     vec![new_paragraph.clone()],
                     cx,
                 );
-                self.focus_block(new_paragraph.entity_id());
                 self.normalize_rendered_quote_structure(cx);
+                // normalize_rendered_quote_structure rebuilds the whole document
+                // from markdown, so the inserted paragraph entity is gone. Find
+                // the paragraph that now follows the quote (the last visible
+                // block when exiting a trailing quote, else the next sibling)
+                // and land the caret at its start.
+                let target = self
+                    .document
+                    .flatten_visible_blocks()
+                    .into_iter()
+                    .rev()
+                    .map(|v| v.entity)
+                    .find(|b| {
+                        let block = b.read(cx);
+                        let kind = block.kind();
+                        !kind.is_quote_container() && block.quote_depth == 0
+                    });
+                if let Some(target) = target {
+                    Self::reset_block_cursor(&target, 0, cx);
+                    self.focus_block(target.entity_id());
+                }
                 self.mark_dirty(cx);
                 self.finalize_pending_undo_capture(cx);
                 cx.notify();

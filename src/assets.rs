@@ -49,6 +49,14 @@ pub const FILE_PDF: &str = "icons/verve/file-pdf.svg";
 pub const MARKDOWN: &str = "icons/verve/markdown.svg";
 pub const SAVE: &str = "icons/verve/save.svg";
 pub const SAVE_AS: &str = "icons/verve/save-as.svg";
+// WYSIWYG toolbar icons.
+pub const TB_TABLE: &str = "icons/verve/table.svg";
+pub const TB_IMAGE: &str = "icons/verve/image.svg";
+pub const TB_ERASER: &str = "icons/verve/eraser.svg";
+pub const TB_LIST_ORDERED: &str = "icons/verve/list-ordered.svg";
+pub const TB_LIST: &str = "icons/verve/list.svg";
+pub const TB_QUOTE: &str = "icons/verve/quote.svg";
+pub const TB_CODE: &str = "icons/verve/code.svg";
 
 /// Prefix under which bundled fonts are exposed to gpui's SVG renderer.
 const FONTS_PREFIX: &str = "fonts/";

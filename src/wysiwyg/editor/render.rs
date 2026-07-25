@@ -2039,6 +2039,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_close_window))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_toggle_workspace_action))
+            .on_action(cx.listener(Self::on_insert_horizontal_rule))
+            .on_action(cx.listener(Self::on_insert_table))
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))

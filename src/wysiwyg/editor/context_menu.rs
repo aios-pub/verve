@@ -6,7 +6,8 @@ use gpui::*;
 
 use super::{Editor, TableAxisSelection, ViewMode};
 use crate::wysiwyg::components::{
-    DismissTransientUi, TableAxisKind, TableColumnAlignment, TableData,
+    DismissTransientUi, InsertHorizontalRule, InsertTable, TableAxisKind, TableColumnAlignment,
+    TableData,
 };
 use crate::wysiwyg::i18n::I18nManager;
 use crate::wysiwyg::theme::Theme;
@@ -101,6 +102,132 @@ impl Editor {
         if self.table_insert_dialog.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// Resolve where a keyboard-triggered insert (Cmd-T, Cmd-Shift--, ...) should
+    /// land: after the currently focused block, or appended to the document root
+    /// when nothing is focused.  Mirrors the target resolution the context-menu
+    /// table-insert flow already uses.
+    fn insert_target_from_focus(&self, window: &Window, cx: &App) -> TableInsertTarget {
+        match self.document.focused_block_entity_id(window, cx) {
+            Some(entity_id) => TableInsertTarget::After(entity_id),
+            None => TableInsertTarget::Append,
+        }
+    }
+
+    /// Inserts a new structural block (e.g. separator, image) at `target` and
+    /// lands the caret on the trailing paragraph that follows it.  Shared by the
+    /// horizontal-rule and image insert actions.
+    fn insert_structural_block(
+        &mut self,
+        target: TableInsertTarget,
+        record: crate::wysiwyg::components::BlockRecord,
+        cx: &mut Context<Self>,
+    ) {
+        let new_block = Self::new_block(cx, record);
+        let inserted_id = new_block.entity_id();
+        match target {
+            TableInsertTarget::After(entity_id) => {
+                if let Some(location) = self.document.find_block_location(entity_id) {
+                    self.document.insert_blocks_at(
+                        location.parent,
+                        location.index + 1,
+                        vec![new_block.clone()],
+                        cx,
+                    );
+                } else {
+                    self.document.insert_blocks_at(
+                        None,
+                        self.document.root_count(),
+                        vec![new_block.clone()],
+                        cx,
+                    );
+                }
+            }
+            TableInsertTarget::Append => {
+                self.document.insert_blocks_at(
+                    None,
+                    self.document.root_count(),
+                    vec![new_block.clone()],
+                    cx,
+                );
+            }
+        }
+        // Structural blocks (separator/image) leave no editable caret inside, so
+        // ensure a trailing paragraph exists, then focus it.
+        self.ensure_trailing_paragraph_after_structural(&new_block, cx);
+        if let Some(location) = self.document.find_block_location(inserted_id) {
+            let sibling_count = match location.parent.as_ref() {
+                Some(parent) => parent.read(cx).children.len(),
+                None => self.document.root_count(),
+            };
+            if location.index + 1 < sibling_count {
+                // The trailing paragraph (if one was added) sits right after the
+                // structural block we just inserted.
+                let next_id = match location.parent.as_ref() {
+                    Some(parent) => parent
+                        .read(cx)
+                        .children
+                        .get(location.index + 1)
+                        .map(|b| b.entity_id()),
+                    None => self
+                        .document
+                        .root_blocks()
+                        .get(location.index + 1)
+                        .map(|b| b.entity_id()),
+                };
+                if let Some(id) = next_id {
+                    self.focus_block(id);
+                } else {
+                    self.focus_block(inserted_id);
+                }
+            } else {
+                self.focus_block(inserted_id);
+            }
+        }
+        self.rebuild_image_runtimes(cx);
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        cx.notify();
+    }
+
+    pub(super) fn on_insert_horizontal_rule(
+        &mut self,
+        _: &InsertHorizontalRule,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode != ViewMode::Rendered {
+            return;
+        }
+        let target = self.insert_target_from_focus(window, cx);
+        let record = crate::wysiwyg::components::BlockRecord::new(
+            crate::wysiwyg::components::BlockKind::Separator,
+            crate::wysiwyg::components::InlineTextTree::plain(String::new()),
+        );
+        self.insert_structural_block(target, record, cx);
+    }
+
+    pub(super) fn on_insert_table(
+        &mut self,
+        _: &InsertTable,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode != ViewMode::Rendered {
+            return;
+        }
+        // Open the existing table-insert dialog seeded from the focused block,
+        // reusing the same confirm flow as the context-menu entry point.
+        let target = self.insert_target_from_focus(window, cx);
+        self.close_menu_bar(cx);
+        self.context_menu_submenu_close_task = None;
+        self.table_insert_dialog = Some(TableInsertDialogState {
+            target,
+            body_rows: 2,
+            columns: 2,
+        });
+        cx.notify();
     }
 
     fn close_context_menu(&mut self, cx: &mut Context<Self>) {

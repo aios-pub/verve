@@ -1,10 +1,10 @@
 [Desktop Entry]
 Name=Verve
 Comment=API co-development platform with HTTP debugging, SSH terminal, document sharing
-Exec=verve
+Exec=verve %F
 Icon=verve
 Terminal=false
 Type=Application
 Categories=Development;Network;
 StartupNotify=true
-MimeType=application/json;
+MimeType=text/markdown;text/x-markdown;text/plain;application/json;

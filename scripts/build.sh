@@ -69,6 +69,25 @@ build_macos() {
 
     echo "✅ macOS bundle created: $APP_DIR"
 
+    # ── Inject the custom Info.plist (registers Verve for .md / .markdown /
+    #    .mdown / .mkd / .mkdn / .txt / .mdx file types). cargo-bundle 0.9.0
+    #    does not emit CFBundleDocumentTypes from [package.metadata.bundle], so
+    #    we overlay our own plist onto the bundle. Done BEFORE the ad-hoc
+    #    re-sign below so the signature covers the updated plist. ───────────
+    PLIST_SRC="$PROJECT_DIR/assets/macos/Info.plist"
+    PLIST_DST="$APP_DIR/Contents/Info.plist"
+    if [ -f "$PLIST_SRC" ]; then
+        BUILD_TS=$(date +%Y%m%d.%H%M%S)
+        sed "s/__VERSION__/$VERSION/g; s/__BUILD__/$BUILD_TS/g" "$PLIST_SRC" > "$PLIST_DST"
+        if plutil -lint "$PLIST_DST" >/dev/null 2>&1; then
+            echo "✅ Injected custom Info.plist (markdown document types registered)"
+        else
+            echo "⚠️  Injected Info.plist failed lint — keeping cargo-bundle default"
+        fi
+    else
+        echo "⚠️  assets/macos/Info.plist not found — skipping document-type injection"
+    fi
+
     # ── Bundle libpdfium.dylib next to the binary inside the .app ───────────
     # cargo-bundle does not automatically collect dylibs that the binary links
     # via @rpath; build.rs only copies libpdfium.dylib to target/release/.

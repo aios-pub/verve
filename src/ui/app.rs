@@ -870,6 +870,15 @@ impl VerveApp {
         // events). Route them to the Markdown editor panel.
         app.open_pending_markdown_files(cx);
 
+        // Keep draining the pending-files queue while the app is running. The
+        // initial drain above only covers files present at launch; files opened
+        // later (double-click a .md when Verve is already the default app, or
+        // `verve note.md` from a terminal against a running instance) land in
+        // the queue via main.rs's argv parser / `on_open_urls` and would never
+        // be opened without this watcher. The poll is cheap — the drain is a
+        // no-op when the queue is empty.
+        app.start_pending_file_watcher(cx);
+
         app
     }
 
@@ -892,6 +901,27 @@ impl VerveApp {
 }
 
 impl VerveApp {
+    /// Periodically drain the `PendingMarkdownFiles` global so files opened
+    /// after launch (double-click a .md when Verve is already running, or a
+    /// second `verve note.md` invocation) get routed to the Markdown editor.
+    /// The first drain happens in `new`; this watcher covers everything after.
+    /// Exits automatically when the view is dropped (`this.update` fails).
+    fn start_pending_file_watcher(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                let Ok(()) = this.update(cx, |app, cx| {
+                    app.open_pending_markdown_files(cx);
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
     /// Silent startup update check: fire after a 3s delay so the UI has settled.
     /// Only stores the result for the title-bar indicator; does not notify.
     fn startup_update_check(&mut self, cx: &mut Context<Self>) {

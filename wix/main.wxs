@@ -1,0 +1,164 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  Verve Windows installer (WiX) source.
+
+  Based on the cargo-wix default template (src/templates/main.v3.wxs in
+  volks73/cargo-wix): the {{lower-kebab}} placeholders and the {{#binaries}}
+  block render the same way `cargo wix init` would render them. cargo-wix
+  sorts binaries by name, so `verve` (alphabetically before `verve-server`)
+  is binary-index 0 → its `File Id` is `exe0`, which the FileAssociations
+  component below references as the Verb target.
+
+  The only addition over the stock template is the `FileAssociations`
+  component: it registers Verve as the handler for
+  .md / .markdown / .mdown / .mkd / .mkdn / .txt / .mdx so a double-clicked
+  file is passed to verve.exe as argv[1] (src/main.rs filters argv for these
+  extensions and opens it in the Markdown editor).
+-->
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='{{product-name}}'
+        UpgradeCode='{{upgrade-code-guid}}'
+        Manufacturer='{{manufacturer}}'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='{{product-name}} $(var.Version) installer'
+            Manufacturer='{{manufacturer}}'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='{{product-name}} Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='{{product-name}}'>
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='{{path-component-guid}}' KeyPath='yes'>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        {{#binaries}}
+                        <Component Id='binary{{binary-index}}' Guid='*'>
+                            <File
+                                Id='exe{{binary-index}}'
+                                Name='{{binary-name}}.exe'
+                                DiskId='1'
+                                Source='{{binary-source}}'
+                                KeyPath='yes'/>
+                        </Component>
+                        {{/binaries}}
+
+                        <!-- ── File associations ───────────────────────────────
+                             Registered for the primary executable (exe0 =
+                             verve.exe, see header note). The Verb
+                             Argument='"%1"' makes the shell pass the file path
+                             as argv[1]. -->
+                        <Component Id='FileAssociations' Guid='a84894b0-c8f2-4e40-9631-f10cb8b06c2a'>
+                            <ProgId Id='Verve.Markdown' Description='Markdown Document'>
+                                <Extension Id='md' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='markdown' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='mdown' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='mkd' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='mkdn' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='txt' ContentType='text/plain'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                                <Extension Id='mdx' ContentType='text/markdown'>
+                                    <Verb Id='open' Command='Open with {{product-name}}' TargetFile='exe0' Argument='"%1"'/>
+                                </Extension>
+                            </ProgId>
+
+                            <!-- Bind each extension's HKCR\.ext to our ProgId so
+                                 the association survives another app claiming
+                                 the extension. A key under HKCR makes the
+                                 component KeyPath'd without a File. -->
+                            <RegistryValue Root='HKCR' Key='.md\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string' KeyPath='yes'/>
+                            <RegistryValue Root='HKCR' Key='.markdown\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.mdown\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.mkd\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.mkdn\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.txt\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                            <RegistryValue Root='HKCR' Key='.mdx\OpenWithProgids' Name='Verve.Markdown' Value='' Type='string'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs all binaries and registers file associations.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+
+            {{#binaries}}
+            <ComponentRef Id='binary{{binary-index}}'/>
+            {{/binaries}}
+
+            <ComponentRef Id='FileAssociations'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location of the [ProductName] executable to the PATH system environment variable.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        {{#product-icon}}
+        <Icon Id='ProductICO' SourceFile='{{product-icon}}'/>
+        <Property Id='ARPPRODUCTICON' Value='ProductICO' />
+        {{/product-icon}}
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+        </UI>
+    </Product>
+</Wix>

@@ -2324,6 +2324,13 @@ impl Render for Editor {
         } else {
             base
         };
+        let base = if let Some(image_dialog) =
+            self.render_image_insert_dialog_overlay(&theme, cx)
+        {
+            base.child(image_dialog)
+        } else {
+            base
+        };
         let base = if let Some(find_bar) = self.render_find_bar(&theme, cx) {
             base.child(find_bar)
         } else {

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use self::context_menu::{ContextMenuState, TableInsertDialogState};
+use self::context_menu::{ContextMenuState, ImageInsertDialogState, TableInsertDialogState};
 use self::find::FindState;
 use self::tree::DocumentTree;
 use crate::wysiwyg::components::{
@@ -130,6 +130,7 @@ pub struct Editor {
     status_bar: StatusBarState,
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
+    image_insert_dialog: Option<ImageInsertDialogState>,
     /// Open in-editor find bar (Cmd/Ctrl+F). `None` when the bar is closed.
     find_state: Option<FindState>,
     context_menu_submenu_close_task: Option<Task<()>>,
@@ -348,6 +349,7 @@ impl Editor {
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,
+            image_insert_dialog: None,
             find_state: None,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,

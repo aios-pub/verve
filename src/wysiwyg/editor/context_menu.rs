@@ -45,6 +45,15 @@ pub(super) struct TableInsertDialogState {
     pub columns: usize,
 }
 
+/// State for the image-insert dialog (Cmd/Ctrl+Shift+I). The user fills in a
+/// URL (or picks a local file, which populates the URL field with the path)
+/// and an optional alt text; confirming inserts a standalone image block.
+pub(super) struct ImageInsertDialogState {
+    pub target: TableInsertTarget,
+    pub url: Entity<gpui_component::input::InputState>,
+    pub alt: Entity<gpui_component::input::InputState>,
+}
+
 impl Editor {
     pub(super) fn root_ancestor_entity_id(&self, entity_id: EntityId) -> EntityId {
         let mut current = entity_id;
@@ -240,10 +249,119 @@ impl Editor {
             return;
         }
         let target = self.insert_target_from_focus(window, cx);
-        // A standalone image is a paragraph whose title markdown is `![alt](src)`.
-        // The standalone-image detection path routes it through ImageRuntime on
-        // render. Users can then edit the URL/alt via the existing image UI.
-        let record = crate::wysiwyg::components::BlockRecord::paragraph("![](https://)".to_string());
+        self.open_image_insert_dialog(target, window, cx);
+    }
+
+    /// Open the image-insert dialog seeded with empty URL/alt fields.
+    fn open_image_insert_dialog(
+        &mut self,
+        target: TableInsertTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu_bar(cx);
+        self.context_menu_submenu_close_task = None;
+        let url = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx).placeholder("图片 URL 或本地路径")
+        });
+        let alt = cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("替代文本（可选）"));
+        self.image_insert_dialog = Some(ImageInsertDialogState { target, url, alt });
+        // Focus the URL field so the user can type or paste immediately.
+        if let Some(dialog) = self.image_insert_dialog.as_ref() {
+            dialog.url.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_cancel_image_insert_dialog(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_image_insert_dialog(cx);
+    }
+
+    fn close_image_insert_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.image_insert_dialog.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Native file picker for a local image. Runs on a background thread (rfd
+    /// blocks) and writes the chosen absolute path into the dialog's URL field.
+    pub(super) fn on_pick_image_file(
+        &mut self,
+        _event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let url_field = match self.image_insert_dialog.as_ref() {
+            Some(dialog) => dialog.url.clone(),
+            None => return,
+        };
+        let window_handle = window.window_handle();
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"])
+                .pick_file();
+            let _ = tx.send(res.map(|p| p.to_path_buf()));
+        });
+        cx.spawn(async move |_this, cx| {
+            let picked = loop {
+                match rx.try_recv() {
+                    Ok(Some(path)) => break Some(path),
+                    Ok(None) => break None,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(50))
+                            .await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break None,
+                }
+            };
+            if let Some(path) = picked {
+                let path_str = path.to_string_lossy().to_string();
+                // set_value needs a &mut Window; reach back into the originating
+                // window to update the InputState.
+                let _ = cx.update_window(
+                    window_handle,
+                    move |_view: AnyView, window: &mut Window, cx: &mut App| {
+                        let _ = url_field.update(cx, |state, cx| {
+                            state.set_value(&path_str, window, cx);
+                        });
+                    },
+                );
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn on_confirm_image_insert_dialog(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.image_insert_dialog.take() else {
+            return;
+        };
+        let url = dialog.url.read(cx).value().to_string();
+        let alt = dialog.alt.read(cx).value().to_string();
+        let target = dialog.target;
+        // A blank URL inserts nothing; just close.
+        if url.trim().is_empty() {
+            cx.notify();
+            return;
+        }
+        // A standalone image is a paragraph whose title markdown is
+        // `![alt](src)`. The standalone-image detection path routes it through
+        // ImageRuntime on render; the resolver handles both http(s) URLs and
+        // local paths.
+        let markdown = format!("![{alt}]({url})");
+        let record = crate::wysiwyg::components::BlockRecord::paragraph(markdown);
         self.insert_structural_block(target, record, cx);
     }
 
@@ -259,8 +377,9 @@ impl Editor {
     pub(super) fn dismiss_contextual_overlays(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
+        let had_image_dialog = self.image_insert_dialog.take().is_some();
         let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
-        if had_menu || had_dialog || had_submenu_close {
+        if had_menu || had_dialog || had_image_dialog || had_submenu_close {
             cx.notify();
         }
     }
@@ -1377,6 +1496,193 @@ impl Editor {
                                                     ),
                                                 )
                                                 .child(s.table_insert_confirm.clone()),
+                                        ),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Centered modal for inserting an image (Cmd/Ctrl+Shift+I). Provides a URL
+    /// field (with a "选择文件" button that opens the native file picker), an
+    /// optional alt-text field, and Cancel / Insert buttons.
+    pub(super) fn render_image_insert_dialog_overlay(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use gpui_component::button::{Button, ButtonVariants as _};
+        use gpui_component::input::Input;
+        use gpui_component::{Disableable as _, Sizable as _};
+
+        let dialog = self.image_insert_dialog.as_ref()?;
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let t = &theme.typography;
+        let url_input = dialog.url.clone();
+        let alt_input = dialog.alt.clone();
+        // Insert is enabled only when the URL field is non-empty.
+        let url_value = url_input.read(cx).value().to_string();
+        let can_confirm = !url_value.trim().is_empty();
+
+        Some(
+            div()
+                .id("image-insert-dialog-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(c.dialog_backdrop)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(Self::on_dismiss_context_menu_overlay),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .px(px(d.editor_padding))
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .id("image-insert-dialog")
+                                .w(px(d.dialog_width.min(d.table_insert_dialog_width)))
+                                .max_w(relative(1.0))
+                                .p(px(d.dialog_padding))
+                                .flex()
+                                .flex_col()
+                                .gap(px(d.dialog_gap))
+                                .bg(c.dialog_surface)
+                                .border(px(d.dialog_border_width))
+                                .border_color(c.dialog_border)
+                                .rounded(px(d.dialog_radius))
+                                .shadow_lg()
+                                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .child(
+                                    div()
+                                        .text_size(px(t.dialog_title_size))
+                                        .font_weight(t.dialog_title_weight.to_font_weight())
+                                        .text_color(c.dialog_title)
+                                        .child("插入图片"),
+                                )
+                                // URL row: input + "选择文件" button.
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(d.table_insert_stepper_gap))
+                                        .child(
+                                            div()
+                                                .text_size(px(t.dialog_body_size))
+                                                .font_weight(t.dialog_body_weight.to_font_weight())
+                                                .text_color(c.dialog_body)
+                                                .child("图片地址"),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(d.dialog_button_gap))
+                                                .child(
+                                                    div().flex_1().min_w_0().child(
+                                                        Input::new(&url_input).small(),
+                                                    ),
+                                                )
+                                                .child(
+                                                    Button::new("image-pick-file")
+                                                        .small()
+                                                        .ghost()
+                                                        .label("选择文件")
+                                                        .on_click(cx.listener(
+                                                            Self::on_pick_image_file,
+                                                        )),
+                                                ),
+                                        ),
+                                )
+                                // Alt text row.
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(d.table_insert_stepper_gap))
+                                        .child(
+                                            div()
+                                                .text_size(px(t.dialog_body_size))
+                                                .font_weight(t.dialog_body_weight.to_font_weight())
+                                                .text_color(c.dialog_body)
+                                                .child("替代文本"),
+                                        )
+                                        .child(Input::new(&alt_input).small()),
+                                )
+                                // Cancel / Insert buttons.
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_end()
+                                        .gap(px(d.dialog_button_gap))
+                                        .child(
+                                            div()
+                                                .id("cancel-image-insert-dialog")
+                                                .h(px(d.dialog_button_height))
+                                                .px(px(d.dialog_button_padding_x))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(px((d.dialog_radius - 4.0).max(0.0)))
+                                                .border(px(d.dialog_border_width))
+                                                .border_color(c.dialog_border)
+                                                .bg(c.dialog_secondary_button_bg)
+                                                .hover(|this| {
+                                                    this.bg(c.dialog_secondary_button_hover)
+                                                })
+                                                .cursor_pointer()
+                                                .text_size(px(t.dialog_button_size))
+                                                .font_weight(
+                                                    t.dialog_button_weight.to_font_weight(),
+                                                )
+                                                .text_color(c.dialog_secondary_button_text)
+                                                .on_click(cx.listener(
+                                                    Self::on_cancel_image_insert_dialog,
+                                                ))
+                                                .child("取消"),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("confirm-image-insert-dialog")
+                                                .h(px(d.dialog_button_height))
+                                                .px(px(d.dialog_button_padding_x))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(px((d.dialog_radius - 4.0).max(0.0)))
+                                                .border(px(d.dialog_border_width))
+                                                .border_color(c.dialog_border)
+                                                .bg(if can_confirm {
+                                                    c.dialog_primary_button_bg
+                                                } else {
+                                                    c.dialog_border.opacity(0.5)
+                                                })
+                                                .hover(|this| {
+                                                    this.bg(c.dialog_primary_button_hover)
+                                                })
+                                                .cursor_pointer()
+                                                .text_size(px(t.dialog_button_size))
+                                                .font_weight(
+                                                    t.dialog_button_weight.to_font_weight(),
+                                                )
+                                                .text_color(c.dialog_primary_button_text)
+                                                .on_click(cx.listener(
+                                                    Self::on_confirm_image_insert_dialog,
+                                                ))
+                                                .child("插入"),
                                         ),
                                 ),
                         ),

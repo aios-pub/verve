@@ -671,8 +671,12 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::Replace,
         id: "replace",
         category: ShortcutCategory::Edit,
+        // Bound at the block level (not the find-bar context) so Cmd/Ctrl+H
+        // opens the find/replace bar directly from the editor without first
+        // requiring Cmd+F. The handler enables replace mode and focuses the
+        // replacement field.
         default_keys: &["cmd-h", "ctrl-h"],
-        context: FIND_BAR_CONTEXT,
+        context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
         command: ShortcutCommand::ReplaceAll,

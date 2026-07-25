@@ -1564,8 +1564,17 @@ impl Editor {
                 .top(px(8.))
                 .right(px(16.))
                 .occlude()
-                // Scope FindNext/FindPrevious/Replace bindings to the bar.
+                // Scope FindNext/FindPrevious bindings to the bar.
                 .key_context("EditorFindBar")
+                // Esc closes the bar. DismissTransientUi's escape binding is
+                // context: None and gets dropped in the embedded build, so we
+                // also handle the raw key here to make Esc reliable.
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_find_bar(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
                 .child(
                     v_flex()
                         .gap(px(6.))
@@ -1576,7 +1585,7 @@ impl Editor {
                         .border(px(1.))
                         .border_color(c.dialog_border)
                         .bg(c.dialog_surface)
-                        .children(replace_row)
+                        // Find row on top, replace row below.
                         .child(
                             h_flex()
                                 .items_center()
@@ -1622,7 +1631,8 @@ impl Editor {
                                             this.close_find_bar(window, cx);
                                         })),
                                 ),
-                        ),
+                        )
+                        .children(replace_row),
                 )
                 .on_action(cx.listener(|this, _: &DismissTransientUi, window, cx| {
                     this.close_find_bar(window, cx);

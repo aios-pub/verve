@@ -59,6 +59,7 @@ fn build_text_runs(
     underline_thickness: Pixels,
     link_color: Hsla,
     code_bg: Hsla,
+    highlight_bg: Hsla,
     show_inline_code_backgrounds: bool,
 ) -> Vec<TextRun> {
     let spans = input.inline_spans();
@@ -133,6 +134,8 @@ fn build_text_runs(
 
         let mut background_color = if show_inline_code_backgrounds && inline_style.code {
             Some(code_bg)
+        } else if inline_style.highlight {
+            Some(highlight_bg)
         } else {
             base_run.background_color
         };
@@ -934,6 +937,7 @@ impl Element for BlockTextElement {
                     px(theme.dimensions.underline_thickness),
                     theme.colors.text_link,
                     theme.colors.code_bg,
+                    theme.colors.highlight_bg,
                     show_inline_code_backgrounds,
                 )
             }
@@ -1539,6 +1543,7 @@ mod tests {
                 px(1.0),
                 Hsla::from(rgba(0x0066ccff)),
                 Hsla::from(rgba(0x111111ff)),
+                Hsla::from(rgba(0xfde68a99)),
                 true,
             );
             let marked_run = runs.last().expect("styled text should create a final run");

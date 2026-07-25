@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <!-- Whale body -->
-  <path d="M4 12c0-2 1.5-3.5 3.5-3.5 1 0 1.8.5 2.3 1.2C10.5 9 11.5 8.5 12.5 8.5c2.2 0 4 1.8 4 4 0 .3 0 .7-.1 1H4z"/>
+  <path d="M2.5 13c0-2.5 1.9-4.5 4.6-4.5 1.3 0 2.4.6 3 1.6 1-.8 2.2-1.3 3.5-1.3 2.9 0 5.2 2.3 5.2 5.2 0 .4 0 .9-.1 1.3H2.5z"/>
   <!-- Containers on the whale -->
-  <rect x="6" y="10" width="2" height="2"/>
-  <rect x="9" y="10" width="2" height="2"/>
-  <rect x="12" y="10" width="2" height="2"/>
+  <rect x="4.8" y="10.6" width="2.6" height="2.6"/>
+  <rect x="8.3" y="10.6" width="2.6" height="2.6"/>
+  <rect x="11.8" y="10.6" width="2.6" height="2.6"/>
   <!-- Water/waves -->
-  <path d="M3 15h18"/>
-  <path d="M4.5 17c.5.5 1 .5 1.5 0s1-.5 1.5 0 1 .5 1.5 0 1-.5 1.5 0 1 .5 1.5 0 1-.5 1.5 0 1 .5 1.5 0 1-.5 1.5 0"/>
+  <path d="M2 16.5h20"/>
+  <path d="M3.6 18.7c.6.6 1.2.6 1.8 0s1.2-.6 1.8 0 1.2.6 1.8 0 1.2-.6 1.8 0 1.2.6 1.8 0 1.2-.6 1.8 0 1.2.6 1.8 0 1.2-.6 1.8 0"/>
   <!-- Bubbles -->
-  <circle cx="15" cy="5" r="1"/>
-  <circle cx="17" cy="7" r=".5"/>
+  <circle cx="18.5" cy="5.5" r="1.2"/>
+  <circle cx="20.8" cy="8" r=".7"/>
 </svg>

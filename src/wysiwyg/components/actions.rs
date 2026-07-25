@@ -48,6 +48,8 @@ actions!(
         BoldSelection,
         ItalicSelection,
         UnderlineSelection,
+        StrikethroughSelection,
+        HighlightSelection,
         CodeSelection,
         IndentBlock,
         OutdentBlock,
@@ -163,6 +165,8 @@ pub enum ShortcutCommand {
     BoldSelection,
     ItalicSelection,
     UnderlineSelection,
+    StrikethroughSelection,
+    HighlightSelection,
     CodeSelection,
     IndentBlock,
     OutdentBlock,
@@ -461,6 +465,22 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::StrikethroughSelection,
+        id: "strikethrough_selection",
+        category: ShortcutCategory::Markdown,
+        // Alt + Shift + 5 is the cross-platform convention (Typora/Obsidian),
+        // identical on macOS and Windows/Linux.
+        default_keys: &["alt-shift-5"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::HighlightSelection,
+        id: "highlight_selection",
+        category: ShortcutCategory::Markdown,
+        default_keys: &["cmd-=", "ctrl-="],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::CodeSelection,
         id: "code_selection",
         category: ShortcutCategory::Markdown,
@@ -562,7 +582,7 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::ConvertToTaskList,
         id: "convert_to_task_list",
         category: ShortcutCategory::Markdown,
-        default_keys: &["cmd-shift-t", "ctrl-shift-t"],
+        default_keys: &["cmd-shift-x", "ctrl-shift-x"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
@@ -679,6 +699,8 @@ pub fn shortcut_label(id: &str) -> &'static str {
         "bold_selection" => "Bold",
         "italic_selection" => "Italic",
         "underline_selection" => "Underline",
+        "strikethrough_selection" => "Strikethrough",
+        "highlight_selection" => "Highlight",
         "code_selection" => "Inline code",
         "indent_block" => "Indent / nest",
         "outdent_block" => "Outdent / unnest",
@@ -903,6 +925,10 @@ fn key_binding_for(
         ShortcutCommand::BoldSelection => KeyBinding::new(key, BoldSelection, context),
         ShortcutCommand::ItalicSelection => KeyBinding::new(key, ItalicSelection, context),
         ShortcutCommand::UnderlineSelection => KeyBinding::new(key, UnderlineSelection, context),
+        ShortcutCommand::StrikethroughSelection => {
+            KeyBinding::new(key, StrikethroughSelection, context)
+        }
+        ShortcutCommand::HighlightSelection => KeyBinding::new(key, HighlightSelection, context),
         ShortcutCommand::CodeSelection => KeyBinding::new(key, CodeSelection, context),
         ShortcutCommand::IndentBlock => KeyBinding::new(key, IndentBlock, context),
         ShortcutCommand::OutdentBlock => KeyBinding::new(key, OutdentBlock, context),

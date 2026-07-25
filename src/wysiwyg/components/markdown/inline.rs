@@ -24,6 +24,7 @@ pub struct InlineStyle {
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub highlight: bool,
     pub code: bool,
     pub script: InlineScript,
 }
@@ -63,6 +64,13 @@ impl InlineStyle {
         }
     }
 
+    pub fn with_highlight(self) -> Self {
+        Self {
+            highlight: true,
+            ..self
+        }
+    }
+
     pub fn with_code(self) -> Self {
         Self { code: true, ..self }
     }
@@ -91,6 +99,7 @@ impl InlineStyle {
             Delimiter::ItalicMarkdown { .. } | Delimiter::ItalicHtml => self.with_italic(),
             Delimiter::Underline => self.with_underline(),
             Delimiter::StrikethroughMarkdown => self.with_strikethrough(),
+            Delimiter::HighlightMarkdown => self.with_highlight(),
             Delimiter::CodeMarkdown { .. } => self.with_code(),
             Delimiter::SuperscriptMarkdown | Delimiter::SuperscriptHtml => self.with_superscript(),
             Delimiter::SubscriptMarkdown | Delimiter::SubscriptHtml => self.with_subscript(),
@@ -987,7 +996,10 @@ impl InlineTextTree {
             // text, not extend the span past its visible closing/opening
             // marker when the caret is outside.
             if clamped == fragment_end && index + 1 == self.fragments.len() {
-                return if fragment.style.code || fragment.style.strikethrough {
+                return if fragment.style.code
+                    || fragment.style.strikethrough
+                    || fragment.style.highlight
+                {
                     InlineInsertionAttributes::default()
                 } else {
                     InlineInsertionAttributes {
@@ -1001,7 +1013,10 @@ impl InlineTextTree {
             }
 
             if clamped == fragment_start && index == 0 {
-                return if fragment.style.code || fragment.style.strikethrough {
+                return if fragment.style.code
+                    || fragment.style.strikethrough
+                    || fragment.style.highlight
+                {
                     InlineInsertionAttributes::default()
                 } else {
                     InlineInsertionAttributes {
@@ -1035,6 +1050,10 @@ impl InlineTextTree {
     #[allow(dead_code)]
     pub fn toggle_strikethrough(&mut self, range: Range<usize>) -> bool {
         self.toggle_style(range, StyleFlag::Strikethrough)
+    }
+
+    pub fn toggle_highlight(&mut self, range: Range<usize>) -> bool {
+        self.toggle_style(range, StyleFlag::Highlight)
     }
 
     pub fn toggle_code(&mut self, range: Range<usize>) -> bool {
@@ -1251,6 +1270,8 @@ enum Delimiter {
     ItalicMarkdown { marker: char },
     /// Markdown strikethrough marker `~~`.
     StrikethroughMarkdown,
+    /// Markdown highlight marker `==`.
+    HighlightMarkdown,
     /// Markdown superscript marker `^`.
     SuperscriptMarkdown,
     /// Markdown subscript marker `~`.
@@ -1277,6 +1298,7 @@ impl Delimiter {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
             Self::ItalicMarkdown { marker } => marker.to_string(),
             Self::StrikethroughMarkdown => "~~".into(),
+            Self::HighlightMarkdown => "==".into(),
             Self::SuperscriptMarkdown => "^".into(),
             Self::SubscriptMarkdown => "~".into(),
             Self::Underline => "<u>".into(),
@@ -1293,6 +1315,7 @@ impl Delimiter {
             Self::BoldMarkdown { marker } => marker.to_string().repeat(2),
             Self::ItalicMarkdown { marker } => marker.to_string(),
             Self::StrikethroughMarkdown => "~~".into(),
+            Self::HighlightMarkdown => "==".into(),
             Self::SuperscriptMarkdown => "^".into(),
             Self::SubscriptMarkdown => "~".into(),
             Self::Underline => "</u>".into(),
@@ -1316,6 +1339,7 @@ impl Delimiter {
             Self::BoldMarkdown { .. } => 0,
             Self::Underline => 1,
             Self::StrikethroughMarkdown => 2,
+            Self::HighlightMarkdown => 2,
             Self::SuperscriptMarkdown | Self::SubscriptMarkdown => 3,
             Self::ItalicMarkdown { .. } => 4,
             Self::SuperscriptHtml | Self::SubscriptHtml => 5,
@@ -1344,6 +1368,8 @@ pub enum StyleFlag {
     Underline,
     /// Strikethrough text.
     Strikethrough,
+    /// Highlighted text.
+    Highlight,
     /// Inline code text.
     Code,
     /// Superscript text.
@@ -1409,6 +1435,9 @@ impl NormalizeBuilder {
         }
         if extra_style.strikethrough {
             style.strikethrough = true;
+        }
+        if extra_style.highlight {
+            style.highlight = true;
         }
         if extra_style.code {
             style.code = true;
@@ -2440,6 +2469,9 @@ fn apply_extra_style_to_fragments(
         if extra_style.strikethrough {
             fragment.style.strikethrough = true;
         }
+        if extra_style.highlight {
+            fragment.style.highlight = true;
+        }
         if extra_style.code {
             fragment.style.code = true;
         }
@@ -2459,6 +2491,8 @@ fn match_open_delimiter(tokens: &[CharToken], index: usize) -> Option<Delimiter>
         Some(Delimiter::Underline)
     } else if matches_sequence(tokens, index, "~~") {
         Some(Delimiter::StrikethroughMarkdown)
+    } else if matches_sequence(tokens, index, "==") {
+        Some(Delimiter::HighlightMarkdown)
     } else if matches_sequence(tokens, index, "^") && can_open_script(tokens, index, '^') {
         Some(Delimiter::SuperscriptMarkdown)
     } else if is_single_tilde_delimiter(tokens, index) && can_open_script(tokens, index, '~') {
@@ -2574,6 +2608,7 @@ fn emphasis_requires_body(delimiter: Delimiter) -> bool {
         Delimiter::BoldMarkdown { .. }
             | Delimiter::ItalicMarkdown { .. }
             | Delimiter::StrikethroughMarkdown
+            | Delimiter::HighlightMarkdown
             | Delimiter::BoldHtml
             | Delimiter::ItalicHtml
             | Delimiter::Underline
@@ -2967,17 +3002,20 @@ fn stack_variants(
     if style.strikethrough {
         markdown_stack.push(Delimiter::StrikethroughMarkdown);
     }
+    if style.highlight {
+        markdown_stack.push(Delimiter::HighlightMarkdown);
+    }
     match style.script {
         InlineScript::Normal => {}
         InlineScript::Superscript
-            if can_use_markdown_script_delimiters(previous_fragment, fragment) =>
+        if can_use_markdown_script_delimiters(previous_fragment, fragment) =>
         {
             markdown_stack.push(Delimiter::SuperscriptMarkdown)
         }
         InlineScript::Superscript => markdown_stack.push(Delimiter::SuperscriptHtml),
         InlineScript::Subscript
-            if style.strikethrough
-                || !can_use_markdown_script_delimiters(previous_fragment, fragment) =>
+        if style.strikethrough
+            || !can_use_markdown_script_delimiters(previous_fragment, fragment) =>
         {
             markdown_stack.push(Delimiter::SubscriptHtml)
         }
@@ -3005,6 +3043,9 @@ fn stack_variants(
     }
     if style.strikethrough {
         html_stack.push(Delimiter::StrikethroughMarkdown);
+    }
+    if style.highlight {
+        html_stack.push(Delimiter::HighlightMarkdown);
     }
     match style.script {
         InlineScript::Normal => {}
@@ -3054,6 +3095,7 @@ fn styles_match_ignoring_script(left: InlineStyle, right: InlineStyle) -> bool {
         && left.italic == right.italic
         && left.underline == right.underline
         && left.strikethrough == right.strikethrough
+        && left.highlight == right.highlight
         && left.code == right.code
 }
 
@@ -3159,6 +3201,7 @@ fn style_flag_enabled(style: InlineStyle, flag: StyleFlag) -> bool {
         StyleFlag::Italic => style.italic,
         StyleFlag::Underline => style.underline,
         StyleFlag::Strikethrough => style.strikethrough,
+        StyleFlag::Highlight => style.highlight,
         StyleFlag::Code => style.code,
         StyleFlag::Superscript => style.script == InlineScript::Superscript,
         StyleFlag::Subscript => style.script == InlineScript::Subscript,
@@ -3171,6 +3214,7 @@ fn set_style_flag(mut style: InlineStyle, flag: StyleFlag, enabled: bool) -> Inl
         StyleFlag::Italic => style.italic = enabled,
         StyleFlag::Underline => style.underline = enabled,
         StyleFlag::Strikethrough => style.strikethrough = enabled,
+        StyleFlag::Highlight => style.highlight = enabled,
         StyleFlag::Code => style.code = enabled,
         StyleFlag::Superscript => {
             style.script = if enabled {
@@ -3450,6 +3494,7 @@ mod tests {
                 italic: true,
                 underline: true,
                 strikethrough: false,
+                highlight: false,
                 code: false,
                 script: InlineScript::Normal,
             }
@@ -3491,6 +3536,36 @@ mod tests {
         assert_eq!(tree.visible_text(), "text");
         assert!(cache.style_at(0).strikethrough);
         assert_eq!(tree.serialize_markdown(), "~~text~~");
+    }
+
+    #[test]
+    fn parses_and_serializes_highlight() {
+        let tree = InlineTextTree::from_markdown("==text==");
+        let cache = tree.render_cache();
+
+        assert_eq!(tree.visible_text(), "text");
+        assert!(cache.style_at(0).highlight);
+        assert_eq!(tree.serialize_markdown(), "==text==");
+    }
+
+    #[test]
+    fn highlight_round_trips_alongside_strikethrough() {
+        let tree = InlineTextTree::from_markdown("==important== and ~~old~~");
+        let cache = tree.render_cache();
+
+        assert_eq!(tree.visible_text(), "important and old");
+        assert!(cache.style_at(0).highlight);
+        assert!(!cache.style_at(0).strikethrough);
+        assert!(cache.style_at("important and ".len()).strikethrough);
+        assert!(!cache.style_at("important and ".len()).highlight);
+        assert_eq!(tree.serialize_markdown(), "==important== and ~~old~~");
+    }
+
+    #[test]
+    fn unmatched_highlight_markers_stay_literal() {
+        let tree = InlineTextTree::from_markdown("==text");
+        // Unmatched `==` has no closing pair, so it stays literal.
+        assert_eq!(tree.serialize_markdown(), "==text");
     }
 
     #[test]

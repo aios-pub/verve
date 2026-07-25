@@ -1647,6 +1647,8 @@ impl Block {
                 .on_action(cx.listener(Self::on_bold_selection))
                 .on_action(cx.listener(Self::on_italic_selection))
                 .on_action(cx.listener(Self::on_underline_selection))
+                .on_action(cx.listener(Self::on_strikethrough_selection))
+                .on_action(cx.listener(Self::on_highlight_selection))
                 .on_action(cx.listener(Self::on_code_selection))
                 .on_action(cx.listener(Self::on_heading1))
                 .on_action(cx.listener(Self::on_heading2))

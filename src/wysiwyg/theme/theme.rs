@@ -132,6 +132,8 @@ pub struct ThemeColors {
     pub separator_color: Hsla,
     /// Background of inline code and code-block quads.
     pub code_bg: Hsla,
+    /// Background of `==highlighted==` inline text.
+    pub highlight_bg: Hsla,
     /// Text colour inside code blocks.
     pub code_text: Hsla,
     /// Background of the focused code-block language input.
@@ -564,6 +566,7 @@ struct ThemeColorsDe {
     task_checkbox_check: Option<Hsla>,
     separator_color: Option<Hsla>,
     code_bg: Option<Hsla>,
+    highlight_bg: Option<Hsla>,
     code_text: Hsla,
     code_language_input_bg: Option<Hsla>,
     code_language_input_border: Option<Hsla>,
@@ -710,6 +713,9 @@ impl<'de> Deserialize<'de> for ThemeColors {
                 .separator_color
                 .unwrap_or_else(|| Hsla::from(rgba(0x71717aff))),
             code_bg: raw.code_bg.unwrap_or_else(|| Hsla::from(rgba(0x111827ff))),
+            highlight_bg: raw
+                .highlight_bg
+                .unwrap_or_else(|| Hsla::from(rgba(0xfde68a66))),
             code_text: raw.code_text,
             code_language_input_bg: raw
                 .code_language_input_bg
@@ -1133,6 +1139,7 @@ impl Theme {
                 task_checkbox_check: Hsla::from(rgba(0x18181bff)),
                 separator_color: Hsla::from(rgba(0x71717aff)),
                 code_bg: Hsla::from(rgba(0x23272eff)),
+                highlight_bg: Hsla::from(rgba(0xfde68a66)),
                 code_text: Hsla::from(rgba(0xe5e7ebff)),
                 code_language_input_bg: Hsla::from(rgba(0x343941ff)),
                 code_language_input_border: Hsla::from(rgba(0x4b5563cc)),
@@ -1379,6 +1386,7 @@ impl Theme {
                 task_checkbox_check: Hsla::from(rgba(0xffffffff)),
                 separator_color: Hsla::from(rgba(0xcbd5e1ff)),
                 code_bg: Hsla::from(rgba(0xf1f5f9ff)),
+                highlight_bg: Hsla::from(rgba(0xfde68a99)),
                 code_text: Hsla::from(rgba(0x111827ff)),
                 code_language_input_bg: Hsla::from(rgba(0xffffffff)),
                 code_language_input_border: Hsla::from(rgba(0xcbd5e1ff)),

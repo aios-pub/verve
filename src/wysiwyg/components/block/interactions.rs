@@ -16,9 +16,11 @@ use crate::wysiwyg::components::{
     BlockDown, BlockUp, BoldSelection, CodeSelection, ConvertToBulletedList, ConvertToCodeBlock,
     ConvertToNumberedList, ConvertToParagraph, ConvertToQuote, ConvertToTaskList, Copy, Cut,
     Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
-    Heading2, Heading3, Heading4, Heading5, Heading6, Home, IndentBlock, ItalicSelection, MoveLeft,
+    Heading2, Heading3, Heading4, Heading5, Heading6, HighlightSelection, Home, IndentBlock,
+    ItalicSelection, MoveLeft,
     MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft,
-    SelectRight, UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft,
+    SelectRight, StrikethroughSelection, UnderlineSelection, WordDeleteBack, WordDeleteForward,
+    WordMoveLeft,
     WordMoveRight, WordSelectLeft, WordSelectRight,
 };
 
@@ -1741,6 +1743,24 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         self.toggle_inline_format(InlineFormat::Underline, cx);
+    }
+
+    pub(crate) fn on_strikethrough_selection(
+        &mut self,
+        _: &StrikethroughSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Strikethrough, cx);
+    }
+
+    pub(crate) fn on_highlight_selection(
+        &mut self,
+        _: &HighlightSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_inline_format(InlineFormat::Highlight, cx);
     }
 
     pub(crate) fn on_code_selection(

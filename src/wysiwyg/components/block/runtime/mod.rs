@@ -1961,6 +1961,52 @@ impl Block {
         );
     }
 
+    /// Wrap the current selection in an inline link pointing at `destination`.
+    ///
+    /// With an empty selection this inserts a bare link whose visible text is
+    /// `label` (so the caret can keep typing the link text).  The literal
+    /// markdown `[text](destination)` is spliced into the title tree and the
+    /// tree's normalizer re-parses it into a styled link fragment; serializers
+    /// render it back to `[text](destination)` on export.
+    pub(crate) fn insert_link_at_selection(
+        &mut self,
+        destination: &str,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.uses_raw_text_editing() {
+            return;
+        }
+        let selection = self.selection_clean_range();
+        let visible_text = if selection.is_empty() {
+            label.to_string()
+        } else {
+            self.display_text()[selection.clone()].to_string()
+        };
+        // Splice the literal link markdown; the normalizer converts it into a
+        // styled link fragment carrying the destination as an attribute.
+        let link_markdown = format!("[{visible_text}]({destination})");
+
+        let next_title = self.record.title.clone();
+        let result = next_title.replace_visible_range_with_link_references(
+            selection.clone(),
+            &link_markdown,
+            InlineInsertionAttributes::default(),
+            &self.link_reference_definitions,
+        );
+
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+        self.apply_title_edit(
+            result.tree,
+            selection.start + visible_text.len(),
+            None,
+            Some(selection.start..selection.start + visible_text.len()),
+            Some(self.selection_reversed),
+            false,
+            cx,
+        );
+    }
+
     fn current_line_layout_and_offset(&self) -> Option<(&WrappedLine, usize)> {
         let lines = self.last_layout.as_ref()?;
         let text = self.display_text();

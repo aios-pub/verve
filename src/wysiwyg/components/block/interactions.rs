@@ -17,7 +17,7 @@ use crate::wysiwyg::components::{
     ConvertToNumberedList, ConvertToParagraph, ConvertToQuote, ConvertToTaskList, Copy, Cut,
     Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
     Heading2, Heading3, Heading4, Heading5, Heading6, HighlightSelection, Home, IndentBlock,
-    ItalicSelection, MoveLeft,
+    InsertLink, ItalicSelection, MoveLeft,
     MoveRight, Newline, OutdentBlock, Paste, SelectAll, SelectEnd, SelectHome, SelectLeft,
     SelectRight, StrikethroughSelection, UnderlineSelection, WordDeleteBack, WordDeleteForward,
     WordMoveLeft,
@@ -1770,6 +1770,18 @@ impl Block {
         cx: &mut Context<Self>,
     ) {
         self.toggle_inline_format(InlineFormat::Code, cx);
+    }
+
+    pub(crate) fn on_insert_link(
+        &mut self,
+        _: &InsertLink,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Insert a link with a placeholder destination; the visible text is the
+        // current selection (or "链接"/placeholder when nothing is selected).
+        // The destination can then be edited via the existing link-edit UI.
+        self.insert_link_at_selection("https://", "link", cx);
     }
 
     pub(crate) fn on_exit_code_block(

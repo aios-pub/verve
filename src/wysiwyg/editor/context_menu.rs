@@ -6,8 +6,8 @@ use gpui::*;
 
 use super::{Editor, TableAxisSelection, ViewMode};
 use crate::wysiwyg::components::{
-    DismissTransientUi, InsertHorizontalRule, InsertTable, TableAxisKind, TableColumnAlignment,
-    TableData,
+    DismissTransientUi, InsertHorizontalRule, InsertImage, InsertTable, TableAxisKind,
+    TableColumnAlignment, TableData,
 };
 use crate::wysiwyg::i18n::I18nManager;
 use crate::wysiwyg::theme::Theme;
@@ -229,6 +229,24 @@ impl Editor {
         });
         cx.notify();
     }
+
+    pub(super) fn on_insert_image(
+        &mut self,
+        _: &InsertImage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode != ViewMode::Rendered {
+            return;
+        }
+        let target = self.insert_target_from_focus(window, cx);
+        // A standalone image is a paragraph whose title markdown is `![alt](src)`.
+        // The standalone-image detection path routes it through ImageRuntime on
+        // render. Users can then edit the URL/alt via the existing image UI.
+        let record = crate::wysiwyg::components::BlockRecord::paragraph("![](https://)".to_string());
+        self.insert_structural_block(target, record, cx);
+    }
+
 
     fn close_context_menu(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();

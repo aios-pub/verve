@@ -3281,7 +3281,7 @@ fn can_close_emphasis(tokens: &[CharToken], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineMathDelimiter,
+        InlineFragment, InlineInsertionAttributes, InlineLink, InlineLinkHit, InlineMathDelimiter,
         InlineScript, InlineStyle, InlineTextTree, LinkReferenceDefinitions, StyleFlag,
     };
     use crate::wysiwyg::components::HtmlCssColor;
@@ -3566,6 +3566,30 @@ mod tests {
         let tree = InlineTextTree::from_markdown("==text");
         // Unmatched `==` has no closing pair, so it stays literal.
         assert_eq!(tree.serialize_markdown(), "==text");
+    }
+
+    #[test]
+    fn insert_link_wraps_selection_with_destination() {
+        // Editing path used by the InsertLink action: insert the literal link
+        // markdown `[label](destination)` at the selection and let the tree's
+        // normalizer re-parse it into a styled link fragment.
+        let tree = InlineTextTree::plain("click here");
+        let result = tree.replace_visible_range_with_link_references(
+            "click ".len().."click here".len(),
+            "[here](https://example.com)",
+            InlineInsertionAttributes::default(),
+            &LinkReferenceDefinitions::default(),
+        );
+
+        assert_eq!(result.tree.visible_text(), "click here");
+        assert_eq!(
+            result.tree.render_cache().link_at("click ".len()),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            result.tree.serialize_markdown(),
+            "click [here](https://example.com)"
+        );
     }
 
     #[test]

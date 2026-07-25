@@ -2240,6 +2240,29 @@ impl Render for VerveApp {
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
+            // Editor toolbar dropdown overlay (rendered at root so the title
+            // bar's height doesn't clip the panel). Only the active editor's
+            // toolbar can have an open dropdown.
+            .when_some(self.active_editor_entity_for_toolbar(cx), |this, overlay| {
+                this.child(overlay)
+            })
+    }
+}
+
+impl VerveApp {
+    /// Build the toolbar dropdown overlay for the active editor (Notes or
+    /// Markdown), if a dropdown is open. Returns None otherwise or when the
+    /// active view has no editor.
+    fn active_editor_entity_for_toolbar(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let editor: Entity<crate::wysiwyg::editor::Editor> = match self.active_view {
+            SideView::Notes => self.notes.read(cx).editor().clone(),
+            SideView::MarkdownEditor => self.markdown.read(cx).editor().clone(),
+            _ => return None,
+        };
+        self.render_editor_dropdown_overlay(&editor, cx)
     }
 }
 
@@ -2769,8 +2792,8 @@ impl VerveApp {
 
         // Paragraph / Format dropdown triggers
         for (label, dropdown) in [
-            ("Paragraph", ToolbarDropdown::Paragraph),
-            ("Format", ToolbarDropdown::Format),
+            (rust_i18n::t!("toolbar.paragraph").to_string(), ToolbarDropdown::Paragraph),
+            (rust_i18n::t!("toolbar.format").to_string(), ToolbarDropdown::Format),
         ] {
             let is_open = open == Some(dropdown);
             let ed = editor.clone();
@@ -2797,35 +2820,55 @@ impl VerveApp {
             );
         }
 
-        // The dropdown panel (only when one is open).
-        let panel = match open {
-            Some(ToolbarDropdown::Paragraph) => {
-                Some(self.render_paragraph_panel(editor, &snap, &theme, cx))
-            }
-            Some(ToolbarDropdown::Format) => Some(self.render_format_panel(editor, &snap, &theme, cx)),
-            None => None,
-        };
+        // The button bar only. The dropdown panel + dismiss overlay are rendered
+        // separately at the root level (see render_editor_dropdown_overlay) so
+        // the title bar's 40px height does not clip them.
+        let _ = open;
+        bar.into_any_element()
+    }
 
-        let mut wrapper = h_flex().gap(px(2.)).items_center().child(bar);
-        if let Some(panel) = panel {
-            // Outside-click overlay to dismiss.
-            let ed = editor.clone();
-            wrapper = wrapper.child(
-                div()
-                    .id("tb-dropdown-overlay")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .occlude()
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |_, _, _, cx| {
+    /// Root-level dropdown overlay for the active editor's toolbar. Returns
+    /// None when no dropdown is open. Rendered as a sibling of the title bar /
+    /// body so it is never clipped.
+    fn render_editor_dropdown_overlay(
+        &mut self,
+        editor: &Entity<crate::wysiwyg::editor::Editor>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let snap = editor.read(cx).toolbar_snapshot(cx);
+        let open = editor.read(cx).toolbar_open_dropdown()?;
+        let panel = match open {
+            ToolbarDropdown::Paragraph => self.render_paragraph_panel(editor, &snap, &theme, cx),
+            ToolbarDropdown::Format => self.render_format_panel(editor, &snap, &theme, cx),
+        };
+        let ed = editor.clone();
+        Some(
+            div()
+                .id("tb-dropdown-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_, _, _, cx| {
                         let _ = ed.update(cx, |e, cx| e.close_toolbar_dropdown(cx));
-                    }))
-                    .child(panel),
-            );
-        }
-        wrapper.into_any_element()
+                    }),
+                )
+                // Anchor the panel just under the title bar, left-aligned with
+                // the toolbar (approx where the dropdown trigger sits).
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(40.))
+                        .left(px(260.))
+                        .child(panel),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Paragraph dropdown panel (block-level actions).
@@ -2850,26 +2893,26 @@ impl VerveApp {
             _ => ShortcutCommand::Heading6,
         };
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
-            ("Heading 4".into(), level == Some(4), command_keycap(mk(4)), false, ToolbarAction::Heading(4)),
-            ("Heading 5".into(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
-            ("Heading 6".into(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),
+            (rust_i18n::t!("toolbar.heading_4").to_string(), level == Some(4), command_keycap(mk(4)), false, ToolbarAction::Heading(4)),
+            (rust_i18n::t!("toolbar.heading_5").to_string(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
+            (rust_i18n::t!("toolbar.heading_6").to_string(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // separator marker
-            ("Promote Heading".into(), false, None, level.is_none() || level == Some(1), ToolbarAction::PromoteHeading),
-            ("Demote Heading".into(), false, None, level.is_none() || level == Some(6), ToolbarAction::DemoteHeading),
+            (rust_i18n::t!("toolbar.promote_heading").to_string(), false, None, level.is_none() || level == Some(1), ToolbarAction::PromoteHeading),
+            (rust_i18n::t!("toolbar.demote_heading").to_string(), false, None, level.is_none() || level == Some(6), ToolbarAction::DemoteHeading),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
-            ("Table".into(), false, command_keycap(ShortcutCommand::InsertTable), false, ToolbarAction::InsertTable),
-            ("Code Fences".into(), matches!(kind, Some(BlockKindSnapshot::CodeBlock)), command_keycap(ShortcutCommand::ConvertToCodeBlock), false, ToolbarAction::CodeBlock),
-            ("Quote Block".into(), matches!(kind, Some(BlockKindSnapshot::Quote)), command_keycap(ShortcutCommand::ConvertToQuote), false, ToolbarAction::Quote),
-            ("Math Block".into(), matches!(kind, Some(BlockKindSnapshot::MathBlock)), None, false, ToolbarAction::InsertMathBlock),
-            ("Html Block".into(), matches!(kind, Some(BlockKindSnapshot::HtmlBlock)), None, false, ToolbarAction::InsertHtmlBlock),
+            (rust_i18n::t!("toolbar.table").to_string(), false, command_keycap(ShortcutCommand::InsertTable), false, ToolbarAction::InsertTable),
+            (rust_i18n::t!("toolbar.code_fences").to_string(), matches!(kind, Some(BlockKindSnapshot::CodeBlock)), command_keycap(ShortcutCommand::ConvertToCodeBlock), false, ToolbarAction::CodeBlock),
+            (rust_i18n::t!("toolbar.quote_block").to_string(), matches!(kind, Some(BlockKindSnapshot::Quote)), command_keycap(ShortcutCommand::ConvertToQuote), false, ToolbarAction::Quote),
+            (rust_i18n::t!("toolbar.math_block").to_string(), matches!(kind, Some(BlockKindSnapshot::MathBlock)), None, false, ToolbarAction::InsertMathBlock),
+            (rust_i18n::t!("toolbar.html_block").to_string(), matches!(kind, Some(BlockKindSnapshot::HtmlBlock)), None, false, ToolbarAction::InsertHtmlBlock),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
-            ("Ordered List".into(), matches!(kind, Some(BlockKindSnapshot::NumberedList)), command_keycap(ShortcutCommand::ConvertToNumberedList), false, ToolbarAction::NumberedList),
-            ("Bullet List".into(), matches!(kind, Some(BlockKindSnapshot::BulletedList)), command_keycap(ShortcutCommand::ConvertToBulletedList), false, ToolbarAction::BulletedList),
-            ("Task List".into(), matches!(kind, Some(BlockKindSnapshot::TaskList)), command_keycap(ShortcutCommand::ConvertToTaskList), false, ToolbarAction::TaskList),
-            ("Loose List Item".into(), false, None, true, ToolbarAction::Paragraph), // disabled placeholder
+            (rust_i18n::t!("toolbar.ordered_list").to_string(), matches!(kind, Some(BlockKindSnapshot::NumberedList)), command_keycap(ShortcutCommand::ConvertToNumberedList), false, ToolbarAction::NumberedList),
+            (rust_i18n::t!("toolbar.bullet_list").to_string(), matches!(kind, Some(BlockKindSnapshot::BulletedList)), command_keycap(ShortcutCommand::ConvertToBulletedList), false, ToolbarAction::BulletedList),
+            (rust_i18n::t!("toolbar.task_list").to_string(), matches!(kind, Some(BlockKindSnapshot::TaskList)), command_keycap(ShortcutCommand::ConvertToTaskList), false, ToolbarAction::TaskList),
+            (rust_i18n::t!("toolbar.loose_list_item").to_string(), false, None, true, ToolbarAction::Paragraph), // disabled placeholder
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
-            ("Paragraph".into(), matches!(kind, Some(BlockKindSnapshot::Paragraph)), command_keycap(ShortcutCommand::ConvertToParagraph), false, ToolbarAction::Paragraph),
-            ("Horizontal Rule".into(), matches!(kind, Some(BlockKindSnapshot::Separator)), command_keycap(ShortcutCommand::InsertHorizontalRule), false, ToolbarAction::InsertHorizontalRule),
+            (rust_i18n::t!("toolbar.paragraph_restore").to_string(), matches!(kind, Some(BlockKindSnapshot::Paragraph)), command_keycap(ShortcutCommand::ConvertToParagraph), false, ToolbarAction::Paragraph),
+            (rust_i18n::t!("toolbar.horizontal_rule").to_string(), matches!(kind, Some(BlockKindSnapshot::Separator)), command_keycap(ShortcutCommand::InsertHorizontalRule), false, ToolbarAction::InsertHorizontalRule),
         ];
 
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -2896,17 +2939,17 @@ impl VerveApp {
 
         let style = &snap.style;
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
-            ("Superscript".into(), style.script == InlineScript::Superscript, None, false, ToolbarAction::Superscript),
-            ("Subscript".into(), style.script == InlineScript::Subscript, None, false, ToolbarAction::Subscript),
-            ("Highlight".into(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),
+            (rust_i18n::t!("toolbar.superscript").to_string(), style.script == InlineScript::Superscript, None, false, ToolbarAction::Superscript),
+            (rust_i18n::t!("toolbar.subscript").to_string(), style.script == InlineScript::Subscript, None, false, ToolbarAction::Subscript),
+            (rust_i18n::t!("toolbar.highlight").to_string(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),
             ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            ("Inline Code".into(), style.code, command_keycap(ShortcutCommand::CodeSelection), false, ToolbarAction::InlineCode),
-            ("Inline Math".into(), false, None, false, ToolbarAction::InlineMath),
+            (rust_i18n::t!("toolbar.inline_code").to_string(), style.code, command_keycap(ShortcutCommand::CodeSelection), false, ToolbarAction::InlineCode),
+            (rust_i18n::t!("toolbar.inline_math").to_string(), false, None, false, ToolbarAction::InlineMath),
             ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            ("Hyperlink".into(), false, command_keycap(ShortcutCommand::InsertLink), false, ToolbarAction::InsertLink),
-            ("Image".into(), false, command_keycap(ShortcutCommand::InsertImage), false, ToolbarAction::InsertImage),
+            (rust_i18n::t!("toolbar.hyperlink").to_string(), false, command_keycap(ShortcutCommand::InsertLink), false, ToolbarAction::InsertLink),
+            (rust_i18n::t!("toolbar.image").to_string(), false, command_keycap(ShortcutCommand::InsertImage), false, ToolbarAction::InsertImage),
             ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            ("Clear Formatting".into(), false, None, false, ToolbarAction::ClearFormatting),
+            (rust_i18n::t!("toolbar.clear_formatting").to_string(), false, None, false, ToolbarAction::ClearFormatting),
         ];
 
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -4347,9 +4390,6 @@ fn dropdown_separator(theme: &gpui_component::Theme) -> AnyElement {
 fn dropdown_panel(id: &'static str, items: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
     div()
         .id(id)
-        .absolute()
-        .top(px(34.))
-        .left(px(0.))
         .w(px(240.))
         .max_h(px(420.))
         .overflow_y_scroll()
@@ -4362,6 +4402,7 @@ fn dropdown_panel(id: &'static str, items: Vec<AnyElement>, theme: &gpui_compone
         .border_color(theme.border)
         .rounded(px(6.))
         .shadow_lg()
+        // Stop the outside-click dismiss when clicking inside the panel.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .children(items)
         .into_any_element()

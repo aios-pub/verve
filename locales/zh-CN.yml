@@ -344,3 +344,32 @@ markdown:
   switch_to_source: 切换到源码
   switch_to_rendered: 切换到渲染
   word_suffix: 字
+
+# WYSIWYG 编辑器工具栏（标题栏集成）
+toolbar:
+  paragraph: 段落
+  format: 格式
+  heading_4: 四级标题
+  heading_5: 五级标题
+  heading_6: 六级标题
+  promote_heading: 提升标题
+  demote_heading: 降低标题
+  table: 表格
+  code_fences: 代码块
+  quote_block: 引用块
+  math_block: 公式块
+  html_block: HTML 块
+  ordered_list: 有序列表
+  bullet_list: 无序列表
+  task_list: 任务列表
+  loose_list_item: 松散列表项
+  paragraph_restore: 普通段落
+  horizontal_rule: 分割线
+  superscript: 上标
+  subscript: 下标
+  highlight: 文本高亮
+  inline_code: 行内代码
+  inline_math: 行内公式
+  hyperlink: 超链接
+  image: 图片
+  clear_formatting: 清除格式

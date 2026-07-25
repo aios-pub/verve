@@ -344,3 +344,32 @@ markdown:
   switch_to_source: Switch to Source
   switch_to_rendered: Switch to Rendered
   word_suffix: words
+
+# WYSIWYG editor toolbar (title-bar integrated)
+toolbar:
+  paragraph: Paragraph
+  format: Format
+  heading_4: Heading 4
+  heading_5: Heading 5
+  heading_6: Heading 6
+  promote_heading: Promote Heading
+  demote_heading: Demote Heading
+  table: Table
+  code_fences: Code Fences
+  quote_block: Quote Block
+  math_block: Math Block
+  html_block: HTML Block
+  ordered_list: Ordered List
+  bullet_list: Bullet List
+  task_list: Task List
+  loose_list_item: Loose List Item
+  paragraph_restore: Paragraph
+  horizontal_rule: Horizontal Rule
+  superscript: Superscript
+  subscript: Subscript
+  highlight: Highlight
+  inline_code: Inline Code
+  inline_math: Inline Math
+  hyperlink: Hyperlink
+  image: Image
+  clear_formatting: Clear Formatting

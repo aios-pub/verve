@@ -642,42 +642,17 @@ impl Render for MarkdownPanel {
             .pending_close_tab
             .is_some()
             .then(|| self.render_close_dialog(cx));
-        // Left resizable file sidebar (replaces the top tab bar). Width is
-        // persisted in layout.side_widths[2].
-        let saved = crate::state::persistence::load_layout()
-            .and_then(|l| l.side_widths)
-            .and_then(|w| w.get(2).copied())
-            .filter(|&w| w > 0.0)
-            .map(|w| w.clamp(180.0, 400.0))
-            .map(gpui::px)
-            .unwrap_or_else(|| gpui::px(240.));
-        let state = self.sidebar_resize.clone();
         div()
             .id("markdown-panel-root")
             .relative()
             .w_full()
             .h_full()
             .child(
-                gpui_component::resizable::h_resizable("markdown-sidebar")
-                    .with_state(&state)
-                    .on_resize(|state, _, cx| {
-                        if let Some(w) = state.read(cx).sizes().first() {
-                            let mut layout =
-                                crate::state::persistence::load_layout().unwrap_or_default();
-                            let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
-                            arr[2] = w.as_f32();
-                            layout.side_widths = Some(arr);
-                            let _ = crate::state::persistence::save_layout(&layout);
-                        }
-                    })
-                    .child(
-                        gpui_component::resizable::resizable_panel()
-                            .size(saved)
-                            .size_range(gpui::px(180.)..gpui::px(400.))
-                            .flex_none()
-                            .child(self.render_file_sidebar(cx)),
-                    )
-                    .child(gpui_component::resizable::resizable_panel().child(editor)),
+                v_flex()
+                    .w_full()
+                    .h_full()
+                    .child(self.render_tab_bar(cx))
+                    .child(div().flex_1().min_h_0().child(editor)),
             )
             .when_some(close_dialog, |d, dlg| d.child(dlg))
     }

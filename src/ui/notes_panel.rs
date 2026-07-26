@@ -1476,43 +1476,17 @@ impl Render for NotesPanel {
         // the conditional move of `editor_el` is fine.
         let editor_el = self.render_editor(window, cx);
         let body = if !self.list_collapsed {
-            // Resizable sidebar + editor, BOTH inside `h_resizable` — the same
-            // pattern MarkdownPanel/autotest use. A lone panel inside
-            // `h_resizable` expands to fill its parent and squeezes a
-            // separately-siblinged editor to 0 width; keeping the editor inside
-            // as a flex_1 sibling is what enforces the sidebar's `size_range`.
-            let saved = crate::state::persistence::load_layout()
-                .and_then(|l| l.side_widths)
-                .and_then(|w| w.first().copied())
-                .filter(|&w| w > 0.0)
-                // Clamp to the size_range — a corrupted/huge persisted width
-                // otherwise re-expands the sidebar and squeezes the editor.
-                .map(|w| w.clamp(180.0, 520.0))
-                .map(gpui::px)
-                .unwrap_or_else(|| gpui::px(260.));
-            let state = self.sidebar_resize.clone();
-            gpui_component::resizable::h_resizable("notes-sidebar")
-                .with_state(&state)
-                .on_resize(|state, _, cx| {
-                    let sizes = state.read(cx).sizes();
-                    if let Some(w) = sizes.first() {
-                        let mut layout =
-                            crate::state::persistence::load_layout().unwrap_or_default();
-                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
-                        arr[0] = w.as_f32();
-                        layout.side_widths = Some(arr);
-                        let _ = crate::state::persistence::save_layout(&layout);
-                    }
-                })
+            // Fixed-width sidebar (resizable re-implementation pending — the
+            // drag handle should live in the title-bar region, not span the
+            // full content height).
+            h_flex()
+                .w_full()
+                .h_full()
                 .child(
-                    gpui_component::resizable::resizable_panel()
-                        .size(saved)
-                        .size_range(gpui::px(180.)..gpui::px(520.))
-                        // Hold the sidebar's width: without `.flex_none()` the
-                        // panel keeps `flex_grow: 1` and expands from its basis,
-                        // so dragging the handle looks like it resizes the
-                        // content (editor) instead of the sidebar.
-                        .flex_none()
+                    div()
+                        .w(px(260.))
+                        .h_full()
+                        .flex_shrink_0()
                         .child(self.render_note_list(cx)),
                 )
                 .child(editor_el)

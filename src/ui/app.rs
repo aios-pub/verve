@@ -848,6 +848,18 @@ impl VerveApp {
             },
         );
 
+        // The formatting toolbar lives in the host title bar (rendered by
+        // VerveApp via `render_editor_toolbar`), reading the active editor's
+        // live `toolbar_snapshot`. VerveApp only re-renders when it — or an
+        // entity it observes — notifies. Observe the notes/markdown *panels*
+        // (not the editors): the notes panel rebuilds its editor entity on
+        // every note switch (see NotesPanel::reload_editor), so observing the
+        // editor would go stale. The panels re-notify on editor changes, which
+        // keeps the toolbar's active states (H1-3, B/I/S/U, dropdown marks) in
+        // sync with the editor below.
+        let obs_notes = cx.observe(&app.notes, |_, _, cx| cx.notify());
+        let obs_markdown = cx.observe(&app.markdown, |_, _, cx| cx.notify());
+
         app._subs = vec![
             sub_edited,
             sub_env,
@@ -858,6 +870,8 @@ impl VerveApp {
             sub_console,
             sub_mock,
             sub_tree,
+            obs_notes,
+            obs_markdown,
         ];
 
         // Silent startup update check: query GitHub for the latest release
@@ -2728,9 +2742,13 @@ impl VerveApp {
         let open = editor.read(cx).toolbar_open_dropdown();
         let editor_for_actions = editor.clone();
 
-        // Active background/text colors.
-        let active_bg = theme.accent.opacity(0.2);
-        let active_fg = theme.accent;
+        // Active background/text colors. The active (highlighted) state must
+        // keep the glyph readable: `accent`-on-`accent@0.2` was near-invisible
+        // (the icon vanished the moment a format was applied), so use the
+        // high-contrast foreground for the glyph and a slightly stronger tint
+        // for the active background.
+        let active_bg = theme.accent.opacity(0.28);
+        let active_fg = theme.foreground;
         let idle_fg = theme.foreground;
         let hover_bg = theme.muted;
 
@@ -4246,12 +4264,34 @@ impl VerveApp {
                             ),
                     ),
             )
-            // WYSIWYG formatting toolbar (H1-3 / B I S U / Paragraph / Format).
+            .child(div().flex_1())
+            // WYSIWYG formatting toolbar — right-aligned with the source/import/
+            // export actions so it sits next to the source toggle. (Previously
+            // it was on the far left, far from the source toggle.)
             .child({
                 let editor = notes.read(cx).editor().clone();
                 self.render_editor_toolbar(&editor, cx)
             })
-            .child(div().flex_1())
+            // View-mode toggle (Rendered ↔ Source) — right-aligned with the
+            // other action buttons, same affordance as the markdown title bar.
+            .child({
+                let editor = notes.read(cx).editor().clone();
+                let view_mode = editor.read(cx).view_mode();
+                let notes_vm = notes.clone();
+                Button::new("notes-title-view-mode")
+                    .small()
+                    .ghost()
+                    .selected(view_mode == crate::wysiwyg::editor::ViewMode::Source)
+                    .icon(IconName::Eye)
+                    .tooltip(if view_mode == crate::wysiwyg::editor::ViewMode::Source {
+                        rust_i18n::t!("markdown.switch_to_rendered").to_string()
+                    } else {
+                        rust_i18n::t!("markdown.switch_to_source").to_string()
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = notes_vm.update(cx, |p, cx| p.toggle_view_mode(cx));
+                    }))
+            })
             // Import button.
             .child(
                 Button::new("notes-title-import")

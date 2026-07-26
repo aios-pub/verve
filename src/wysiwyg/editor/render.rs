@@ -436,11 +436,24 @@ impl Editor {
     }
 
     fn apply_pending_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entity_id) = self.pending_focus.take()
-            && let Some(block) = self.focusable_entity_by_id(entity_id)
-        {
-            let focus_handle = block.read(cx).focus_handle.clone();
-            focus_handle.focus(window, cx);
+        let Some(entity_id) = self.pending_focus.take() else {
+            return;
+        };
+        let Some(block) = self.focusable_entity_by_id(entity_id) else {
+            return;
+        };
+        let focus_handle = block.read(cx).focus_handle.clone();
+        focus_handle.focus(window, cx);
+        // Retry on the next frame if the target has no layout yet. On the first
+        // render after a `set_content` note switch the freshly rebuilt block
+        // has not been painted, so its `last_bounds` is `None`; calling
+        // `focus()` now sets a handle whose element isn't mounted, and the
+        // focus wouldn't survive to receive keystrokes. Re-arm `pending_focus`
+        // (mirroring `pending_scroll_recheck_after_layout`) so the focus is
+        // re-applied once the block is laid out.
+        if block.read(cx).last_bounds.is_none() {
+            self.pending_focus = Some(entity_id);
+            cx.notify();
         }
     }
 

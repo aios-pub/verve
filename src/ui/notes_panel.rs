@@ -26,6 +26,11 @@ pub struct NotesPanel {
     state: Entity<AppState>,
     store: NotesStore,
     editor: Entity<crate::wysiwyg::editor::Editor>,
+    /// Keep-alive arena for previously-active editors. NotesPanel swaps in a
+    /// fresh editor per note switch (see `reload_editor`); holding the outgoing
+    /// editor here prevents it (and its focus handles) from being dropped
+    /// mid-frame, which would corrupt the new editor's repainting.
+    prev_editors: Vec<Entity<crate::wysiwyg::editor::Editor>>,
     /// Resizable state for the left note-list sidebar width.
     sidebar_resize: Entity<gpui_component::resizable::ResizableState>,
     search: Entity<InputState>,
@@ -69,7 +74,7 @@ impl NotesPanel {
         // Markdown and edited as rendered blocks; `markdown()` serializes it
         // back out on save.
         let editor = cx.new(|cx| {
-            crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None).embedded()
+            crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None).side_view()
         });
 
         let search = cx.new(|cx| {
@@ -91,6 +96,9 @@ impl NotesPanel {
         // every edit (and on undo/redo/mode switch), which fires this observer.
         let editor_sub = cx.observe(&editor, |this, _editor, cx| {
             this.schedule_save(cx);
+            // Re-notify the panel so the host title-bar toolbar (observed via
+            // the panel in VerveApp) refreshes on caret/selection changes.
+            cx.notify();
         });
         let search_sub = cx.subscribe(&search, Self::on_search_event);
         let title_sub = cx.subscribe(&title_input, Self::on_title_event);
@@ -100,6 +108,7 @@ impl NotesPanel {
             state,
             store,
             editor,
+            prev_editors: Vec::new(),
             sidebar_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             search,
             title_input,
@@ -228,19 +237,19 @@ impl NotesPanel {
             return;
         };
         let new_id = create_child_note(&mut self.store, &parent_id, String::new());
-        self.editor.update(cx, |e, cx| {
-            e.set_content("", cx);
-        });
+        // New empty sub-note → body in "edit mode" (first block focused), like
+        // `new_note`. Title stays "Untitled" (rename via double-click).
+        self.reload_editor("", window, cx, true);
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
-        // Select the new note in the tree and start title editing.
+        // Select the new note in the tree.
         let target = TreeItem::new(note_node(&new_id), "");
         self.tree.update(cx, |t, cx| {
             t.set_selected_item(Some(&target), cx);
         });
         self.store.active_note = Some(new_id.clone());
         self.editor_needs_reload = false;
-        self.start_title_edit(&new_id, "", window, cx);
+        cx.notify();
     }
 
     fn on_title_event(
@@ -311,16 +320,18 @@ impl NotesPanel {
         let note = notes::create_note(&mut self.store, String::new());
         let new_id = note.id.clone();
         self.store.active_note = Some(new_id.clone());
-        self.editor.update(cx, |e, cx| {
-            e.set_content("", cx);
-        });
+        // New empty note → body in "edit mode" (like the markdown editor): a
+        // fresh editor with the first block focused, so the user can type,
+        // insert tables/images, etc. immediately. The title stays "Untitled"
+        // (rename via double-click in the list).
+        self.reload_editor("", window, cx, true);
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(&new_id), "");
         self.tree.update(cx, |t, cx| {
             t.set_selected_item(Some(&target), cx);
         });
-        self.start_title_edit(&new_id, "", window, cx);
+        cx.notify();
     }
 
     /// Select a note (called from list-row click handlers — has Window access).
@@ -332,9 +343,11 @@ impl NotesPanel {
         self.store.active_note = Some(id.to_string());
         self.editor_needs_reload = false;
         if let Some(note) = self.store.notes.iter().find(|n| n.id == id) {
-            self.editor.update(cx, |e, cx| {
-                e.set_content(&note.content, cx);
-            });
+            let content = note.content.clone();
+            // Rebuild the editor fresh for this note (see `reload_editor`):
+            // a reused editor + `set_content` leaves macOS IME unbound, so
+            // typing is dead until the body is clicked.
+            self.reload_editor(&content, window, cx, true);
         }
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(id), "");
@@ -350,18 +363,22 @@ impl NotesPanel {
         }
         delete_note_cascade(&mut self.store, id);
         if let Some(note) = self.store.notes.first() {
+            let content = note.content.clone();
             self.store.active_note = Some(note.id.clone());
-            self.editor.update(cx, |e, cx| {
-                e.set_content(&note.content, cx);
-            });
+            self.reload_editor(&content, window, cx, true);
         } else {
-            self.editor.update(cx, |e, cx| {
-                e.set_content("", cx);
-            });
+            self.reload_editor("", window, cx, true);
         }
         let _ = crate::state::persistence::save_notes(&self.store);
         self.pending_delete = None;
         self.rebuild_tree(cx);
+        // Deletions must reach the git remote immediately — otherwise the
+        // startup `git checkout -f main` reverts the (uncommitted) local
+        // deletion and the note reappears after restart. Persisted triggers
+        // VerveApp's git sync (commit + push).
+        let _ = self
+            .state
+            .update(cx, |_, cx| cx.emit(crate::state::AppEvent::Persisted));
         cx.notify();
     }
 
@@ -370,6 +387,64 @@ impl NotesPanel {
     pub fn editor(&self) -> &Entity<crate::wysiwyg::editor::Editor> {
         &self.editor
     }
+
+    /// Toggle the editor between Rendered (WYSIWYG) and raw-Source view modes.
+    /// Driven by the title-bar view-mode toggle (mirrors MarkdownPanel).
+    pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |e, cx| e.toggle_view_mode_from_ui(cx));
+    }
+
+    /// Rebuild the embedded editor fresh for `content` — mirroring MarkdownPanel,
+    /// which constructs a new [`Editor`] per document instead of reusing one.
+    ///
+    /// Reusing a single editor and swapping its content via `set_content` does
+    /// not re-bind macOS IME on the subsequent programmatic focus: the block is
+    /// GPUI-focused and registers its input handler, but keystrokes never reach
+    /// it until the user clicks the editor body. A freshly constructed editor's
+    /// first focus binds IME correctly, so the note is immediately typeable.
+    /// Re-subscribes the autosave observer (the editor entity changed) and
+    /// focuses the first block.
+    fn reload_editor(
+        &mut self,
+        content: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+        focus_body: bool,
+    ) {
+        // Keep the outgoing editor alive (don't drop it). MarkdownPanel never
+        // drops an editor (one per tab); notes replaces its single editor on
+        // every switch, and dropping the just-focused editor appears to corrupt
+        // GPUI so the new editor's block updates never repaint. Holding the old
+        // entity (its focus handles stay valid) avoids that. This is a
+        // keep-alive arena; entries are never re-embedded, only prevented from
+        // being dropped mid-frame. Cap it so memory doesn't grow unboundedly
+        // across many note switches.
+        self.prev_editors.push(self.editor.clone());
+        if self.prev_editors.len() > 3 {
+            self.prev_editors.drain(0..self.prev_editors.len() - 3);
+        }
+        let content = content.to_string();
+        let new_editor = cx.new(|cx| {
+            crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).side_view()
+        });
+        self.editor = new_editor;
+        // The autosave observer is bound to the (now-dropped) old editor entity;
+        // re-subscribe to the new one. It's the first entry in `_subs`.
+        let editor_sub = cx.observe(&self.editor, |this, _editor, cx| {
+            this.schedule_save(cx);
+            cx.notify();
+        });
+        if !self._subs.is_empty() {
+            self._subs[0] = editor_sub;
+        }
+        if !focus_body {
+            // The caller focuses something else (e.g. the title input);
+            // suppress the body auto-focus so it doesn't steal it back.
+            self.editor.update(cx, |e, _cx| e.clear_pending_focus());
+        }
+    }
+
 
     pub fn note_count(&self) -> usize {
         self.store.notes.len()
@@ -427,9 +502,8 @@ impl NotesPanel {
         cx: &mut Context<Self>,
     ) {
         let new_id = create_child_note(&mut self.store, parent_id, String::new());
-        self.editor.update(cx, |e, cx| {
-            e.set_content("", cx);
-        });
+        // New empty sub-note → body in "edit mode" (first block focused).
+        self.reload_editor("", window, cx, true);
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(&new_id), "");
@@ -438,7 +512,7 @@ impl NotesPanel {
         });
         self.store.active_note = Some(new_id.clone());
         self.editor_needs_reload = false;
-        self.start_title_edit(&new_id, "", window, cx);
+        cx.notify();
     }
 
     /// Export a specific note (by id) in the given format.
@@ -1221,12 +1295,11 @@ impl NotesPanel {
         // source/live split and slash-command palette are gone; the editor has
         // native Markdown shortcuts (#, -, >, etc.), a right-click formatting
         // menu, and undo/redo.
-        let content: AnyElement = div()
-            .id("notes-wysiwyg")
-            .w_full()
-            .h_full()
-            .child(self.editor.clone())
-            .into_any_element();
+        // Embed the editor exactly like MarkdownPanel:
+        // `div().flex_1().min_h_0().child(editor)` — no stateful wrapper, no
+        // extra w_full. (Previously a `div().id("notes-wysiwyg").w_full().h_full()`
+        // wrapper sat between; it broke repainting of typed text.)
+        let content = self.editor.clone();
 
         v_flex()
             .flex_1()
@@ -1359,7 +1432,7 @@ impl NotesPanel {
                 }
                 header
             })
-            .child(div().w_full().flex_1().min_h_0().child(content))
+            .child(div().flex_1().min_h_0().child(content))
             .into_any_element()
     }
 }
@@ -1375,9 +1448,9 @@ impl Render for NotesPanel {
             if let Some(id) = self.store.active_note.clone() {
                 if let Some(note) = self.store.notes.iter().find(|n| n.id == id) {
                     let content = note.content.clone();
-                    self.editor.update(cx, |e, cx| {
-                        e.set_content(&content, cx);
-                    });
+                    // Rebuild the editor fresh (see `reload_editor`): a reused
+                    // editor + `set_content` leaves macOS IME unbound.
+                    self.reload_editor(&content, window, cx, true);
                 }
             }
         }
@@ -1394,34 +1467,17 @@ impl Render for NotesPanel {
                     .w_full()
                     .h_full()
                     .when(!self.list_collapsed, |h| {
-                        // Resizable left note-list sidebar.
-                        let saved = crate::state::persistence::load_layout()
-                            .and_then(|l| l.side_widths)
-                            .and_then(|w| w.first().copied())
-                            .filter(|&w| w > 0.0)
-                            .map(gpui::px)
-                            .unwrap_or_else(|| gpui::px(260.));
-                        let state = self.sidebar_resize.clone();
+                        // DIAGNOSIS: fixed-width sidebar. The resizable
+                        // h_resizable appears to expand and squeeze the editor to
+                        // 0 width (block bounds were 0px wide at the right edge).
+                        // If typing/display works with this fixed sidebar, the
+                        // resizable layout was the culprit.
                         h.child(
-                            gpui_component::resizable::h_resizable("notes-sidebar")
-                                .with_state(&state)
-                                .on_resize(|state, _, cx| {
-                                    let sizes = state.read(cx).sizes();
-                                    if let Some(w) = sizes.first() {
-                                        let mut layout =
-                                            crate::state::persistence::load_layout().unwrap_or_default();
-                                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
-                                        arr[0] = w.as_f32();
-                                        layout.side_widths = Some(arr);
-                                        let _ = crate::state::persistence::save_layout(&layout);
-                                    }
-                                })
-                                .child(
-                                    gpui_component::resizable::resizable_panel()
-                                        .size(saved)
-                                        .size_range(gpui::px(180.)..gpui::px(520.))
-                                        .child(self.render_note_list(cx)),
-                                ),
+                            div()
+                                .w(px(260.))
+                                .h_full()
+                                .flex_shrink_0()
+                                .child(self.render_note_list(cx)),
                         )
                     })
                     .when(self.list_collapsed, |h| {

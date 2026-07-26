@@ -980,6 +980,16 @@ impl Block {
 
         let mut element = div()
             .min_w(px(0.0))
+            // Never shrink a text chunk below its glyphs. The mixed-inline /
+            // HTML-text layout is a `flex_wrap` row of these chunk divs, so
+            // without `flex_shrink_0` an over-wide row distributes shrink
+            // proportionally to item width — the widest chunk (a multi-glyph
+            // emoji run like "🔥🔥🔥 ") absorbs the most, its box ends up
+            // narrower than the glyphs it draws, and the emoji overflows and
+            // overlaps the following chunk. Marking each chunk non-shrinkable
+            // makes the row wrap to the next line instead. Mirrors the image
+            // segment's `flex_shrink_0()` below.
+            .flex_shrink_0()
             .text_size(px(display_font_size))
             .line_height(rems(theme.typography.text_line_height))
             .text_color(color)

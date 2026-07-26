@@ -25,6 +25,7 @@ use crate::wysiwyg::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
     TableData, TableRuntime, UndoCaptureKind, serialize_table_cell_markdown,
 };
+
 mod close;
 mod context_menu;
 mod document;
@@ -490,6 +491,21 @@ impl Editor {
         self.rendered_select_all_cycle = None;
         self.context_menu = None;
         self.table_insert_dialog = None;
+        // The note switch rebuilds every block with fresh entity ids, so the
+        // previous note's scroll offset and windowing caches are now stale.
+        // Reset them (mirroring `from_markdown`) so the first focusable block
+        // starts at the top of the viewport and is painted on the next frame.
+        // Otherwise `apply_pending_focus` may target a block outside the
+        // windowed range whose element never mounts, the single-shot focus
+        // never lands, and the editor is left without keyboard focus — so
+        // typing is dead until the body is clicked.
+        self.scroll_handle = ScrollHandle::new();
+        self.last_scroll_viewport_size = None;
+        self.click_scroll_anchor = None;
+        self.prev_visible_block_ids.clear();
+        self.row_stride_cache.clear();
+        self.row_painted_tops.clear();
+        self.prev_render_window = None;
         self.undo_history.clear();
         self.redo_history.clear();
         self.pending_undo_capture = None;
@@ -512,6 +528,14 @@ impl Editor {
     /// Returns the active view mode (Rendered WYSIWYG or raw Source).
     pub fn view_mode(&self) -> ViewMode {
         self.view_mode
+    }
+
+    /// Drop any pending focus request. Hosts use this when they focus
+    /// something else (e.g. a title input) right after reloading content, so
+    /// `apply_pending_focus` does not steal focus back to the editor body on
+    /// the next render.
+    pub fn clear_pending_focus(&mut self) {
+        self.pending_focus = None;
     }
 
     /// Whether the document has unsaved edits. Hosts (e.g. the markdown

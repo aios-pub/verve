@@ -316,7 +316,7 @@ impl NotesPanel {
         }
     }
 
-    fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let note = notes::create_note(&mut self.store, String::new());
         let new_id = note.id.clone();
         self.store.active_note = Some(new_id.clone());
@@ -386,6 +386,20 @@ impl NotesPanel {
     /// The embedded WYSIWYG editor entity (used by the title-bar toolbar).
     pub fn editor(&self) -> &Entity<crate::wysiwyg::editor::Editor> {
         &self.editor
+    }
+
+    /// cmd-w (Notes) — close the current note: save it, clear the active
+    /// selection, and show an empty editor. The note itself is kept in the
+    /// list (not deleted); Notes auto-save, so there is no unsaved prompt.
+    pub fn close_current_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_current(cx);
+        self.store.active_note = None;
+        self.tree
+            .update(cx, |t, cx| t.set_selected_item(None, cx));
+        self.reload_editor("", window, cx, false);
+        let _ = crate::state::persistence::save_notes(&self.store);
+        self.rebuild_tree(cx);
+        cx.notify();
     }
 
     /// Toggle the editor between Rendered (WYSIWYG) and raw-Source view modes.

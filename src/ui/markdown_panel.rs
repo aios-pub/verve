@@ -54,6 +54,9 @@ pub struct MarkdownPanel {
     open_popover: bool,
     /// Whether the Export popover is showing.
     export_popover: bool,
+    /// A tab awaiting the unsaved-changes confirm dialog before closing
+    /// (cmd-w on a dirty tab). Holds the tab index.
+    pending_close_tab: Option<usize>,
     _subs: Vec<Subscription>,
 }
 
@@ -66,6 +69,7 @@ impl MarkdownPanel {
             recent: recent_files(),
             open_popover: false,
             export_popover: false,
+            pending_close_tab: None,
             _subs: Vec::new(),
         };
         // Start with one blank untitled tab.
@@ -250,6 +254,108 @@ impl MarkdownPanel {
         }
         self.observe_active(cx);
         cx.notify();
+    }
+
+    /// cmd-w — close the active tab. If it has unsaved changes, show a
+    /// confirm dialog (save / discard / cancel); otherwise close immediately.
+    pub fn close_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let idx = self.active;
+        if idx < self.tabs.len() && self.tabs[idx].editor.read(cx).document_dirty() {
+            self.pending_close_tab = Some(idx);
+            cx.notify();
+        } else if idx < self.tabs.len() {
+            self.close_tab(idx, cx);
+        }
+    }
+
+    /// Dialog "Save": save the pending tab, then close it.
+    fn confirm_close_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(idx) = self.pending_close_tab.take() {
+            // `pending_close_tab` was the active tab when cmd-w fired and the
+            // modal blocks tab switching, so `save()` (which targets the active
+            // editor) hits the right tab.
+            self.save(window, cx);
+            if idx < self.tabs.len() {
+                self.close_tab(idx, cx);
+            }
+        }
+    }
+
+    /// Dialog "Don't Save": close the pending tab without saving.
+    fn confirm_close_discard(&mut self, cx: &mut Context<Self>) {
+        if let Some(idx) = self.pending_close_tab.take()
+            && idx < self.tabs.len()
+        {
+            self.close_tab(idx, cx);
+        }
+    }
+
+    /// Dialog "Cancel": dismiss, keep the tab open.
+    fn cancel_pending_close(&mut self, cx: &mut Context<Self>) {
+        self.pending_close_tab = None;
+        cx.notify();
+    }
+
+    /// The unsaved-changes modal overlay shown when `pending_close_tab` is set.
+    fn render_close_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(theme.background.opacity(0.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_md()
+                    .p_4()
+                    .gap_3()
+                    .w(px(360.))
+                    .child(
+                        div()
+                            .text_color(theme.foreground)
+                            .child("此文档有未保存的更改，是否保存？"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("md-close-save")
+                                    .primary()
+                                    .small()
+                                    .label("保存")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_close_save(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("md-close-discard")
+                                    .ghost()
+                                    .small()
+                                    .label("不保存")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_close_discard(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("md-close-cancel")
+                                    .ghost()
+                                    .small()
+                                    .label("取消")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_pending_close(cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Switch the active tab.
@@ -446,11 +552,25 @@ impl MarkdownPanel {
 impl Render for MarkdownPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor().clone();
-        v_flex()
+        // Build the unsaved-changes modal first (if any) so it can be attached
+        // as an absolute overlay without re-borrowing self.
+        let close_dialog = self
+            .pending_close_tab
+            .is_some()
+            .then(|| self.render_close_dialog(cx));
+        div()
+            .id("markdown-panel-root")
+            .relative()
             .w_full()
             .h_full()
-            .child(self.render_tab_bar(cx))
-            .child(div().flex_1().min_h_0().child(editor))
+            .child(
+                v_flex()
+                    .w_full()
+                    .h_full()
+                    .child(self.render_tab_bar(cx))
+                    .child(div().flex_1().min_h_0().child(editor)),
+            )
+            .when_some(close_dialog, |d, dlg| d.child(dlg))
     }
 }
 

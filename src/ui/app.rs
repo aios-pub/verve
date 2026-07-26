@@ -10,7 +10,9 @@ actions!(
         SaveWorkspace,
         NewRequest,
         OpenMarkdownFile,
-        OpenMarkdownFileNewTab
+        OpenMarkdownFileNewTab,
+        NewFile,
+        CloseFile
     ]
 );
 use crate::assets::{
@@ -2209,6 +2211,8 @@ impl Render for VerveApp {
             .text_color(theme.foreground)
             .on_action(cx.listener(Self::on_open_markdown_file))
             .on_action(cx.listener(Self::on_open_markdown_file_new_tab))
+            .on_action(cx.listener(Self::on_new_file))
+            .on_action(cx.listener(Self::on_close_file))
             .child(self.render_title_bar(cx))
             .child(
                 h_flex()
@@ -4342,6 +4346,42 @@ impl VerveApp {
     ) {
         self.active_view = SideView::MarkdownEditor;
         let _ = self.markdown.update(cx, |p, cx| p.open_file_dialog(cx));
+        cx.notify();
+    }
+
+    /// cmd-n — new file. Routes to the active editor: Markdown → new document
+    /// tab; Notes → new note. In other views it switches to Markdown and opens
+    /// a fresh document.
+    fn on_new_file(&mut self, _: &NewFile, w: &mut Window, cx: &mut Context<Self>) {
+        match self.active_view {
+            SideView::Notes => {
+                let _ = self.notes.update(cx, |p, cx| p.new_note(w, cx));
+            }
+            SideView::MarkdownEditor => {
+                let _ = self.markdown.update(cx, |p, cx| p.new_document(cx));
+            }
+            _ => {
+                self.active_view = SideView::MarkdownEditor;
+                let _ = self.markdown.update(cx, |p, cx| p.new_document(cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// cmd-w — close. Markdown editor: close the active tab, prompting to save
+    /// if it has unsaved changes. Notes: close the current note.
+    fn on_close_file(&mut self, _: &CloseFile, w: &mut Window, cx: &mut Context<Self>) {
+        match self.active_view {
+            SideView::MarkdownEditor => {
+                let _ = self
+                    .markdown
+                    .update(cx, |p, cx| p.close_active_tab(w, cx));
+            }
+            SideView::Notes => {
+                let _ = self.notes.update(cx, |p, cx| p.close_current_note(w, cx));
+            }
+            _ => {}
+        }
         cx.notify();
     }
 }

@@ -154,7 +154,10 @@ fn launch_main_app(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("cmd-s", ui::app::SaveWorkspace, None),
-        KeyBinding::new("cmd-n", ui::app::NewRequest, None),
+        // New API request moved off cmd-n (now "new file"); use cmd-shift-n.
+        KeyBinding::new("cmd-shift-n", ui::app::NewRequest, None),
+        KeyBinding::new("cmd-n", ui::app::NewFile, None),
+        KeyBinding::new("cmd-w", ui::app::CloseFile, None),
         // Open a Markdown file in a new tab of the markdown editor view.
         KeyBinding::new("cmd-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("cmd-shift-o", ui::app::OpenMarkdownFileNewTab, None),
@@ -163,7 +166,9 @@ fn launch_main_app(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-enter", ui::request_panel::SendRequest, None),
         KeyBinding::new("ctrl-s", ui::app::SaveWorkspace, None),
-        KeyBinding::new("ctrl-n", ui::app::NewRequest, None),
+        KeyBinding::new("ctrl-shift-n", ui::app::NewRequest, None),
+        KeyBinding::new("ctrl-n", ui::app::NewFile, None),
+        KeyBinding::new("ctrl-w", ui::app::CloseFile, None),
         KeyBinding::new("ctrl-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("ctrl-shift-o", ui::app::OpenMarkdownFileNewTab, None),
     ]);

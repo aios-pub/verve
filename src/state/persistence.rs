@@ -317,9 +317,9 @@ pub struct PanelLayout {
     #[serde(default)]
     pub notes_collapsed: bool,
     /// Left-sidebar widths (px) for panels with a fixed left tree/list:
-    /// [notes, autotest, stress]. Each is optional so absent = panel default.
+    /// [notes, autotest, stress, hosts]. Each is optional so absent = panel default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub side_widths: Option<[f32; 3]>,
+    pub side_widths: Option<[f32; 4]>,
     /// Workspace-drawer (outline) width (px) for the markdown editor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markdown_drawer_width: Option<f32>,

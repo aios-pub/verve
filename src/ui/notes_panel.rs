@@ -1499,7 +1499,7 @@ impl Render for NotesPanel {
                     if let Some(w) = state.read(cx).sizes().first() {
                         let mut layout = crate::state::persistence::load_layout()
                             .unwrap_or_default();
-                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260., 220.]);
                         arr[0] = w.as_f32();
                         layout.side_widths = Some(arr);
                         let _ = crate::state::persistence::save_layout(&layout);

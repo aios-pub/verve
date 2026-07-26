@@ -2722,6 +2722,7 @@ impl VerveApp {
             SideView::MarkdownEditor => self.render_markdown_title_bar(cx).into_any_element(),
             SideView::JsonFormat => self.render_json_title_bar(cx).into_any_element(),
             SideView::PdfEditor => self.render_pdf_title_bar(cx).into_any_element(),
+            SideView::AutoTest => self.render_autotest_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
         }
     }
@@ -5156,6 +5157,100 @@ impl VerveApp {
                                     ),
                             ),
                     ),
+            )
+            .child(self.render_update_button(cx))
+            .child(self.render_lang_picker(cx))
+    }
+
+    /// AutoTest title bar: rail toggle + icon/title + suite count +
+    /// add-suite/add-case/run actions. The body renders no internal header.
+    fn render_autotest_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let at = self.autotest.clone();
+        let (has_project, suite_count, running, has_case) = {
+            let r = at.read(cx);
+            (
+                r.has_active_project(cx),
+                r.suite_count(cx),
+                r.running,
+                r.selected_case.is_some(),
+            )
+        };
+
+        let at_add_suite = at.clone();
+        let at_add_case = at.clone();
+        let at_run = at.clone();
+
+        h_flex()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .child(self.render_rail_toggle(cx))
+            // Icon + title + suite count badge
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .child(div().text_color(theme.primary).child(IconName::Play))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(rust_i18n::t!("view.autotest").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.foreground)
+                            .child(rust_i18n::t!("autotest.suite_count", count = suite_count).to_string()),
+                    ),
+            )
+            .child(div().flex_1())
+            // Add suite
+            .child(
+                Button::new("autotest-title-add-suite")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("新建套件")
+                    .disabled(!has_project)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = at_add_suite.update(cx, |p, cx| p.add_suite_from_title(cx));
+                    })),
+            )
+            // Add case
+            .child(
+                Button::new("autotest-title-add-case")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("新建用例")
+                    .disabled(!has_project || suite_count == 0)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = at_add_case.update(cx, |p, cx| p.add_case_from_title(cx));
+                    })),
+            )
+            // Run
+            .child(
+                Button::new("autotest-title-run")
+                    .primary()
+                    .small()
+                    .icon(if running { IconName::Pause } else { IconName::Play })
+                    .label(if running { "运行中…" } else { "运行用例" })
+                    .disabled(!has_project || !has_case || running)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = at_run.update(cx, |p, cx| p.run_selected_from_title(cx));
+                    })),
             )
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))

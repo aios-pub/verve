@@ -88,6 +88,9 @@ notes:
   row_export_md: 导出为 Markdown
   row_export_pdf: 导出为 PDF
 
+autotest:
+  suite_count: "%{count} 个套件"
+
 git_bootstrap:
   title: 欢迎使用 Verve
   welcome: 欢迎！请选择如何开始：

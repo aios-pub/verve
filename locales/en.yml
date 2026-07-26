@@ -88,6 +88,9 @@ notes:
   row_export_md: Export as Markdown
   row_export_pdf: Export as PDF
 
+autotest:
+  suite_count: "%{count} suites"
+
 git_bootstrap:
   title: Welcome to Verve
   welcome: "Welcome! Choose how to get started:"

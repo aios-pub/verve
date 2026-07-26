@@ -24,6 +24,8 @@ pub struct HostsPanel {
     /// Cached system hosts entries (re-read on refresh / after apply).
     system_entries: Vec<HostEntry>,
     system_error: Option<String>,
+    /// Resizable state for the left profile-list sidebar width.
+    sidebar_resize: Entity<gpui_component::resizable::ResizableState>,
     _subs: Vec<Subscription>,
 }
 
@@ -63,6 +65,7 @@ impl HostsPanel {
             apply_status: ApplyStatus::Idle,
             system_entries: Vec::new(),
             system_error: None,
+            sidebar_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             _subs: vec![search_sub],
         };
         this.refresh_system_hosts();
@@ -343,9 +346,8 @@ impl HostsPanel {
         let theme = cx.theme();
 
         v_flex()
-            .w(px(220.))
+            .w_full()
             .h_full()
-            .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.muted.opacity(0.3))
@@ -781,11 +783,38 @@ impl Render for HostsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        h_flex()
-            .w_full()
-            .h_full()
-            .bg(theme.background)
-            .child(self.render_profile_list(cx))
-            .child(self.render_editor(cx))
+        // Resizable left sidebar: drag handle on the right edge.
+        let saved = crate::state::persistence::load_layout()
+            .and_then(|l| l.side_widths)
+            .and_then(|w| w.get(3).copied())
+            .filter(|&w| w > 0.0)
+            .map(gpui::px)
+            .unwrap_or_else(|| gpui::px(220.));
+        let state = self.sidebar_resize.clone();
+
+        gpui_component::resizable::h_resizable("hosts-sidebar")
+            .with_state(&state)
+            .on_resize(|state, _, cx| {
+                if let Some(w) = state.read(cx).sizes().first() {
+                    let mut layout = crate::state::persistence::load_layout().unwrap_or_default();
+                    let mut arr = layout.side_widths.unwrap_or([260., 260., 260., 220.]);
+                    arr[3] = w.as_f32();
+                    layout.side_widths = Some(arr);
+                    let _ = crate::state::persistence::save_layout(&layout);
+                }
+            })
+            .child(
+                gpui_component::resizable::resizable_panel()
+                    .size(saved)
+                    .size_range(gpui::px(160.)..gpui::px(420.))
+                    .overflow_hidden()
+                    .child(self.render_profile_list(cx)),
+            )
+            .child(
+                gpui_component::resizable::resizable_panel()
+                    .overflow_hidden()
+                    .bg(theme.background)
+                    .child(self.render_editor(cx)),
+            )
     }
 }

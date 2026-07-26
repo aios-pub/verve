@@ -81,6 +81,35 @@ impl AutoTestPanel {
         }
     }
 
+    /// Whether the active project exists (for title-bar button disable state).
+    pub fn has_active_project(&self, cx: &App) -> bool {
+        self.state.read(cx).active_project().is_some()
+    }
+
+    /// Number of suites in the active project (for title-bar badge).
+    pub fn suite_count(&self, cx: &App) -> usize {
+        self.state
+            .read(cx)
+            .active_project()
+            .map(|p| p.test_suites.len())
+            .unwrap_or(0)
+    }
+
+    /// Title-bar action: add a new suite.
+    pub fn add_suite_from_title(&mut self, cx: &mut Context<Self>) {
+        self.add_suite(cx);
+    }
+
+    /// Title-bar action: add a new case to the selected suite.
+    pub fn add_case_from_title(&mut self, cx: &mut Context<Self>) {
+        self.add_case(cx);
+    }
+
+    /// Title-bar action: run the selected case.
+    pub fn run_selected_from_title(&mut self, cx: &mut Context<Self>) {
+        self.run_selected(cx);
+    }
+
     fn active_project(&self, cx: &App) -> Option<Project> {
         self.state.read(cx).active_project().cloned()
     }
@@ -344,7 +373,6 @@ impl Render for AutoTestPanel {
         let border = theme.border;
 
         let project = self.active_project(cx);
-        let has_project = project.is_some();
         let suites = project
             .as_ref()
             .map(|p| &p.test_suites)
@@ -388,130 +416,70 @@ impl Render for AutoTestPanel {
                 })
                 .collect();
 
-        v_flex()
-            .size_full()
-            .min_h_0()
-            // Title bar.
+        // Body: left tree (resizable) | right detail. Both are children of
+        // h_resizable so the drag handle sits between them and space is shared.
+        // No internal title bar — the outer app title bar hosts the actions.
+        let saved = crate::state::persistence::load_layout()
+            .and_then(|l| l.side_widths)
+            .and_then(|w| w.get(1).copied())
+            .filter(|&w| w > 0.0)
+            .map(gpui::px)
+            .unwrap_or_else(|| gpui::px(260.));
+        let state = self.sidebar_resize.clone();
+        gpui_component::resizable::h_resizable("autotest-sidebar")
+            .with_state(&state)
+            .on_resize(|state, _, cx| {
+                if let Some(w) = state.read(cx).sizes().first() {
+                    let mut layout =
+                        crate::state::persistence::load_layout().unwrap_or_default();
+                    let mut arr = layout.side_widths.unwrap_or([260., 260., 260., 220.]);
+                    arr[1] = w.as_f32();
+                    layout.side_widths = Some(arr);
+                    let _ = crate::state::persistence::save_layout(&layout);
+                }
+            })
             .child(
-                h_flex()
-                    .h(px(44.))
-                    .px_4()
-                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(border)
+                gpui_component::resizable::resizable_panel()
+                    .size(saved)
+                    .size_range(gpui::px(180.)..gpui::px(520.))
+                    .overflow_hidden()
                     .child(
                         div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("自动化测试"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("autotest-add-suite")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("新建套件")
-                            .disabled(!has_project)
-                            .on_click(cx.listener(|this, _, _, cx| this.add_suite(cx))),
-                    )
-                    .child(
-                        Button::new("autotest-add-case")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label("新建用例")
-                            .disabled(!has_project || suites.is_empty())
-                            .on_click(cx.listener(|this, _, _, cx| this.add_case(cx))),
-                    )
-                    .child(
-                        Button::new("autotest-run")
-                            .primary()
-                            .small()
-                            .icon(if self.running {
-                                IconName::Pause
+                            .h_full()
+                            .id("autotest-tree-scroll")
+                            .overflow_y_scroll()
+                            .p_2()
+                            .gap_1()
+                            .children(if suites.is_empty() {
+                                vec![
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(muted)
+                                        .p_2()
+                                        .child("暂无套件，点上方“新建套件”开始")
+                                        .into_any_element(),
+                                ]
                             } else {
-                                IconName::Play
-                            })
-                            .label(if self.running {
-                                "运行中…"
-                            } else {
-                                "运行用例"
-                            })
-                            .disabled(!has_project || self.selected_case.is_none() || self.running)
-                            .on_click(cx.listener(|this, _, _, cx| this.run_selected(cx))),
+                                suites
+                                    .iter()
+                                    .map(|suite| {
+                                        self::render_suite(
+                                            suite,
+                                            &self.selected_case,
+                                            &self.selected_suite,
+                                            &self.suite_expanded,
+                                            cx,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            }),
                     ),
             )
-            // Body: left tree (resizable) | right detail (flex 1).
             .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .child({
-                        let saved = crate::state::persistence::load_layout()
-                            .and_then(|l| l.side_widths)
-                            .and_then(|w| w.get(1).copied())
-                            .filter(|&w| w > 0.0)
-                            .map(gpui::px)
-                            .unwrap_or_else(|| gpui::px(260.));
-                        let state = self.sidebar_resize.clone();
-                        gpui_component::resizable::h_resizable("autotest-sidebar")
-                            .with_state(&state)
-                            .on_resize(|state, _, cx| {
-                                if let Some(w) = state.read(cx).sizes().first() {
-                                    let mut layout =
-                                        crate::state::persistence::load_layout().unwrap_or_default();
-                                    let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
-                                    arr[1] = w.as_f32();
-                                    layout.side_widths = Some(arr);
-                                    let _ = crate::state::persistence::save_layout(&layout);
-                                }
-                            })
-                            .child(
-                                gpui_component::resizable::resizable_panel()
-                                    .size(saved)
-                                    .size_range(gpui::px(180.)..gpui::px(520.))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .id("autotest-tree-scroll")
-                                            .border_r_1()
-                                            .border_color(border)
-                                            .overflow_y_scroll()
-                                            .p_2()
-                                            .gap_1()
-                                            .children(if suites.is_empty() {
-                                                vec![
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .text_color(muted)
-                                                        .p_2()
-                                                        .child("暂无套件，点右上“新建套件”开始")
-                                                        .into_any_element(),
-                                                ]
-                                            } else {
-                                                suites
-                                                    .iter()
-                                                    .map(|suite| {
-                                                        self::render_suite(
-                                                            suite,
-                                                            &self.selected_case,
-                                                            &self.selected_suite,
-                                                            &self.suite_expanded,
-                                                            cx,
-                                                        )
-                                                    })
-                                                    .collect::<Vec<_>>()
-                                            }),
-                                    ),
-                            )
-                    })
+                gpui_component::resizable::resizable_panel()
+                    .overflow_hidden()
                     .child(
                         v_flex()
-                            .flex_1()
                             .min_w_0()
                             .h_full()
                             .id("autotest-detail-scroll")

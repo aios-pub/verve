@@ -57,6 +57,8 @@ pub struct MarkdownPanel {
     /// A tab awaiting the unsaved-changes confirm dialog before closing
     /// (cmd-w on a dirty tab). Holds the tab index.
     pending_close_tab: Option<usize>,
+    /// Resizable state for the left file-list sidebar width.
+    sidebar_resize: Entity<gpui_component::resizable::ResizableState>,
     _subs: Vec<Subscription>,
 }
 
@@ -70,6 +72,7 @@ impl MarkdownPanel {
             open_popover: false,
             export_popover: false,
             pending_close_tab: None,
+            sidebar_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             _subs: Vec::new(),
         };
         // Start with one blank untitled tab.
@@ -547,6 +550,87 @@ impl MarkdownPanel {
                 }))
             })
     }
+
+    /// The left file-list sidebar (replaces the top tab bar): a vertical,
+    /// scrollable list of open documents, rendered inside the resizable
+    /// sidebar panel.
+    fn render_file_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let active = self.active;
+        let labels = self.tab_labels(cx);
+        v_flex()
+            .id("md-file-sidebar")
+            .w_full()
+            .h_full()
+            .border_r_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .id("md-file-scroll")
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .p(px(4.))
+                    .gap(px(2.))
+                    .children(labels.iter().enumerate().map(|(i, (label, dirty))| {
+                        let is_active = i == active;
+                        h_flex()
+                            .id(gpui::ElementId::Name(format!("md-file-{i}").into()))
+                            .w_full()
+                            .px(px(8.))
+                            .py(px(5.))
+                            .gap(px(6.))
+                            .items_center()
+                            .rounded(px(4.))
+                            .bg(if is_active {
+                                theme.background
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .hover(|s| {
+                                s.bg(if is_active {
+                                    theme.background
+                                } else {
+                                    theme.muted
+                                })
+                            })
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_active_tab(i, cx);
+                                }),
+                            )
+                            .when(*dirty, |d| {
+                                d.child(div().text_color(theme.primary).child("●"))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(12.))
+                                    .text_color(if is_active {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .truncate()
+                                    .child(label.clone()),
+                            )
+                            .child(
+                                Button::new(("md-file-close", i))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_tab(i, cx);
+                                    })),
+                            )
+                    })),
+            )
+    }
 }
 
 impl Render for MarkdownPanel {
@@ -558,17 +642,42 @@ impl Render for MarkdownPanel {
             .pending_close_tab
             .is_some()
             .then(|| self.render_close_dialog(cx));
+        // Left resizable file sidebar (replaces the top tab bar). Width is
+        // persisted in layout.side_widths[2].
+        let saved = crate::state::persistence::load_layout()
+            .and_then(|l| l.side_widths)
+            .and_then(|w| w.get(2).copied())
+            .filter(|&w| w > 0.0)
+            .map(|w| w.clamp(180.0, 400.0))
+            .map(gpui::px)
+            .unwrap_or_else(|| gpui::px(240.));
+        let state = self.sidebar_resize.clone();
         div()
             .id("markdown-panel-root")
             .relative()
             .w_full()
             .h_full()
             .child(
-                v_flex()
-                    .w_full()
-                    .h_full()
-                    .child(self.render_tab_bar(cx))
-                    .child(div().flex_1().min_h_0().child(editor)),
+                gpui_component::resizable::h_resizable("markdown-sidebar")
+                    .with_state(&state)
+                    .on_resize(|state, _, cx| {
+                        if let Some(w) = state.read(cx).sizes().first() {
+                            let mut layout =
+                                crate::state::persistence::load_layout().unwrap_or_default();
+                            let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                            arr[2] = w.as_f32();
+                            layout.side_widths = Some(arr);
+                            let _ = crate::state::persistence::save_layout(&layout);
+                        }
+                    })
+                    .child(
+                        gpui_component::resizable::resizable_panel()
+                            .size(saved)
+                            .size_range(gpui::px(180.)..gpui::px(400.))
+                            .flex_none()
+                            .child(self.render_file_sidebar(cx)),
+                    )
+                    .child(gpui_component::resizable::resizable_panel().child(editor)),
             )
             .when_some(close_dialog, |d, dlg| d.child(dlg))
     }

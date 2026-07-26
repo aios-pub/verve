@@ -4898,19 +4898,46 @@ impl VerveApp {
         let md_open_pop = md.clone();
         let md_export_pop = md.clone();
 
-        h_flex()
+        let md_state = md.read(cx).sidebar_resize().clone();
+        let md_saved = crate::state::persistence::load_layout()
+            .and_then(|l| l.side_widths)
+            .and_then(|w| w.get(2).copied())
+            .filter(|&w| w > 0.0)
+            .map(|w| w.clamp(180.0, 400.0))
+            .map(gpui::px)
+            .unwrap_or_else(|| gpui::px(240.));
+        div()
             .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
-            .pr_3()
-            .gap_2()
-            .items_center()
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            // Far-left rail toggle (shared across views, so the window chrome
-            // never shifts when switching views).
-            .child(self.render_rail_toggle(cx))
+            .child(
+                gpui_component::resizable::h_resizable("md-titlebar")
+                    .with_state(&md_state)
+                    .on_resize(|state, _, cx| {
+                        if let Some(w) = state.read(cx).sizes().first() {
+                            let mut layout =
+                                crate::state::persistence::load_layout().unwrap_or_default();
+                            let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                            arr[2] = w.as_f32();
+                            layout.side_widths = Some(arr);
+                            let _ = crate::state::persistence::save_layout(&layout);
+                        }
+                    })
+                    .child(
+                        gpui_component::resizable::resizable_panel()
+                            .size(md_saved)
+                            .size_range(gpui::px(180.)..gpui::px(400.))
+                            .flex_none()
+                            .child(
+                                h_flex()
+                                    .h_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+                                    .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+                                    .pr_2()
+                                    .child(self.render_rail_toggle(cx))
             // Outline toggle — opens the document-outline drawer inside the
             // editor. Same leading position + icon/selected/tooltip pattern as
             // the Notes title bar's sidebar-toggle, so the two views read as
@@ -4962,9 +4989,20 @@ impl VerveApp {
                                 .truncate()
                                 .child(path),
                         )
-                    }),
-            )
-            .child(div().flex_1())
+                    })
+                            )
+                    )
+                    )
+                    // ── Right section (over the editor) ──
+                    .child(
+                        gpui_component::resizable::resizable_panel().child(
+                            h_flex()
+                                .h_full()
+                                .w_full()
+                                .items_center()
+                                .gap_2()
+                                .pr_3()
+                                .child(div().flex_1())
             // WYSIWYG formatting toolbar (H1-3 / B I S U / Paragraph / Format).
             .child({
                 let editor = md.read(cx).editor().clone();
@@ -5190,6 +5228,9 @@ impl VerveApp {
                     ),
             )
             .child(self.render_update_button(cx))
-            .child(self.render_lang_picker(cx))
+            .child(self.render_lang_picker(cx)),
+                        ),
+                    ),
+            )
     }
 }

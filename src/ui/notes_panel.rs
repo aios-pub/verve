@@ -74,7 +74,7 @@ impl NotesPanel {
         // Markdown and edited as rendered blocks; `markdown()` serializes it
         // back out on save.
         let editor = cx.new(|cx| {
-            crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None).side_view()
+            crate::wysiwyg::editor::Editor::from_markdown(cx, initial_content, None).embedded()
         });
 
         let search = cx.new(|cx| {
@@ -440,7 +440,7 @@ impl NotesPanel {
         }
         let content = content.to_string();
         let new_editor = cx.new(|cx| {
-            crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).side_view()
+            crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).embedded()
         });
         self.editor = new_editor;
         // The autosave observer is bound to the (now-dropped) old editor entity;
@@ -1469,58 +1469,87 @@ impl Render for NotesPanel {
             }
         }
 
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
+
+        // Build the editor element once; it goes INSIDE the `h_resizable`
+        // (expanded) or beside the collapsed strip. Only one branch runs, so
+        // the conditional move of `editor_el` is fine.
+        let editor_el = self.render_editor(window, cx);
+        let body = if !self.list_collapsed {
+            // Resizable sidebar + editor, BOTH inside `h_resizable` — the same
+            // pattern MarkdownPanel/autotest use. A lone panel inside
+            // `h_resizable` expands to fill its parent and squeezes a
+            // separately-siblinged editor to 0 width; keeping the editor inside
+            // as a flex_1 sibling is what enforces the sidebar's `size_range`.
+            let saved = crate::state::persistence::load_layout()
+                .and_then(|l| l.side_widths)
+                .and_then(|w| w.first().copied())
+                .filter(|&w| w > 0.0)
+                // Clamp to the size_range — a corrupted/huge persisted width
+                // otherwise re-expands the sidebar and squeezes the editor.
+                .map(|w| w.clamp(180.0, 520.0))
+                .map(gpui::px)
+                .unwrap_or_else(|| gpui::px(260.));
+            let state = self.sidebar_resize.clone();
+            gpui_component::resizable::h_resizable("notes-sidebar")
+                .with_state(&state)
+                .on_resize(|state, _, cx| {
+                    let sizes = state.read(cx).sizes();
+                    if let Some(w) = sizes.first() {
+                        let mut layout =
+                            crate::state::persistence::load_layout().unwrap_or_default();
+                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                        arr[0] = w.as_f32();
+                        layout.side_widths = Some(arr);
+                        let _ = crate::state::persistence::save_layout(&layout);
+                    }
+                })
+                .child(
+                    gpui_component::resizable::resizable_panel()
+                        .size(saved)
+                        .size_range(gpui::px(180.)..gpui::px(520.))
+                        .child(self.render_note_list(cx)),
+                )
+                .child(editor_el)
+                .into_any_element()
+        } else {
+            // Collapsed: a thin vertical strip with an expand button, then the
+            // editor.
+            h_flex()
+                .w_full()
+                .h_full()
+                .child(
+                    v_flex()
+                        .w(px(28.))
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_r_1()
+                        .border_color(theme.border)
+                        .bg(theme.muted.opacity(0.3))
+                        .items_center()
+                        .pt_2()
+                        .child(
+                            Button::new("notes-expand-list")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::PanelLeftOpen)
+                                .tooltip(rust_i18n::t!("notes.expand_list").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.list_collapsed = false;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(editor_el)
+                .into_any_element()
+        };
 
         let mut root = div()
             .w_full()
             .h_full()
             .relative()
             .bg(theme.background)
-            .child(
-                h_flex()
-                    .w_full()
-                    .h_full()
-                    .when(!self.list_collapsed, |h| {
-                        // DIAGNOSIS: fixed-width sidebar. The resizable
-                        // h_resizable appears to expand and squeeze the editor to
-                        // 0 width (block bounds were 0px wide at the right edge).
-                        // If typing/display works with this fixed sidebar, the
-                        // resizable layout was the culprit.
-                        h.child(
-                            div()
-                                .w(px(260.))
-                                .h_full()
-                                .flex_shrink_0()
-                                .child(self.render_note_list(cx)),
-                        )
-                    })
-                    .when(self.list_collapsed, |h| {
-                        // Collapsed: show a thin vertical strip with an expand button.
-                        h.child(
-                            v_flex()
-                                .w(px(28.))
-                                .h_full()
-                                .flex_shrink_0()
-                                .border_r_1()
-                                .border_color(theme.border)
-                                .bg(theme.muted.opacity(0.3))
-                                .items_center()
-                                .pt_2()
-                                .child(
-                                    Button::new("notes-expand-list")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::PanelLeftOpen)
-                                        .tooltip(rust_i18n::t!("notes.expand_list").to_string())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.list_collapsed = false;
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                    })
-                    .child(self.render_editor(window, cx)),
-            );
+            .child(body);
 
         if let Some(id) = &self.pending_delete {
             root = root.child(self.render_delete_confirm(id, cx));

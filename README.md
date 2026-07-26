@@ -2,13 +2,13 @@
 
 # ⚡ Verve
 
-**🔥🔥🔥 An offline-first, one-stop developer workbench built with Rust — unifying API debugging, SSH triage, Docker/K8s log inspection, stress testing, mock & capture, notes, hosts, and JSON tools in a single native window.**
+**An offline-first, one-stop developer workbench built with Rust — unifying API debugging, SSH triage, Docker/K8s log inspection, stress testing, mock & capture, notes, hosts, and JSON tools in a single native window.**
 
-### The One-Stop Developer Workbench
+### Open-Source Community Edition + Commercial Pro Edition
 
-**Debug APIs, investigate issues, tail logs, exec into containers — one window for the high-frequency tasks you repeat every day.** Built-in HTTP debugging, SSH terminal, Docker / K8s read-only inspection & troubleshooting, stress testing, mock, and traffic capture — plus notes, hosts, JSON formatting, and other dev utilities, with document sharing and Git sync. Everything a developer reaches for daily, finally under one roof.
+Verve ships in **two editions**: a free, open-source **Community Edition** for individual developers' daily API workflow, and a one-time-purchase **Pro Edition** that adds operations, knowledge management, and cloud collaboration on top.
 
-`API & Testing` · `Terminal & Triage` · `Mock & Capture` · `Docs & Git` · `Notes` · `Hosts` · `JSON` · `PDF` · `DB Tools`
+`API & Testing` · `Terminal & Triage` · `Mock & Capture` · `Docs & Git` · `Notes` · `Hosts` · `JSON` · `PDF`
 
 <br/>
 
@@ -29,7 +29,7 @@
 
 <br/>
 
-[Features](#-features) · [What's New](#-whats-new) · [Getting Started](#-getting-started) · [Official Release](#-official-release--limited-time-offer)
+[Features](#-features) · [Community vs Pro](#-community-vs-pro) · [Getting Started](#-getting-started) · [Pro Edition](#-pro-edition--one-time-purchase)
 
 </div>
 
@@ -50,20 +50,139 @@ What this means for you: instant responses when debugging APIs, fluid terminals 
 
 ---
 
-## ✨ Features
+## 🆍 Two Editions
 
-Verve covers the full daily workflow of a developer — not just API debugging. Four pillars, one app:
+### 🆍 Community Edition — Free & Open-Source
 
-| Pillar | What's inside |
-|--------|---------------|
-| 🧪 **API & Testing** | HTTP debugging · stress testing · automated test suites · mock server · HTTP capture proxy |
-| 🖥️ **Terminal & Triage** | SSH terminal · SFTP file transfer · port forwarding · Docker container inspection & log triage · Kubernetes pod inspection & log triage |
-| 🤝 **Collaboration & Docs** | Document sharing (HTML/QR/link) · Git version sync · cloud `verve-server` |
-| 🛠️ **Dev Utilities** | Markdown notes (+ PDF export) · hosts manager · JSON formatter · PDF viewer/editor · database client launcher · 22 themes · i18n |
+The **Community Edition** is free and planned to be released under the **Apache-2.0** license. It covers everything an individual developer needs for daily API work: HTTP debugging, traffic capture, JSON formatting, hosts management, local mock server, and local document sharing — in a fast, lightweight native app.
 
-Dive into each below 👇
+### 💎 Pro Edition — One-Time Purchase
+
+The **Pro Edition** is a one-time-purchase upgrade (early-bird **¥99**, regular **¥199**) that adds everything on top of the Community Edition: full **SSH / Docker / Kubernetes** operations, **stress testing**, **automated test suites**, **Markdown notes & file editor**, **Git multi-workspace sync**, and **cloud collaboration** (self-hosted `verve-server`, cloud mock, cloud document sharing).
+
+→ Full feature comparison: [Community vs Pro](#-community-vs-pro)
+→ Purchase: [Pro Edition](#-pro-edition--one-time-purchase)
 
 ---
+
+## 🆚 Community vs Pro
+
+**Edition principle**: local capabilities → Community Edition (open-source, free); cloud-deployed and professional-operations capabilities → Pro Edition (commercial, one-time purchase).
+
+> ✅ Included in both · ❌ Not in this edition · 💎 Pro-only feature
+
+### Overview
+
+| | 🆍 Community Edition | 💎 Pro Edition |
+|---|---|---|
+| **Positioning** | Personal developer's local API toolbox | All-in-one ops + knowledge + cloud platform |
+| **License** | Apache-2.0 (planned open-source) | Proprietary (Verve Pro License) |
+| **Source code** | Open & auditable | Closed |
+| **Price** | Free | ¥99 early-bird / ¥199 regular (one-time) |
+| **Audience** | Individual devs, students, OSS community | Pro devs, ops engineers, small teams |
+| **Platforms** | macOS · Linux · Windows | macOS · Linux · Windows |
+
+### 🧪 API & Testing
+
+| Feature | Community | Pro |
+|---|:---:|:---:|
+| HTTP API debugging (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS) | ✅ | ✅ |
+| Request body (none / form-data / x-www-form-urlencoded / raw JSON·XML·Text·HTML·JS) | ✅ | ✅ |
+| `{{variable}}` placeholder (request > folder > env > global priority) | ✅ | ✅ |
+| Pre-request & Tests scripts (JavaScript, boa_engine) | ✅ | ✅ |
+| Multi-protocol clients (gRPC / TCP / SSE / WebSocket) | ✅ | ✅ |
+| Response panel (status / time / size / headers / body, JSON pretty) | ✅ | ✅ |
+| Project tree (folders, multi-level nesting, drag-reorder) | ✅ | ✅ |
+| Request/response history | ✅ | ✅ |
+| Local Mock server (Exact → Prefix → Regex matching, priority) | ✅ | ✅ |
+| **HTTP capture proxy** (`127.0.0.1:<port>`, ring buffer) | ✅ | ✅ |
+| **Stress testing** (engine + concurrency/duration + live chart) | ❌ | 💎 |
+| Stress scenario mode (multi-step loop, latency percentile) | ❌ | 💎 |
+| **Automated test suites** (suite/case/step + if/loop/wait/script + assertions) | ❌ | 💎 |
+
+### 🛠️ Dev Utilities
+
+| Feature | Community | Pro |
+|---|:---:|:---:|
+| JSON formatter (collapsible tree) | ✅ | ✅ |
+| Hosts manager (read `/etc/hosts`, profiles, env binding) | ✅ | ✅ |
+| 22 built-in themes (Catppuccin / Gruvbox / Tokyo Night / Solarized …) | ✅ | ✅ |
+| i18n (Simplified Chinese default / English) | ✅ | ✅ |
+| Import (Postman v2.1 / OpenAPI 3 / Postman 7+) | ✅ | ✅ |
+| Export (Markdown / JSON / Postman, round-trip) | ✅ | ✅ |
+
+### 🖥️ Terminal & Triage (Pro-only)
+
+| Feature | Community | Pro |
+|---|:---:|:---:|
+| **SSH terminal** (password / private-key / agent, multi-tab) | ❌ | 💎 |
+| Terminal emulation (full ANSI: 16-color + 256-color + true color) | ❌ | 💎 |
+| Tab completion · paste · text copy | ❌ | 💎 |
+| Jump host / bastion (ProxyJump) | ❌ | 💎 |
+| Auto-reconnect (exponential backoff) | ❌ | 💎 |
+| **SFTP file transfer** (upload / download, native dialogs) | ❌ | 💎 |
+| **Zmodem** (`rz` / `sz` in-terminal transfer) | ❌ | 💎 |
+| **SSH port forwarding** (`-L`, one-click expose internal services) | ❌ | 💎 |
+| **Secure credential storage** (OS keychain + AES-256-GCM vault) | ❌ | 💎 |
+| **Docker management** (local/remote daemon, start/stop/restart/rm) | ❌ | 💎 |
+| Docker images (list / prune) | ❌ | 💎 |
+| Docker log streaming | ❌ | 💎 |
+| Docker exec (real PTY, multi-tab shell) | ❌ | 💎 |
+| Docker SSH tunnel for remote daemons | ❌ | 💎 |
+| **Kubernetes management** (kubeconfig + context switch) | ❌ | 💎 |
+| K8s pods (list / logs / exec / port-forward) | ❌ | 💎 |
+| K8s connection modes (Direct API server or SSH tunnel via bastion) | ❌ | 💎 |
+
+### 📝 Docs & Knowledge (split)
+
+| Feature | Community | Pro |
+|---|:---:|:---:|
+| Document sharing — local generation (self-contained HTML) | ✅ | ✅ |
+| Document sharing — viewing (QR code + link + HTML export) | ✅ | ✅ |
+| Document sharing — access control (expiry + password, local server) | ✅ | ✅ |
+| **Markdown notes** (block editor, notes tree, live preview canvas) | ❌ | 💎 |
+| **Notes → PDF export** (built-in fonts, headings/code/lists/links) | ❌ | 💎 |
+| **PDF viewer / editor** (Pdfium native, text/image/erase/page ops) | ❌ | 💎 |
+| **Standalone Markdown file editor** (multi-tab, Finder double-click / `verve file.md`) | ❌ | 💎 |
+
+### 🌍 Cloud & Collaboration (Pro-only)
+
+| Feature | Community | Pro |
+|---|:---:|:---:|
+| **Git multi-workspace sync** (each workspace = a git branch, 30-min auto-commit+sync) | ❌ | 💎 |
+| Git branch management (username/password/token auth, branch UI) | ❌ | 💎 |
+| Git workspace isolation (per-workspace `workspace.json`) | ❌ | 💎 |
+| **Self-hosted `verve-server`** (standalone server binary for cloud docs & mock) | ❌ | 💎 |
+| **Cloud document sharing** (push to remote `verve-server`, get public URL) | ❌ | 💎 |
+| **Cloud mock** (host mock rules on cloud, publicly reachable) | ❌ | 💎 |
+| Admin Web UI (upload / create / browse / delete shares) | ❌ | 💎 |
+
+### 📄 Licensing & Usage Rights
+
+| | Community | Pro |
+|---|---|---|
+| **Price** | Free | ¥99 early-bird / ¥199 regular (one-time) |
+| **License type** | Apache-2.0 (planned) | Proprietary |
+| **Source visible** | ✅ Open | ❌ Closed |
+| **Personal use** | ✅ | ✅ |
+| **Commercial use** | ✅ | ✅ (after purchase) |
+| **Modify / fork** | ✅ | ❌ |
+| **Redistribute** | ✅ (under Apache-2.0) | ❌ |
+| **Hosted / SaaS use** | ✅ | ❌ (contact author) |
+| **Reverse engineering** | ✅ | ❌ |
+| **Updates** | Community-maintained / self-build | Official pre-built binaries + continuous updates |
+| **Support** | Community issues | Priority support + early access to new features |
+
+### Which one should I pick?
+
+- **Community Edition** — you're an individual developer or student whose daily work is debugging APIs, capturing traffic, formatting JSON, managing hosts, and running local mocks; you want a fast, open, free local toolbox.
+- **Pro Edition** — you need to SSH into servers to triage, tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit files, or host documents and mocks in the cloud for team access.
+
+---
+
+## ✨ Features
+
+### 🆍 Community Edition Features
 
 ### 🔌 API Debugging
 <div align="center">
@@ -89,6 +208,62 @@ Dive into each below 👇
 - Pre-request & Tests scripts (JavaScript)
 - Response panel: status / time / size / headers / body with JSON pretty-print
 - API clone, JSON format & validation, history hidden
+
+### 🌐 HTTP Capture Proxy
+<div align="center">
+  <img src="./assets/verve_demo/http-captrue.png" width="850" alt="HTTP Capture Proxy" />
+</div>
+
+- Local HTTP forward proxy on `127.0.0.1:<port>`
+- Records request + response pairs to a ring buffer for in-app inspection
+
+### 🎭 Local Mock Server
+<div align="center">
+  <img src="./assets/verve_demo/mock.png" width="850" alt="Mock Server" />
+</div>
+
+- Rule-based mock responses served on the unified share server (port 3097)
+- Matching by method + path (Exact → Prefix → Regex) + query + headers, priority-ordered
+
+### 📄 Document Sharing (Local)
+<div align="center">
+  <img src="./assets/verve_demo/doc.png" width="850" alt="Document Sharing" />
+</div>
+
+- Generate self-contained HTML docs from any project / folder / single request
+- Modular layout with field display controls, color-coded parameter tables with required markers
+- QR code sharing + link sharing + HTML export
+- Strict access control: expiration + password protection (server-enforced)
+- **Pushing to a remote `verve-server` for a public URL is a Pro-only feature** — see [Cloud & Collaboration](#-cloud--collaboration-pro-only)
+
+### 🛠️ More Tools
+<div align="center">
+  <img src="./assets/verve_demo/hosts.png" width="420" alt="Hosts Manager" /> &nbsp;
+  <img src="./assets/verve_demo/json-format.png" width="420" alt="JSON Format" />
+  <br/>
+  <em>Hosts manager &nbsp;·&nbsp; JSON format</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/theme.png" width="850" alt="Themes" />
+  <br/>
+  <em>22 built-in themes</em>
+</div>
+<div align="center">
+  <img src="./assets/verve_demo/settings.png" width="850" alt="Settings" />
+  <br/>
+  <em>Settings (i18n, theme, home view, auto-update)</em>
+</div>
+
+- **Hosts file manager** — read `/etc/hosts`, manage profiles
+- i18n: Simplified Chinese (default) / English
+- 22 built-in themes (Catppuccin, Gruvbox, Tokyo Night, Solarized, Everforest, Flexoki…)
+- Import: Postman v2.1 / OpenAPI 3 / Postman 7+ (full format compatibility)
+- Export: Markdown / JSON / Postman format (round-trip compatible)
+- Configurable home view · Auto-update check · Cross-platform packaging (macOS / Linux / Windows)
+
+---
+
+### 💎 Pro Edition Features
 
 ### 🔐 SSH Terminal
 <div align="center">
@@ -180,35 +355,7 @@ Dive into each below 👇
 - Test suites / cases / steps with sequential runner
 - Reuses the scripting & HTTP infrastructure for assertions
 
-### 🎭 Mock Server
-<div align="center">
-  <img src="./assets/verve_demo/mock.png" width="850" alt="Mock Server" />
-</div>
-
-- Rule-based mock responses served on the unified share server (port 3097)
-- Matching by method + path (Exact → Prefix → Regex) + query + headers, priority-ordered
-
-### 🌐 HTTP Capture Proxy
-<div align="center">
-  <img src="./assets/verve_demo/http-captrue.png" width="850" alt="HTTP Capture Proxy" />
-</div>
-
-- Local HTTP forward proxy on `127.0.0.1:<port>`
-- Records request + response pairs to a ring buffer for in-app inspection
-
-### 📄 Document Sharing
-<div align="center">
-  <img src="./assets/verve_demo/doc.png" width="850" alt="Document Sharing" />
-</div>
-
-- Generate self-contained HTML docs from any project / folder / single request
-- Modular layout with field display controls, color-coded parameter tables with required markers
-- QR code sharing + link sharing + HTML export
-- Strict access control: expiration + password protection (server-enforced)
-- Local HTTP server (`verve-server`) + **push to a remote `verve-server`** for a public URL
-- Admin Web UI for upload / create / browse / delete shares
-
-### 🗒️ Markdown Notes
+### 🗒️ Markdown Notes & PDF Editor
 <div align="center">
   <img src="./assets/verve_demo/note.png" width="850" alt="Markdown Notes" />
   <br/>
@@ -224,7 +371,7 @@ Dive into each below 👇
 - Export notes to **PDF** (built-in fonts, headings, code blocks, lists, links)
 - PDF viewer with zoom · PDF editor
 
-### 🌍 Git Version Control
+### 🌍 Git Version Control & Cloud
 <div align="center">
   <img src="./assets/verve_demo/git_sync_time.png" width="850" alt="Git Version Sync" />
 </div>
@@ -234,77 +381,25 @@ Dive into each below 👇
 - Per-workspace `workspace.json` isolation
 - Username / password / token authentication · Branch management UI
 
-### 🛠️ More Tools
-<div align="center">
-  <img src="./assets/verve_demo/hosts.png" width="420" alt="Hosts Manager" /> &nbsp;
-  <img src="./assets/verve_demo/json-format.png" width="420" alt="JSON Format" />
-  <br/>
-  <em>Hosts manager &nbsp;·&nbsp; JSON format</em>
-</div>
-<div align="center">
-  <img src="./assets/verve_demo/theme.png" width="850" alt="Themes" />
-  <br/>
-  <em>22 built-in themes</em>
-</div>
-<div align="center">
-  <img src="./assets/verve_demo/settings.png" width="850" alt="Settings" />
-  <br/>
-  <em>Settings (i18n, theme, home view, auto-update)</em>
-</div>
+### 📦 Self-hosted `verve-server` (Cloud Deployment)
 
-- **Hosts file manager** — read `/etc/hosts`, manage profiles
-- i18n: Simplified Chinese (default) / English
-- 22 built-in themes (Catppuccin, Gruvbox, Tokyo Night, Solarized, Everforest, Flexoki…)
-- Import: Postman v2.1 / OpenAPI 3 / Postman 7+ (full format compatibility)
-- Export: Markdown / JSON / Postman format (round-trip compatible)
-- Configurable home view · Auto-update check · Cross-platform packaging (macOS / Linux / Windows)
+The Pro Edition ships a standalone server for hosting shared documents, mock APIs, and cloud shares in the cloud, with an admin Web UI for uploading projects and managing share links.
 
----
-
-## 🆕 What's New
-
-### v0.2.0 (Current)
-- 🐳 **Docker management** — containers, images, logs, exec, multi-tab shells, remote daemon tunneling
-- ☸️ **Kubernetes management** — kubeconfig contexts, pods, logs, exec, port-forward, SSH-tunneled API server
-- ⚡ **Stress testing** — load generator with real-time charts + scenario mode
-- 🧪 **Automated testing** — suites / cases / steps runner with assertions
-- 🎭 **Mock server** — priority-ordered rule matching (Exact / Prefix / Regex)
-- 🌐 **HTTP capture proxy** — inspect local HTTP traffic
-- 📁 **SFTP browser** + 🔀 **SSH port forwarding** + **Zmodem `rz`/`sz`** file transfer
-- 🗒️ **Markdown notes** with live preview + **PDF export / viewer / editor**
-- 🛠️ **Hosts file manager**
-- 🔗 **Remote `verve-server` push** for public document URLs
-- 🎨 Docker / K8s panel polish, drag-resizable dock, custom menu, new share icon
-
-### v0.1.0
-- ✅ HTTP debugging (all methods / body types / variable substitution / scripts)
-- ✅ SSH terminal (multi-tab / bastion / auto-reconnect / Tab completion)
-- ✅ Document sharing (HTML generation / strict access control / `verve-server` cloud)
-- ✅ Git version sync (multi-workspace / auto-commit / branch management)
-- ✅ i18n (Chinese / English) · 22 themes · Import/Export · Cross-platform packaging
-
-### Planned
-- ⬜ Remote (`-R`) port forwarding
-- ⬜ HTTPS MITM capture (trusted CA)
-- ⬜ Terminal color customization
+See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment guide.
 
 ---
 
 ## 🚀 Getting Started
 
-Verve is closed-source proprietary software distributed as ready-to-use builds — no build toolchain needed.
+### 🆍 Community Edition
 
-1. **Download** the latest preview build for your platform (macOS / Linux / Windows).
-2. On first launch, Verve auto-creates its data directory with a demo project so you can explore right away.
-3. Want the full **official release** with continuous updates and priority support? See the [Official Release](#-official-release--limited-time-offer) section below.
+- **Pre-built binaries**: download the latest Community build for your platform (macOS / Linux / Windows) from [Releases](../../releases).
+- **Build from source**: `git clone` this repo, then `cargo build --release`.
+- On first launch, Verve auto-creates its data directory with a demo project so you can explore right away.
 
----
+### 💎 Pro Edition
 
-## 📦 verve-server (Cloud Deployment)
-
-Verve ships a standalone server for hosting shared documents & mock APIs in the cloud, with an admin Web UI for uploading projects and managing share links.
-
-See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment guide.
+The Pro Edition (pre-compiled binaries + continuous updates + priority support) is obtained via a one-time purchase. See the [Pro Edition](#-pro-edition--one-time-purchase) section below.
 
 ---
 
@@ -320,16 +415,17 @@ See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment gui
 
 ---
 
-## 💰 Official Release — Limited-Time Offer
+## 💎 Pro Edition — One-Time Purchase
 
 > ⚠️ **Limited-Time Launch Pricing — ends soon!**
 
-Verve is **closed-source proprietary software** (not open source); an official preview build is available to try. The **official release** (pre-compiled binaries + continuous updates + priority support) is offered through a **donation-based model**, and the entry price below is a **time-limited early-bird rate**.
+The **Pro Edition** unlocks everything beyond the Community Edition — SSH / Docker / Kubernetes operations, stress & automated testing, Markdown notes & file editor, Git multi-workspace sync, and self-hosted cloud collaboration (`verve-server`, cloud mock, cloud document sharing). It is offered through a **one-time purchase** at a **time-limited early-bird rate**.
 
 ### 🔥 Early-Bird Special — only **¥99** (CNY)
 The current **¥99** early-bird price is a limited-time launch offer. **It will return to the regular ¥199 once the promotion ends.** Lock in the lowest price now:
 
-> **Donate ¥99+ today** to get the official release license, including:
+> **Pay ¥99+ once** to unlock the Pro Edition, including:
+> - ✅ All Pro capabilities (SSH / Docker / K8s / stress testing / automated testing / Markdown notes / Git sync / cloud collaboration)
 > - ✅ All official version updates (every future release, free)
 > - ✅ Priority technical support
 > - ✅ Early access to new features
@@ -338,9 +434,9 @@ The current **¥99** early-bird price is a limited-time launch offer. **It will 
 <table>
   <tr>
     <td align="center">
-      <img src="./assets/wechat_official.jpg" width="200" alt="WeChat Official Account (Donate)" />
+      <img src="./assets/wechat_official.jpg" width="200" alt="WeChat Official Account (Pay)" />
       <br />
-      <b>① Donate — scan to open the official-account article</b>
+      <b>① Pay — scan to open the official-account article</b>
     </td>
     <td align="center">
       <img src="./assets/wechat.jpg" width="200" alt="Author's Personal WeChat" />
@@ -350,10 +446,10 @@ The current **¥99** early-bird price is a limited-time launch offer. **It will 
   </tr>
 </table>
 
-> 📩 **How to get the official release:**
-> 1. **Donate** — scan the left QR code to open the WeChat official-account article and complete your donation (¥99+).
+> 📩 **How to get the Pro Edition:**
+> 1. **Pay** — scan the left QR code to open the WeChat official-account article and complete your payment (¥99+).
 > 2. **Add me** — scan the right QR code to add my **personal WeChat** as a contact.
-> 3. Send a screenshot of your donation, and I'll send you the latest official-release download link and activation instructions.
+> 3. Send a screenshot of your payment, and I'll send you the latest Pro Edition download link and activation instructions.
 
 ⏰ **Don't miss out — the price goes up after the launch window.**
 
@@ -367,13 +463,9 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 ## 📄 License
 
-Verve is **closed-source proprietary software**. The source code is **not open** and is **not distributed**. All Rights Reserved.
+Verve is available in two editions under different licenses:
 
-Without the author's written permission, the following are **prohibited**:
-- ❌ Reverse engineering, decompiling, or disassembling the software
-- ❌ Copying, modifying, or redistributing the software or derivatives
-- ❌ Using the software for commercial resale or hosted services
+- **Community Edition** — planned to be released under the **Apache-2.0** open-source license. Source code will be public; personal and commercial use, modification, and redistribution are permitted under its terms.
+- **Pro Edition** — proprietary software under the **Verve Pro License**. Source code is **not open**. Without the author's written permission, the following are **prohibited**: reverse engineering / decompiling / disassembling; copying / modifying / redistributing the software or derivatives; using it for commercial resale or hosted services. The Pro Edition is licensed via a one-time purchase. For commercial licensing or team plans, contact the author via WeChat above.
 
-**Permitted**: downloading the officially released preview / official build for personal and team day-to-day development use.
-
-The official release (pre-compiled binaries + continuous updates + technical support) is licensed through the donation model. For commercial licensing or team collaboration plans, contact the author via WeChat above.
+> **Note**: The current repository `LICENSE` file is a transitional closed-source agreement; the Community Edition will switch to Apache-2.0 when its source is officially released.

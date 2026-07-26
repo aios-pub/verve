@@ -206,7 +206,6 @@ impl Editor {
         &mut self,
         theme: &Theme,
         strings: &I18nStrings,
-        panel_width: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.workspace.is_open {
@@ -263,10 +262,10 @@ impl Editor {
             div()
                 .id("workspace-panel")
                 .h_full()
-                .w(px(panel_width))
+                .w_full()
                 .flex()
                 .flex_col()
-                .flex_shrink_0()
+                .min_w_0()
                 .bg(c.dialog_surface)
                 .border_r(px(d.dialog_border_width))
                 .border_color(c.dialog_border)

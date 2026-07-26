@@ -119,7 +119,9 @@ impl NotesPanel {
             _subs: vec![editor_sub, search_sub, title_sub, tree_sub],
             editor_needs_reload: false,
             export_popover_open: false,
-            list_collapsed: false,
+            list_collapsed: crate::state::persistence::load_layout()
+                .map(|l| l.notes_collapsed)
+                .unwrap_or(false),
             row_menu_open: None,
         };
         panel.rebuild_tree(cx);
@@ -467,6 +469,10 @@ impl NotesPanel {
     /// Toggle whether the note list sidebar is collapsed (hidden).
     pub fn toggle_list_collapsed(&mut self, cx: &mut Context<Self>) {
         self.list_collapsed = !self.list_collapsed;
+        // Persist the collapsed state.
+        let mut layout = crate::state::persistence::load_layout().unwrap_or_default();
+        layout.notes_collapsed = self.list_collapsed;
+        let _ = crate::state::persistence::save_layout(&layout);
         cx.notify();
     }
 
@@ -731,7 +737,7 @@ impl NotesPanel {
 
         v_flex()
             .h_full()
-            .flex_shrink_0()
+            .w_full()
             .border_r_1()
             .border_color(theme.border)
             .bg(theme.muted.opacity(0.3))
@@ -1476,20 +1482,41 @@ impl Render for NotesPanel {
         // the conditional move of `editor_el` is fine.
         let editor_el = self.render_editor(window, cx);
         let body = if !self.list_collapsed {
-            // Fixed-width sidebar (resizable re-implementation pending — the
-            // drag handle should live in the title-bar region, not span the
-            // full content height).
-            h_flex()
-                .w_full()
-                .h_full()
+            // Resizable sidebar — drag handle on the right edge (h_resizable).
+            // Both panels are children of h_resizable so the resize handle is
+            // placed between them. Content is wrapped in plain divs so their
+            // own flex classes don't interfere with the resizable layout.
+            let saved = crate::state::persistence::load_layout()
+                .and_then(|l| l.side_widths)
+                .and_then(|w| w.first().copied())
+                .filter(|&w| w > 0.0)
+                .map(gpui::px)
+                .unwrap_or_else(|| gpui::px(260.));
+            let state = self.sidebar_resize.clone();
+            gpui_component::resizable::h_resizable("notes-sidebar")
+                .with_state(&state)
+                .on_resize(|state, _, cx| {
+                    if let Some(w) = state.read(cx).sizes().first() {
+                        let mut layout = crate::state::persistence::load_layout()
+                            .unwrap_or_default();
+                        let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                        arr[0] = w.as_f32();
+                        layout.side_widths = Some(arr);
+                        let _ = crate::state::persistence::save_layout(&layout);
+                    }
+                })
                 .child(
-                    div()
-                        .w(px(260.))
-                        .h_full()
-                        .flex_shrink_0()
+                    gpui_component::resizable::resizable_panel()
+                        .size(saved)
+                        .size_range(gpui::px(180.)..gpui::px(520.))
+                        .overflow_hidden()
                         .child(self.render_note_list(cx)),
                 )
-                .child(editor_el)
+                .child(
+                    gpui_component::resizable::resizable_panel()
+                        .overflow_hidden()
+                        .child(editor_el),
+                )
                 .into_any_element()
         } else {
             // Collapsed: a thin vertical strip with an expand button, then the

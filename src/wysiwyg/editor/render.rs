@@ -10,7 +10,7 @@ use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::ButtonVariants as _;
 
-use super::{Editor, InfoDialogKind, workspace::workspace_panel_width_for_viewport};
+use super::{Editor, InfoDialogKind};
 use crate::wysiwyg::app_menu::dispatch_menu_action_for_editor;
 use crate::wysiwyg::components::CalloutVariant;
 use crate::wysiwyg::components::{
@@ -2421,8 +2421,6 @@ impl Render for Editor {
         } else {
             base
         };
-        let workspace_width =
-            workspace_panel_width_for_viewport(f32::from(window.viewport_size().width));
         let main_content = div()
             .w_full()
             .flex_1()
@@ -2431,9 +2429,38 @@ impl Render for Editor {
             .flex()
             .min_w(px(0.0));
         let main_content = if let Some(workspace_panel) =
-            self.render_workspace_panel(&theme, &strings, workspace_width, cx)
+            self.render_workspace_panel(&theme, &strings, cx)
         {
-            main_content.child(workspace_panel)
+            // Resizable workspace drawer: drag the right edge to resize.
+            let saved = crate::state::persistence::load_layout()
+                .and_then(|l| l.markdown_drawer_width)
+                .filter(|&w| w > 0.0)
+                .map(gpui::px)
+                .unwrap_or_else(|| gpui::px(240.));
+            let state = self.workspace_resize.clone();
+            main_content.child(
+                gpui_component::resizable::h_resizable("editor-workspace")
+                    .with_state(&state)
+                    .on_resize(|state, _, cx| {
+                        if let Some(w) = state.read(cx).sizes().first() {
+                            let mut layout = crate::state::persistence::load_layout()
+                                .unwrap_or_default();
+                            layout.markdown_drawer_width = Some(w.as_f32());
+                            let _ = crate::state::persistence::save_layout(&layout);
+                        }
+                    })
+                    .child(
+                        gpui_component::resizable::resizable_panel()
+                            .size(saved)
+                            .size_range(gpui::px(180.)..gpui::px(520.))
+                            .child(workspace_panel),
+                    )
+                    .child(
+                        gpui_component::resizable::resizable_panel()
+                            .overflow_hidden()
+                            .child(content_area),
+                    ),
+            )
         } else if self.owns_window {
             // Workspace drawer is closed and the editor owns its window
             // (standalone mode, no host title bar): show a thin expand strip so
@@ -2446,31 +2473,33 @@ impl Render for Editor {
             let app = cx.theme();
             let strip_border = app.border;
             let strip_bg = app.muted.opacity(0.3);
-            main_content.child(
-                div()
-                    .w(px(28.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .border_r_1()
-                    .border_color(strip_border)
-                    .bg(strip_bg)
-                    .items_center()
-                    .pt_2()
-                    .child(
-                        gpui_component::button::Button::new("editor-outline-expand")
-                            .ghost()
-                            .xsmall()
-                            .icon(gpui_component::IconName::PanelLeftOpen)
-                            .tooltip(strings.workspace_tab_outline.clone())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_workspace_drawer(window, cx);
-                            })),
-                    ),
-            )
-        } else {
             main_content
+                .child(
+                    div()
+                        .w(px(28.))
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_r_1()
+                        .border_color(strip_border)
+                        .bg(strip_bg)
+                        .items_center()
+                        .pt_2()
+                        .child(
+                            gpui_component::button::Button::new("editor-outline-expand")
+                                .ghost()
+                                .xsmall()
+                                .icon(gpui_component::IconName::PanelLeftOpen)
+                                .tooltip(strings.workspace_tab_outline.clone())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_workspace_drawer(window, cx);
+                                })),
+                        ),
+                )
+                .child(content_area)
+        } else {
+            main_content.child(content_area)
         };
-        let base = base.child(main_content.child(content_area));
+        let base = base.child(main_content);
         // The status bar (word count, view-mode switch, cursor position,
         // sidebar toggle) is rendered when `show_chrome` is set — i.e. for the
         // standalone markdown side-view. The notes panel disables it (it has

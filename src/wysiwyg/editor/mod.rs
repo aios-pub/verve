@@ -147,6 +147,8 @@ pub struct Editor {
     /// True while an online update check is running in the background.
     update_check_in_progress: bool,
     workspace: WorkspaceState,
+    /// Resizable state for the workspace drawer (文件/大纲 sidebar) width.
+    workspace_resize: Entity<gpui_component::resizable::ResizableState>,
     status_bar: StatusBarState,
     /// Top formatting toolbar (H1-3 / B I S U / Paragraph / Format dropdowns).
     toolbar: ToolbarState,
@@ -389,6 +391,7 @@ impl Editor {
             info_dialog: None,
             update_check_in_progress: false,
             workspace: WorkspaceState::default(),
+            workspace_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             status_bar: StatusBarState::default(),
             toolbar: ToolbarState::new(),
             context_menu: None,

@@ -118,8 +118,16 @@ impl Editor {
             return;
         };
         if state.matches.is_empty() {
+            // No matches: clear any stale highlight from the previous query's
+            // current match so the user isn't left looking at it.
+            self.clear_find_match_highlight(cx);
             return;
         }
+        let previous_block = self
+            .find_state
+            .as_ref()
+            .and_then(|s| s.matches.get(s.current))
+            .map(|m| m.block);
         if advance {
             let next = (state.current + 1) % state.matches.len();
             if let Some(state) = self.find_state.as_mut() {
@@ -134,7 +142,40 @@ impl Editor {
             return;
         };
         if let Some(block) = self.document.block_entity_by_id(m.block) {
-            self.focus_block_range(&block, m.range, cx);
+            self.focus_block_range(&block, m.range.clone(), cx);
+            // The matched block is intentionally NOT keyboard-focused while the
+            // find bar is up (see `focus_block`), so the `focused`-gated caret/
+            // highlight draw condition in the block element does not fire. The
+            // cross-block `editor_selection_range` path paints a selection
+            // rectangle without focus, so drive the match highlight through it.
+            // Clear the stale highlight on the previously matched block first so
+            // stepping through matches doesn't leave a trail of highlights.
+            if let Some(previous) = previous_block
+                && previous != m.block
+                && let Some(prev_block) = self.document.block_entity_by_id(previous)
+            {
+                prev_block.update(cx, |block, cx| {
+                    if block.editor_selection_range.take().is_some() {
+                        cx.notify();
+                    }
+                });
+            }
+            block.update(cx, |block, cx| {
+                block.editor_selection_range = Some(m.range);
+                cx.notify();
+            });
+        }
+    }
+
+    /// Remove the find-match highlight (`editor_selection_range`) from every
+    /// block. Used when matches go empty or the bar closes.
+    fn clear_find_match_highlight(&mut self, cx: &mut Context<Self>) {
+        for visible in self.document.visible_blocks().to_vec() {
+            visible.entity.update(cx, |block, cx| {
+                if block.editor_selection_range.take().is_some() {
+                    cx.notify();
+                }
+            });
         }
     }
 
@@ -335,6 +376,9 @@ impl Editor {
     /// block so editing resumes.
     pub(super) fn close_find_bar(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.find_state.take().is_some() {
+            // Drop the find-match highlight (`editor_selection_range`) from
+            // every block; those highlights only make sense while the bar is up.
+            self.clear_find_match_highlight(cx);
             if let Some(active) = self.active_entity_id {
                 self.focus_block(active);
             }

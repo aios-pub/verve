@@ -489,11 +489,20 @@ impl Editor {
         let normalized = self.normalized_cross_block_selection(cx);
         let visible_blocks = self.document.visible_blocks().to_vec();
         for (index, visible) in visible_blocks.into_iter().enumerate() {
-            let next_range = normalized.and_then(|selection| {
+            // Read current state and compute the desired range in one borrow, then
+            // only take the write lock (which schedules a GPUI repaint) when the
+            // value actually changes. Dragging fires this on every mouse-move
+            // frame; writing to every visible block — most of which are outside
+            // the selection and never change — previously forced per-frame
+            // updates and notify() calls across the whole document.
+            let next_range = visible.entity.read_with(cx, |block, _| {
+                if normalized.is_none() {
+                    return None;
+                }
+                let selection = normalized.as_ref().unwrap();
                 if index < selection.start_index || index > selection.end_index {
                     return None;
                 }
-                let block = visible.entity.read(cx);
                 let len = block.visible_len();
                 let range = if selection.start_index == selection.end_index {
                     selection.start.offset.min(len)..selection.end.offset.min(len)
@@ -507,12 +516,17 @@ impl Editor {
                 (!range.is_empty()).then_some(range)
             });
 
-            visible.entity.update(cx, |block, cx| {
-                if block.editor_selection_range != next_range {
-                    block.editor_selection_range = next_range.clone();
+            // Skip the entity write entirely when the painted highlight is
+            // unchanged — the common case for blocks far from the drag endpoints.
+            let needs_write = visible
+                .entity
+                .read_with(cx, |block, _| block.editor_selection_range != next_range);
+            if needs_write {
+                visible.entity.update(cx, |block, cx| {
+                    block.editor_selection_range = next_range;
                     cx.notify();
-                }
-            });
+                });
+            }
         }
     }
 

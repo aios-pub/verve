@@ -19,3 +19,8 @@ pub use crate::wysiwyg::components::markdown::inline::*;
 pub(crate) use crate::wysiwyg::components::markdown::link::*;
 pub use runtime::*;
 pub use state::*;
+
+// Pure inline-layout helpers re-exported so they are testable from the
+// markdown module's unit tests (the block render test module is gated behind
+// a feature flag that is not always enabled).
+pub(crate) use render::{inline_word_chunks, is_cjk_break_char};

@@ -14,9 +14,10 @@ use crate::wysiwyg::components::{
     HtmlBoxEdges, HtmlCssColor, HtmlDocument, HtmlInlineStyle, HtmlLength, HtmlNode, HtmlNodeKind,
     InlineScript, TableAxisHighlight, TableAxisKind, TableAxisMarker,
     TableCellInlineImageSegment, TableColumnLayout, attr_value, display_math_font_size,
-    inline_math_font_size, parse_display_math_source, parse_html_image_block,
-    parse_mermaid_fence_source, parse_table_cell_inline_images, render_display_math_svg,
-    render_inline_math_svg, render_mermaid_svg_for_display, resolve_image_source, style_for_node,
+    has_only_inline_content as html_has_only_inline_content, inline_math_font_size,
+    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
+    parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
+    render_mermaid_svg_for_display, resolve_image_source, style_for_node,
 };
 use crate::wysiwyg::i18n::{I18nManager, I18nStrings};
 use crate::wysiwyg::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -1449,17 +1450,49 @@ impl Block {
             // the inline box model (padding/margin/width/border/text-align/...)
             // on top of the inherited text styles.
             _ => {
-                let mut element = div()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(theme.dimensions.block_gap * 0.3))
-                    .text_size(px(node_style.computed.font_size))
-                    .text_color(node_style.computed.color)
-                    .children(node.children.iter().map(|child| {
-                        self.render_html_node(child, theme, node_style.computed, cx)
-                    }));
+                // A block container holding only inline content (e.g.
+                // `<p>text <strong>bold</strong> more</p>`) must render as a
+                // single horizontal inline flow. Treating it as a vertical flex
+                // column would stack each fragment — the `<strong>` run and the
+                // surrounding `#text` — on its own line. Re-parse the children's
+                // inline markup as Markdown, mirroring how a `#text` node is
+                // handled, so `**bold**`, headings, blockquotes, and inline HTML
+                // tags all keep working.
+                let mut element = if html_has_only_inline_content(node) {
+                    let inline_source: String =
+                        node.children.iter().map(|c| c.raw_source.as_str()).collect();
+                    let inline_node = HtmlNode {
+                        kind: HtmlNodeKind::InlineSemantic,
+                        tag_name: "#text".into(),
+                        attrs: Vec::new(),
+                        children: Vec::new(),
+                        raw_source: inline_source,
+                        source_range: 0..0,
+                    };
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(px(node_style.computed.font_size))
+                        .text_color(node_style.computed.color)
+                        .child(self.render_html_markdown_text(
+                            &inline_node,
+                            node_style.computed,
+                            theme,
+                            cx,
+                        ))
+                } else {
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme.dimensions.block_gap * 0.3))
+                        .text_size(px(node_style.computed.font_size))
+                        .text_color(node_style.computed.color)
+                        .children(node.children.iter().map(|child| {
+                            self.render_html_node(child, theme, node_style.computed, cx)
+                        }))
+                };
                 element = apply_html_box_style(element, &node_style.inline, &node_style.computed);
                 if let Some(bg) = node_style.background {
                     element = element.bg(bg);
@@ -3350,14 +3383,68 @@ impl Element for LinkFollowCursor {
     }
 }
 
-fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str> {
+/// Break a styled text run into wrap-friendly chunks for the `flex_wrap` row.
+///
+/// Runs that carry their own box (inline code, background highlight) stay a
+/// single chunk so their padding/background is continuous. Everything else is
+/// split so each ASCII word keeps its trailing space (so the row can break
+/// between words) AND each CJK character (Han / Kana / Hangul / full-width
+/// CJK punctuation) becomes its own chunk. CJK scripts have no inter-word
+/// spaces, so without per-glyph break points a long Chinese/Japanese run
+/// becomes one rigid flex element that cannot wrap and instead overflows or
+/// forces the whole paragraph to stack — emitting one chunk per CJK glyph
+/// lets `flex_wrap` break freely between characters.
+pub(crate) fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();
     }
     if code || has_background {
         return vec![text];
     }
-    text.split_inclusive(char::is_whitespace).collect()
+
+    let bytes = text.as_bytes();
+    let mut chunks: Vec<&str> = Vec::new();
+    // Start index (in bytes) of the chunk currently being accumulated.
+    let mut run_start = 0usize;
+    for (idx, ch) in text.char_indices() {
+        if is_cjk_break_char(ch) {
+            // Close out any pending ASCII/Latin run first.
+            if run_start < idx {
+                chunks.push(&text[run_start..idx]);
+            }
+            // Emit this CJK glyph as its own one-char chunk.
+            let next = idx + ch.len_utf8();
+            chunks.push(&text[idx..next]);
+            run_start = next;
+        } else if ch.is_whitespace() {
+            // Whitespace ends the current word; keep it attached (inclusive)
+            // so spacing survives the split, exactly like the old behavior.
+            let next = idx + ch.len_utf8();
+            chunks.push(&text[run_start..next]);
+            run_start = next;
+        }
+    }
+    if run_start < bytes.len() {
+        chunks.push(&text[run_start..]);
+    }
+    chunks
+}
+
+/// Returns true for characters that act as their own wrap break point: CJK
+/// ideographs (Han), Hiragana/Katakana, Hangul syllables, and full-width CJK
+/// punctuation. Each such glyph becomes an individual `flex_wrap` chunk so a
+/// long Chinese/Japanese run can wrap between characters.
+pub(crate) fn is_cjk_break_char(ch: char) -> bool {
+    matches!(ch,
+        '\u{3400}'..='\u{9FFF}'      // CJK Unified Ideographs (+ Ext A)
+        | '\u{F900}'..='\u{FAFF}'    // CJK Compatibility Ideographs
+        | '\u{3040}'..='\u{30FF}'    // Hiragana + Katakana
+        | '\u{FF66}'..='\u{FF9D}'    // Halfwidth Katakana
+        | '\u{AC00}'..='\u{D7AF}'    // Hangul Syllables
+        | '\u{3000}'..='\u{303F}'    // CJK Symbols and Punctuation
+        | '\u{FF01}'..='\u{FF60}'    // Full-width ASCII / CJK punctuation
+        | '\u{FFE0}'..='\u{FFE6}'    // Full-width signs
+    )
 }
 
 /// Strips a single leading `>` (with optional space) from a Markdown blockquote

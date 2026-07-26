@@ -1332,6 +1332,26 @@ pub(crate) fn is_inline_tag(name: &str) -> bool {
     )
 }
 
+/// Returns true when a block container (`<p>`, `<div>`, `<section>`, ...) holds
+/// only inline-flow content — text nodes and inline-semantic tags such as
+/// `<strong>`, `<em>`, `<a>`, `<span>`. Such a container should render as a
+/// single horizontal inline flow rather than a vertical flex column; otherwise
+/// each inline fragment (a `<strong>` run, the surrounding `#text`) would stack
+/// on its own line.
+///
+/// Containers with any block-level descendant (`<div>`, `<ul>`, `<table>`,
+/// ...) return false so they keep the vertical stack layout.
+pub(crate) fn has_only_inline_content(node: &HtmlNode) -> bool {
+    fn is_inline_node(n: &HtmlNode) -> bool {
+        match n.tag_name.as_str() {
+            "#text" | "br" => true,
+            tag if is_inline_tag(tag) => n.children.iter().all(is_inline_node),
+            _ => false,
+        }
+    }
+    !node.children.is_empty() && node.children.iter().all(is_inline_node)
+}
+
 /// Block-level HTML tags that the markdown importer collects into a single
 /// `HtmlBlock`. Used by the inline parser to detect a block-level tag that
 /// appears mid-paragraph (where it can't form a real block) and degrade it
@@ -1389,6 +1409,7 @@ fn is_void_tag(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wysiwyg::components::{InlineTextTree, inline_word_chunks, is_cjk_break_char};
 
     #[test]
     fn safe_inline_html_classifies_as_semantic() {
@@ -1703,5 +1724,219 @@ mod tests {
         assert!(is_block_html_tag("article"));
         assert!(!is_block_html_tag("span"));
         assert!(!is_block_html_tag("strong"));
+    }
+
+    // CJK characters must each be their own wrap break point, otherwise a long
+    // Chinese/Japanese run with no inter-word spaces becomes one rigid flex
+    // element that cannot wrap and forces the paragraph to stack vertically.
+    #[test]
+    fn cjk_break_char_detects_han_kana_hangul_and_fullwidth_punct() {
+        assert!(is_cjk_break_char('调')); // Han
+        assert!(is_cjk_break_char('試')); // Han
+        assert!(is_cjk_break_char('あ')); // Hiragana
+        assert!(is_cjk_break_char('カ')); // Katakana
+        assert!(is_cjk_break_char('가')); // Hangul
+        assert!(is_cjk_break_char('、')); // CJK punctuation
+        assert!(is_cjk_break_char('，')); // Fullwidth comma
+        assert!(is_cjk_break_char('。')); // Fullwidth full stop
+        // ASCII letters / digits / spaces are NOT break chars.
+        assert!(!is_cjk_break_char('a'));
+        assert!(!is_cjk_break_char('Z'));
+        assert!(!is_cjk_break_char('1'));
+        assert!(!is_cjk_break_char(' '));
+    }
+
+    #[test]
+    fn inline_word_chunks_split_cjk_per_glyph() {
+        // Pure CJK with no spaces: one chunk per character (each a wrap point).
+        let chunks = inline_word_chunks("调试接口", false, false);
+        assert_eq!(chunks, vec!["调", "试", "接", "口"]);
+
+        // Mixed CJK + ASCII: CJK glyphs split individually, ASCII words stay
+        // together with their trailing space, and inter-word spaces are their
+        // own break-point chunks so wrapping can happen between scripts.
+        let chunks = inline_word_chunks("内置 HTTP 调试", false, false);
+        assert_eq!(chunks, vec!["内", "置", " ", "HTTP ", "调", "试"]);
+
+        // CJK punctuation (、) is its own chunk too, so breaks can happen there.
+        let chunks = inline_word_chunks("A、B", false, false);
+        assert_eq!(chunks, vec!["A", "、", "B"]);
+    }
+
+    #[test]
+    fn inline_word_chunks_preserve_ascii_and_boxed_behavior() {
+        // ASCII words keep trailing whitespace (unchanged legacy behavior).
+        assert_eq!(
+            inline_word_chunks("Fusce x malesuada", false, false),
+            vec!["Fusce ", "x ", "malesuada"],
+        );
+        assert_eq!(inline_word_chunks("end ", false, false), vec!["end "]);
+        assert!(inline_word_chunks("", false, false).is_empty());
+        // Inline code / highlighted runs stay a single continuous box.
+        assert_eq!(inline_word_chunks("let x = 2", true, false), vec!["let x = 2"]);
+        assert_eq!(
+            inline_word_chunks("highlighted text", false, true),
+            vec!["highlighted text"],
+        );
+    }
+
+    // Regression for the "vertical stacking" bug: a block container
+    // (`<p>`/`<div>`/...) holding mixed inline content (text + `<strong>`/
+    // `<em>`/`<a>`/...) must be detected as inline-only so the renderer lays
+    // it out as a single horizontal flow instead of stacking each fragment on
+    // its own line.
+    #[test]
+    fn has_only_inline_content_true_for_p_with_strong_and_text() {
+        let doc = parse_html_document(
+            "<p>调试接口、<strong>排查问题</strong>、查看日志——一个窗口搞定。</p>",
+        );
+        assert!(doc.is_semantic());
+        assert_eq!(doc.nodes[0].tag_name, "p");
+        assert!(has_only_inline_content(&doc.nodes[0]));
+    }
+
+    #[test]
+    fn has_only_inline_content_true_for_nested_inline_tags() {
+        let doc = parse_html_document("<div>a <em>b <strong>c</strong> d</em> <a>e</a></div>");
+        assert!(has_only_inline_content(&doc.nodes[0]));
+    }
+
+    #[test]
+    fn has_only_inline_content_false_for_p_with_nested_block() {
+        let doc = parse_html_document("<div><p>one</p><p>two</p></div>");
+        assert!(!has_only_inline_content(&doc.nodes[0]));
+    }
+
+    #[test]
+    fn has_only_inline_content_false_for_empty_container() {
+        let doc = parse_html_document("<p></p>");
+        // An empty container has no inline content to flow; keep the block path.
+        assert!(!has_only_inline_content(&doc.nodes[0]));
+    }
+
+    // End-to-end regression: the inline markup reconstructed by concatenating a
+    // block container's children (what the renderer feeds back into the
+    // Markdown inline parser) must keep `<strong>` recognized as bold, so the
+    // bold run flows inline with the surrounding text instead of being a
+    // separate stacked element.
+    #[test]
+    fn reconstructed_inline_source_keeps_strong_as_bold() {
+        let doc = parse_html_document(
+            "<p>内置 HTTP 调试、<strong>SSH 终端</strong>、Docker 只读查看。</p>",
+        );
+        let inline_source: String =
+            doc.nodes[0].children.iter().map(|c| c.raw_source.as_str()).collect();
+
+        let tree = InlineTextTree::from_markdown(&inline_source);
+        let cache = tree.render_cache();
+        let visible = cache.visible_text();
+
+        // Bold text is preserved verbatim in the visible text.
+        assert!(visible.contains("SSH 终端"));
+        assert!(visible.contains("内置 HTTP 调试、"));
+        assert!(visible.contains("、Docker 只读查看。"));
+
+        // At least one span covering "SSH 终端" is bold.
+        let bold_run = visible
+            .match_indices("SSH 终端")
+            .map(|(start, _)| (start, start + "SSH 终端".len()))
+            .find(|(start, end)| {
+                let mid = start + ("SSH 终端".len() / 2).min(end - start);
+                cache.style_at(mid).bold
+            });
+        assert!(
+            bold_run.is_some(),
+            "expected <strong>SSH 终端</strong> to render bold, visible text was: {visible}"
+        );
+    }
+
+    // Regression for the "vertical stacking" bug. The full chain must hold:
+    //   1. A <div> wrapping a Markdown paragraph (README-style wrapper) is
+    //      detected as inline-only content (`has_only_inline_content`).
+    //   2. Its single #text child carries the whole paragraph including
+    //      `**bold**` markdown + plain CJK text with no inter-word spaces.
+    //   3. Re-parsing that text as Markdown keeps the bold run, and the plain
+    //      CJK portion is split into per-glyph chunks so the flex_wrap row can
+    //      wrap between characters instead of stacking one rigid run per line.
+    #[test]
+    fn readme_div_paragraph_is_inline_only_and_parses_bold() {
+        let src = "<div align=\"center\">\n\n**调试接口、排查问题、查看日志、进容器看状态。** 内置 HTTP 调试、SSH 终端。\n\n</div>";
+        let doc = parse_html_document(src);
+        assert!(doc.is_semantic());
+        assert_eq!(doc.nodes[0].tag_name, "div");
+        // The <div> holds a single #text node → inline-only → inline flow.
+        assert!(has_only_inline_content(&doc.nodes[0]));
+
+        // Concatenate the children's raw_source the way the renderer does, then
+        // re-parse as Markdown: the **bold** lead must survive as a bold run.
+        let inline_source: String =
+            doc.nodes[0].children.iter().map(|c| c.raw_source.as_str()).collect();
+        let tree = InlineTextTree::from_markdown(&inline_source);
+        let cache = tree.render_cache();
+        let visible = cache.visible_text();
+        assert!(visible.contains("调试接口"));
+        // Mid-way through the bolded lead must be bold.
+        let bold_mid = visible
+            .find("调")
+            .map(|i| cache.style_at(i + 3).bold)
+            .unwrap_or(false);
+        assert!(bold_mid, "expected bold lead, visible: {visible}");
+    }
+
+    // End-to-end regression against the user's actual README <div align=center>
+    // block. The outer <div> mixes block children (<br/>, <table>) with text, so
+    // it must keep the vertical flex_col layout (inline_only=false); but its
+    // <td> cells and the long CJK paragraph must be breakable. The 155-char
+    // Chinese paragraph must chunk into many small wrap points (not one rigid
+    // 44-char run), otherwise it stacks vertically.
+    #[test]
+    fn readme_div_layout_decisions_and_cjk_paragraph_chunking() {
+        let src = "<div align=\"center\">\n\n# ⚡ Verve\n\n**🔥🔥🔥 基于 Rust 构建的离线优先一站式研发工作台。**\n\n### 一站式研发工作台\n\n**调试接口、排查问题、查看日志、进容器看状态——一个窗口搞定日常开发的高频操作。** 内置 HTTP 调试、SSH 终端、Docker / K8s 只读查看与排查、压测、Mock、抓包,外加笔记、Hosts、JSON 格式化等开发小工具,以及文档分享与 Git 同步。开发者日常反复要做的事,终于汇聚于一处。\n\n`接口与测试` · `终端与排查`\n\n<br/>\n\n> 🚫 **告别 Postman。**\n\n<br/>\n\n<table><tr><td align=\"center\"><b>🦀 Rust 原生</b></td></tr></table>\n\n<br/>\n\n[功能特性](#功能特性)\n\n</div>";
+        let doc = parse_html_document(src);
+        assert!(doc.is_semantic());
+        let div = &doc.nodes[0];
+        assert_eq!(div.tag_name, "div");
+        // Outer div has block children (<br/>, <table>) → vertical column.
+        assert!(!has_only_inline_content(div));
+
+        // The first child is a single #text node holding the whole multi-line
+        // Markdown body (headings + the long bolded CJK paragraph).
+        let first_text = &div.children[0];
+        assert_eq!(first_text.tag_name, "#text");
+
+        // The long paragraph (155 chars) must split into many small wrap-point
+        // chunks so flex_wrap can break between glyphs. Before the CJK fix this
+        // line produced a single 44-char rigid chunk and stacked vertically.
+        let long_line = first_text
+            .raw_source
+            .split('\n')
+            .find(|line| line.contains("调试接口"));
+        let long_line = long_line.expect("long CJK paragraph present");
+        let chunks = inline_word_chunks(long_line, false, false);
+        let max_chunk_chars = chunks.iter().map(|c| c.chars().count()).max().unwrap_or(0);
+        assert!(
+            chunks.len() > 50,
+            "expected the long CJK paragraph to split into many chunks, got {}",
+            chunks.len()
+        );
+        assert!(
+            max_chunk_chars <= 8,
+            "expected no rigid chunk longer than ~8 chars (would stack), got {max_chunk_chars}"
+        );
+
+        // The <td> cell holds only inline content (<b>🦀 Rust 原生</b>) → it
+        // must render as an inline flow, not a vertical column.
+        let table = div.children.iter().find(|c| c.tag_name == "table").unwrap();
+        let td = find_first_tag(table, "td").unwrap();
+        assert!(has_only_inline_content(&td));
+    }
+
+    fn find_first_tag<'a>(node: &'a HtmlNode, tag: &str) -> Option<&'a HtmlNode> {
+        if node.tag_name == tag {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .find_map(|c| find_first_tag(c, tag))
     }
 }

@@ -103,6 +103,17 @@ pub struct Editor {
     show_chrome: bool,
     scroll_handle: ScrollHandle,
     last_scroll_viewport_size: Option<Size<Pixels>>,
+    /// Anchor recorded on a pointer click so the editor can hold the clicked
+    /// block's on-screen position across the focus-driven layout change. HtmlBlock
+    /// (and other source-raw blocks) shrink drastically when focused (rendered
+    /// HTML with images → raw source text), which lowers the document's
+    /// `max_offset`; GPUI then *clamps* the current scroll offset to the new
+    /// smaller range, yanking the view up — the user reads this as "clicking
+    /// the block scrolled me away." Since `focus_block_from_click` deliberately
+    /// does not request a scroll-into-view, the only residual motion is this
+    /// GPUI clamp; compensating it here keeps the click visually stable. The
+    /// anchor is consumed once on the next render and cleared.
+    click_scroll_anchor: Option<ClickScrollAnchor>,
     /// Last frame's visible block ids, to detect structural edits so the height
     /// cache is refreshed only when the row/block mapping is unchanged.
     prev_visible_block_ids: Vec<EntityId>,
@@ -111,6 +122,12 @@ pub struct Editor {
     /// their running sum stays correct as the document scrolls. Filled as rows
     /// paint; unknown rows use a minimum-height estimate.
     row_stride_cache: HashMap<EntityId, f32>,
+    /// Per-row painted top in screen space, captured by a `canvas` wrapper on
+    /// each row container during prepaint. This is authoritative for the row's
+    /// actual rendered height (including rendered HtmlBlock images, which a
+    /// block's own `last_bounds` does not reflect in its rendered form) and
+    /// feeds `row_stride_cache` so windowing positions rows correctly.
+    row_painted_tops: HashMap<EntityId, f32>,
     /// Row range mounted last frame; only those rows shared one scroll offset, so
     /// their adjacent-top differences are valid footprints for the cache.
     prev_render_window: Option<(usize, usize)>,
@@ -217,6 +234,25 @@ struct ScrollbarDragSession {
     track_height: f32,
     thumb_height: f32,
     max_scroll_y: f32,
+}
+
+/// Records the scroll offset at click time so `apply_click_scroll_anchor` can
+/// cancel the view jump GPUI's offset clamp introduces when a click focuses a
+/// source-raw block (HtmlBlock, …) and shrinks the document (rendered HTML →
+/// raw text), lowering `max_offset`. GPUI clamps the current offset to the new
+/// smaller range on the next prepaint, yanking the view; restoring the
+/// pre-click offset (clamped to the new range) keeps the click visually
+/// stable.
+///
+/// `pending` gates a one-frame deferral: the anchor is recorded during the
+/// click event, but the focus flip and GPUI's clamp both happen in the
+/// *following* prepaint, so the compensation must run one render later. The
+/// first render after the click sees `pending == true`, clears it, and defers;
+/// the second render performs the restore.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ClickScrollAnchor {
+    pre_offset_y: f32,
+    pending: bool,
 }
 
 /// Source-mode selection snapshot stored with undo history.
@@ -336,8 +372,10 @@ impl Editor {
             show_chrome: false,
             scroll_handle: ScrollHandle::new(),
             last_scroll_viewport_size: None,
+            click_scroll_anchor: None,
             prev_visible_block_ids: Vec::new(),
             row_stride_cache: HashMap::new(),
+            row_painted_tops: HashMap::new(),
             prev_render_window: None,
             close_guard_installed: false,
             show_unsaved_changes_dialog: false,

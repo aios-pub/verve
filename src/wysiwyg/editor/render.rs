@@ -24,8 +24,14 @@ use crate::wysiwyg::window_chrome::{custom_titlebar_height, render_custom_titleb
 pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/manyougz/velotype";
 
 /// Rows within this many pixels of the viewport stay mounted, so a fast flick
-/// paints them before they scroll in instead of showing a blank edge.
-const RENDER_OVERDRAW_PX: f32 = 800.0;
+/// paints them before they scroll in instead of showing a blank edge. The
+/// window must be wide enough to cover a fast scrollbar-drag jump: when the
+/// viewport teleports into a region whose rows have no cached stride yet, the
+/// band has to reach past those unmeasured rows so they are already mounted
+/// (and laid out) by the time they enter the viewport. 800px (~25 lines) was
+/// too tight for a scrollbar fling and left a black gap that only filled in
+/// after the next frame's re-measure — visibly read as "black screen + jitter."
+const RENDER_OVERDRAW_PX: f32 = 1600.0;
 
 pub(crate) fn open_about_github_url(cx: &mut App) {
     cx.open_url(ABOUT_GITHUB_URL);
@@ -439,28 +445,64 @@ impl Editor {
     }
 
     fn ensure_focused_caret_visible(&mut self, window: &Window, cx: &App) -> bool {
-        let Some(focused_block) = self.focused_edit_target(window, cx) else {
+        // Resolve the block whose caret/selection should stay in view. Normally
+        // that is the actually-focused edit target, but while the find bar is
+        // open the matched block is intentionally *not* keyboard-focused (the
+        // query input keeps focus so Cmd-G/F3 keep working). In that case fall
+        // back to `active_entity_id`, which the find navigation sets to the
+        // matched block; the block's `selected_range` still resolves to bounds
+        // via `active_range_or_cursor_bounds`, so we can scroll to the match.
+        let target = self.focused_edit_target(window, cx).or_else(|| {
+            if self.find_state.is_some() {
+                self.active_entity_id
+                    .and_then(|id| self.focusable_entity_by_id(id))
+            } else {
+                None
+            }
+        });
+        let Some(focused_block) = target else {
             return false;
         };
-        let Some(active_bounds) =
-            focused_block.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds())
-        else {
-            return false;
-        };
+        let active_bounds = focused_block.read_with(cx, |block, _cx| {
+            block.active_range_or_cursor_bounds()
+        });
 
         let viewport = self.scroll_handle.bounds();
         let padding = px(20.0);
         let top_limit = viewport.top() + padding;
         let bottom_limit = viewport.bottom() - padding;
-        let mut offset = self.scroll_handle.offset();
+        let scroll_offset = self.scroll_handle.offset();
+        let mut offset = scroll_offset;
         let mut changed = false;
 
-        if active_bounds.top() < top_limit {
-            offset.y += top_limit - active_bounds.top();
-            changed = true;
-        } else if active_bounds.bottom() > bottom_limit {
-            offset.y -= active_bounds.bottom() - bottom_limit;
-            changed = true;
+        if let Some(active_bounds) = active_bounds {
+            // Caret/selection has layout bounds: scroll those into view.
+            if active_bounds.top() < top_limit {
+                offset.y += top_limit - active_bounds.top();
+                changed = true;
+            } else if active_bounds.bottom() > bottom_limit {
+                offset.y -= active_bounds.bottom() - bottom_limit;
+                changed = true;
+            }
+        } else {
+            // No layout bounds: this happens for source-raw blocks (HtmlBlock,
+            // …) in their rendered (unfocused) form, which never capture a text
+            // layout. A find match that lands in such a block would otherwise
+            // never scroll into view — the user steps to "容器" inside an HTML
+            // block and the page doesn't move. Fall back to the block's
+            // document-flow position (the sum of preceding rows' strides),
+            // which is layout-form-invariant, and scroll that into view.
+            if let Some(block_bounds) =
+                self.estimated_block_bounds(focused_block.entity_id(), scroll_offset)
+            {
+                if block_bounds.top() < top_limit {
+                    offset.y += top_limit - block_bounds.top();
+                    changed = true;
+                } else if block_bounds.bottom() > bottom_limit {
+                    offset.y -= block_bounds.bottom() - bottom_limit;
+                    changed = true;
+                }
+            }
         }
 
         if changed {
@@ -470,6 +512,40 @@ impl Editor {
         }
 
         true
+    }
+
+    /// Approximate the screen-space bounds of a block by summing the cached
+    /// strides of every preceding visible row and adding the current scroll
+    /// offset. Used as a fallback when a block has no captured text layout
+    /// (`last_bounds` is `None`, e.g. a rendered HtmlBlock), so find navigation
+    /// can still scroll the block into view. Returns `None` if the block isn't
+    /// a visible row's first block or has no cached stride yet.
+    fn estimated_block_bounds(
+        &self,
+        entity_id: EntityId,
+        scroll_offset: Point<Pixels>,
+    ) -> Option<Bounds<Pixels>> {
+        let visible = self.document.visible_blocks();
+        let estimate = visible
+            .first()
+            .and_then(|v| self.row_stride_cache.get(&v.entity.entity_id()).copied())
+            .unwrap_or(28.0);
+        let mut top = f32::from(scroll_offset.y);
+        for visible in visible {
+            let stride = self
+                .row_stride_cache
+                .get(&visible.entity.entity_id())
+                .copied()
+                .unwrap_or(estimate);
+            if visible.entity.entity_id() == entity_id {
+                return Some(Bounds::new(
+                    point(px(0.0), px(top)),
+                    size(px(0.0), px(stride.max(estimate))),
+                ));
+            }
+            top += stride;
+        }
+        None
     }
 
     fn apply_pending_scroll_into_view(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -497,6 +573,60 @@ impl Editor {
 
         self.pending_scroll_active_block_into_view = false;
         self.scroll_recheck_task = None;
+    }
+
+    /// Cancel the view jump GPUI's scroll-offset clamp introduces when a click
+    /// focuses a source-raw block (HtmlBlock, …) and shrinks the document.
+    /// `focus_block_from_click` stashed the pre-click offset; this restores it
+    /// (clamped to the *new* smaller range) so the clicked block stays where
+    /// the user pointed. The anchor is consumed on the second render after the
+    /// click — by then the focus flip has happened, the block has been laid out
+    /// in its focused form, and GPUI's prepaint clamp has already moved the
+    /// offset, so this is the correction.
+    ///
+    /// After restoring the offset, scroll the caret into view. This matters
+    /// for source-raw blocks (HtmlBlock, …): the click landed on the *rendered*
+    /// form, but the caret ends up in the *raw-source* form (its hit-test
+    /// returns 0, i.e. the start of the raw source, since the rendered form has
+    /// no captured text layout). Holding the view at the click offset would
+    /// then leave the caret off-screen — the user would have to scroll to find
+    /// it. Scrolling the caret into view after the restore keeps plain-text
+    /// clicks still (the caret is already visible, so this is a no-op) while
+    /// bringing the caret on screen for HTML blocks.
+    fn apply_click_scroll_anchor(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.scrollbar_drag.is_some() {
+            return;
+        }
+        let Some(anchor) = self.click_scroll_anchor.as_mut() else {
+            return;
+        };
+        // One-frame deferral: the focus flip and GPUI's offset clamp both land
+        // in the prepaint of the first render after the click, so the
+        // compensation can only run on the second render. Clearing `pending`
+        // here (render N+1, the clamp already fired on render N's prepaint)
+        // lets the next render do the restore.
+        if anchor.pending {
+            anchor.pending = false;
+            return;
+        }
+        let anchor = self.click_scroll_anchor.take().unwrap();
+        let max_offset_y = f32::from(self.scroll_handle.max_offset().y.max(px(0.0)));
+        // Restoring the pre-click offset, clamped to the (now smaller) valid
+        // range, holds the clicked block's content-space position fixed: the
+        // block top is invariant under scrolling, so the same offset paints it
+        // at the same screen Y as at click time.
+        let target = anchor.pre_offset_y.clamp(-max_offset_y, 0.0);
+        let mut offset = self.scroll_handle.offset();
+        if (f32::from(offset.y) - target).abs() > 0.5 {
+            offset.y = px(target);
+            self.scroll_handle.set_offset(offset);
+        }
+        // Now that the view is back where the user clicked, make sure the caret
+        // (which may sit elsewhere for source-raw blocks) is actually visible.
+        // For plain-text clicks the caret is at the click spot and already in
+        // view, so this is a no-op; for HTML it nudges the view the minimal
+        // amount to show the caret.
+        self.ensure_focused_caret_visible(window, cx);
     }
 
     /// Requests a repaint one frame out so a still-pending scroll-into-view can
@@ -1654,6 +1784,7 @@ impl Render for Editor {
         }
         self.apply_pending_focus(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
+        self.apply_click_scroll_anchor(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         if self.owns_window {
             self.sync_pending_save(window, cx);
@@ -1893,11 +2024,33 @@ impl Render for Editor {
             }
 
             let entity = first_visible.entity.clone();
+            let entity_id_for_capture = entity.entity_id();
+            let editor_for_capture = editor.clone();
             let row = div()
                 .w(px(centered_width))
                 .max_w(relative(1.0))
                 .flex_shrink_0()
                 .mt(px(top_gap))
+                // A zero-size canvas placed as the first child captures the
+                // row's painted content top in screen space during prepaint.
+                // This is authoritative for the row's real rendered height —
+                // critical for HtmlBlock, whose rendered form (with images) is
+                // far taller than its `last_bounds` (which describes the
+                // focused raw-source form). Without this, `row_stride_cache`
+                // underestimates HTML rows and every row after them is
+                // misplaced by windowing/find-navigation. Stride is derived
+                // from adjacent rows' captured tops, so it reflects the true
+                // painted gap (including the full image height).
+                .child(canvas(
+                    move |_, _, _| (),
+                    move |bounds, _, _window, _cx| {
+                        let _ = editor_for_capture.update(_cx, |editor, _cx| {
+                            editor
+                                .row_painted_tops
+                                .insert(entity_id_for_capture, f32::from(bounds.top()));
+                        });
+                    },
+                ))
                 .child(entity.clone());
             let row = if self.view_mode == super::ViewMode::Rendered {
                 let row_editor = editor.clone();
@@ -1936,7 +2089,10 @@ impl Render for Editor {
             });
 
         // A row's first block keys its cached height; its painted top (from last
-        // frame) feeds the footprints below.
+        // frame) feeds the footprints below. Prefer the canvas-captured
+        // `row_painted_tops` (authoritative for the row's real rendered height,
+        // including rendered HtmlBlock images) and fall back to the block's own
+        // `last_bounds` for rows that didn't paint a canvas last frame.
         let row_first_ids: Vec<EntityId> = row_starts
             .iter()
             .map(|&start| visible_blocks[start].entity.entity_id())
@@ -1944,6 +2100,10 @@ impl Render for Editor {
         let row_tops: Vec<Option<f32>> = row_starts
             .iter()
             .map(|&start| {
+                let entity_id = visible_blocks[start].entity.entity_id();
+                if let Some(top) = self.row_painted_tops.get(&entity_id).copied() {
+                    return Some(top);
+                }
                 visible_blocks[start]
                     .entity
                     .read_with(cx, |block, _cx| block.last_bounds)
@@ -1982,12 +2142,21 @@ impl Render for Editor {
             }
         }
 
-        // Unmeasured rows use the minimum block height: a lower bound, so the
-        // window over-mounts rather than ever landing on a spacer.
-        let estimate = d.block_min_height.max(1.0);
+        // Unmeasured rows fall back to an estimate. The minimum block height is
+        // a strict lower bound, but using it for many consecutive unmeasured
+        // rows (as happens during a fast scrollbar drag into fresh territory)
+        // makes the stride accumulator run far ahead of the real content
+        // position, so `rendered_window` both mounts too few rows AND places the
+        // mounted run at the wrong offset — the user sees a black gap that only
+        // closes after the next frame's re-measure, plus a one-frame position
+        // jump (jitter). A typical rendered paragraph line plus its trailing
+        // gap is closer to one-and-a-half line heights, so use that: it keeps
+        // the accumulator near the real content position while still erring
+        // toward over-mounting (rows are mounted a hair early, never late).
+        let estimated_stride = (d.block_min_height.max(1.0) * 1.5).max(d.block_min_height);
         let strides: Vec<f32> = row_first_ids
             .iter()
-            .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimate))
+            .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimated_stride))
             .collect();
 
         // Bound the cache against block churn, only when it outgrows the live rows.

@@ -199,9 +199,54 @@ impl Editor {
     }
 
     pub(crate) fn focus_block(&mut self, entity_id: EntityId) {
-        self.pending_focus = Some(entity_id);
         self.active_entity_id = Some(entity_id);
         self.pending_scroll_active_block_into_view = true;
+        // While the find bar is open it must keep keyboard focus on its query
+        // input: FindNext/FindPrevious (Cmd-G / F3 / Cmd-Shift-G / Shift-F3)
+        // only fire under the `EditorFindBar` key context, active while the
+        // input is focused. Honoring `pending_focus` here would call
+        // `focus_handle.focus()` from `apply_pending_focus`, stealing focus
+        // back to the matched block and deactivating the bar's context — the
+        // user's next "next match" keystroke would land in the editor instead,
+        // reading as "find closed itself." The match highlights and scroll still
+        // work: the block's `selected_range` paints the selection rectangle,
+        // and `ensure_focused_caret_visible` falls back to `active_entity_id`
+        // to scroll to the match.
+        if self.find_state.is_none() {
+            self.pending_focus = Some(entity_id);
+        }
+    }
+
+    /// Focus a block in response to a pointer click without requesting a
+    /// scroll-into-view. Every `BlockEvent::RequestFocus` emitter is a
+    /// `mouse_down` handler (text click, image click, footnote backref,
+    /// task checkbox): the user clicked something already on screen, so
+    /// scrolling would only ever move content away from where they just
+    /// pointed. The plain `focus_block` path sets
+    /// `pending_scroll_active_block_into_view`, which `ensure_focused_caret_visible`
+    /// honors using the block's `last_bounds` — and for blocks whose layout
+    /// changes on focus (HtmlBlock raw↔rendered, inline-projection expand)
+    /// those bounds describe the *pre-focus* layout, so the computed
+    /// caret position can fall outside the viewport and trigger a spurious
+    /// scroll that yanks the just-clicked block out of view. Skipping the
+    /// scroll request on click removes that whole failure mode: the click
+    /// already placed the caret at a visible spot, so no recentering is wanted.
+    pub(super) fn focus_block_from_click(&mut self, entity_id: EntityId, _cx: &mut Context<Self>) {
+        self.active_entity_id = Some(entity_id);
+        // Record the pre-click scroll offset. Focusing a source-raw block
+        // (HtmlBlock, …) flips rendered HTML (tall, with images) to raw source
+        // (short text), shrinking the document and lowering `max_offset`; GPUI
+        // then clamps the current offset to the new smaller range on the next
+        // prepaint, yanking the view up. Restoring this offset on the following
+        // render (clamped to the new range) cancels that jump, so the clicked
+        // block stays where the user pointed.
+        self.click_scroll_anchor = Some(super::ClickScrollAnchor {
+            pre_offset_y: f32::from(self.scroll_handle.offset().y),
+            pending: true,
+        });
+        if self.find_state.is_none() {
+            self.pending_focus = Some(entity_id);
+        }
     }
 
     fn reset_block_cursor(block: &Entity<super::Block>, cursor: usize, cx: &mut Context<Self>) {
@@ -1380,7 +1425,7 @@ impl Editor {
                 self.close_menu_bar(cx);
                 self.clear_table_axis_preview(cx);
                 self.clear_table_axis_selection(cx);
-                self.focus_block(binding.cell.entity_id());
+                self.focus_block_from_click(binding.cell.entity_id(), cx);
                 cx.notify();
             }
             BlockEvent::RequestFocusPrev { .. } => {
@@ -2403,7 +2448,7 @@ impl Editor {
                 self.close_menu_bar(cx);
                 self.clear_table_axis_preview(cx);
                 self.clear_table_axis_selection(cx);
-                self.focus_block(block.entity_id());
+                self.focus_block_from_click(block.entity_id(), cx);
                 for visible in self.document.flatten_visible_blocks() {
                     visible.entity.update(cx, |_, cx| cx.notify());
                 }

@@ -1508,6 +1508,11 @@ impl Render for NotesPanel {
                     gpui_component::resizable::resizable_panel()
                         .size(saved)
                         .size_range(gpui::px(180.)..gpui::px(520.))
+                        // Hold the sidebar's width: without `.flex_none()` the
+                        // panel keeps `flex_grow: 1` and expands from its basis,
+                        // so dragging the handle looks like it resizes the
+                        // content (editor) instead of the sidebar.
+                        .flex_none()
                         .child(self.render_note_list(cx)),
                 )
                 .child(editor_el)

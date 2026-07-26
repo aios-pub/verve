@@ -75,8 +75,6 @@ impl MarkdownPanel {
             sidebar_resize: cx.new(|_| gpui_component::resizable::ResizableState::default()),
             _subs: Vec::new(),
         };
-        let sidebar_sub = cx.observe(&panel.sidebar_resize, |_, _, cx| cx.notify());
-        panel._subs.push(sidebar_sub);
         // Start with one blank untitled tab.
         panel.new_document(cx);
         panel
@@ -88,11 +86,6 @@ impl MarkdownPanel {
     /// the panel always keeps at least one).
     pub fn editor(&self) -> &Entity<Editor> {
         &self.tabs[self.active].editor
-    }
-
-    /// Shared sidebar-resize state — the title bar's h_resizable drives this.
-    pub fn sidebar_resize(&self) -> &Entity<gpui_component::resizable::ResizableState> {
-        &self.sidebar_resize
     }
 
     fn active_tab(&self) -> &MarkdownTab {
@@ -643,34 +636,23 @@ impl MarkdownPanel {
 impl Render for MarkdownPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor().clone();
+        // Build the unsaved-changes modal first (if any) so it can be attached
+        // as an absolute overlay without re-borrowing self.
         let close_dialog = self
             .pending_close_tab
             .is_some()
             .then(|| self.render_close_dialog(cx));
-        let sidebar_w = self
-            .sidebar_resize
-            .read(cx)
-            .sizes()
-            .first()
-            .copied()
-            .unwrap_or(gpui::px(240.));
         div()
             .id("markdown-panel-root")
             .relative()
             .w_full()
             .h_full()
             .child(
-                h_flex()
+                v_flex()
                     .w_full()
                     .h_full()
-                    .child(
-                        div()
-                            .w(sidebar_w)
-                            .h_full()
-                            .flex_shrink_0()
-                            .child(self.render_file_sidebar(cx)),
-                    )
-                    .child(v_flex().flex_1().min_w_0().h_full().child(editor)),
+                    .child(self.render_tab_bar(cx))
+                    .child(div().flex_1().min_h_0().child(editor)),
             )
             .when_some(close_dialog, |d, dlg| d.child(dlg))
     }

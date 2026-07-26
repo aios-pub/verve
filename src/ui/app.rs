@@ -4195,7 +4195,6 @@ impl VerveApp {
         let theme = cx.theme().clone();
         let notes = self.notes.clone();
 
-        // Snapshot note count and current view mode.
         let (note_count, list_collapsed) = {
             let r = notes.read(cx);
             (r.note_count(), r.is_list_collapsed())
@@ -4205,124 +4204,157 @@ impl VerveApp {
         let notes_export = notes.clone();
         let notes_collapse = notes.clone();
 
-        h_flex()
+        // The sidebar width is driven by the title bar's h_resizable handle
+        // (title-bar height only, 40px) and read by NotesPanel::render for the
+        // sidebar below. Both share the same ResizableState.
+        let state = notes.read(cx).sidebar_resize().clone();
+        let saved = crate::state::persistence::load_layout()
+            .and_then(|l| l.side_widths)
+            .and_then(|w| w.first().copied())
+            .filter(|&w| w > 0.0)
+            .map(|w| w.clamp(180.0, 520.0))
+            .map(gpui::px)
+            .unwrap_or_else(|| gpui::px(260.));
+
+        div()
             .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
-            .pr_3()
-            .gap_2()
-            .items_center()
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            // Far-left rail toggle (shared across views).
-            .child(self.render_rail_toggle(cx))
-            // Sidebar collapse button — "收起笔记列表" / "展开笔记列表".
             .child(
-                Button::new("sidebar-toggle")
-                    .ghost()
-                    .small()
-                    .icon(if list_collapsed {
-                        IconName::PanelLeftOpen
-                    } else {
-                        IconName::PanelLeft
+                gpui_component::resizable::h_resizable("notes-titlebar")
+                    .with_state(&state)
+                    .on_resize(|state, _, cx| {
+                        if let Some(w) = state.read(cx).sizes().first() {
+                            let mut layout =
+                                crate::state::persistence::load_layout().unwrap_or_default();
+                            let mut arr = layout.side_widths.unwrap_or([260., 260., 260.]);
+                            arr[0] = w.as_f32();
+                            layout.side_widths = Some(arr);
+                            let _ = crate::state::persistence::save_layout(&layout);
+                        }
                     })
-                    .selected(!list_collapsed)
-                    .tooltip(if list_collapsed {
-                        rust_i18n::t!("notes.expand_list").to_string()
-                    } else {
-                        rust_i18n::t!("notes.collapse_list").to_string()
-                    })
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = notes_collapse.update(cx, |notes, cx| {
-                            notes.toggle_list_collapsed(cx);
-                        });
-                    })),
-            )
-            // Identity block: notebook icon + "笔记" + note-count badge.
-            .child(
-                h_flex()
-                    .gap(px(6.))
-                    .items_center()
+                    // ── Left section (over the sidebar): rail + collapse + identity ──
                     .child(
-                        div()
-                            .text_color(theme.primary)
-                            .child(vicon(crate::assets::NOTEBOOK)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(rust_i18n::t!("notes.title").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .px(px(6.))
-                            .py(px(2.))
-                            .rounded(px(4.))
-                            .bg(theme.accent.opacity(0.2))
-                            .text_color(theme.foreground)
+                        gpui_component::resizable::resizable_panel()
+                            .size(saved)
+                            .size_range(gpui::px(180.)..gpui::px(520.))
+                            .flex_none()
                             .child(
-                                rust_i18n::t!("notes.note_count", count = note_count).to_string(),
+                                h_flex()
+                                    .h_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+                                    .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+                                    .pr_2()
+                                    .child(self.render_rail_toggle(cx))
+                                    .child(
+                                        Button::new("sidebar-toggle")
+                                            .ghost()
+                                            .small()
+                                            .icon(if list_collapsed {
+                                                IconName::PanelLeftOpen
+                                            } else {
+                                                IconName::PanelLeft
+                                            })
+                                            .selected(!list_collapsed)
+                                            .tooltip(if list_collapsed {
+                                                rust_i18n::t!("notes.expand_list").to_string()
+                                            } else {
+                                                rust_i18n::t!("notes.collapse_list").to_string()
+                                            })
+                                            .on_click(cx.listener(move |_, _, _, cx| {
+                                                let _ = notes_collapse.update(cx, |notes, cx| {
+                                                    notes.toggle_list_collapsed(cx);
+                                                });
+                                            })),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap(px(6.))
+                                            .items_center()
+                                            .child(
+                                                div().text_color(theme.primary)
+                                                    .child(vicon(crate::assets::NOTEBOOK)),
+                                            )
+                                            .child(
+                                                div().text_sm().font_weight(FontWeight::SEMIBOLD)
+                                                    .child(rust_i18n::t!("notes.title").to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.))
+                                                    .px(px(6.))
+                                                    .py(px(2.))
+                                                    .rounded(px(4.))
+                                                    .bg(theme.accent.opacity(0.2))
+                                                    .text_color(theme.foreground)
+                                                    .child(rust_i18n::t!("notes.note_count", count = note_count).to_string()),
+                                            ),
+                                    ),
                             ),
+                    )
+                    // ── Right section (over the editor): toolbar + actions ──
+                    .child(
+                        gpui_component::resizable::resizable_panel().child(
+                            h_flex()
+                                .h_full()
+                                .w_full()
+                                .items_center()
+                                .gap_2()
+                                .pr_3()
+                                .child(div().flex_1())
+                                .child({
+                                    let editor = notes.read(cx).editor().clone();
+                                    self.render_editor_toolbar(&editor, cx)
+                                })
+                                .child({
+                                    let editor = notes.read(cx).editor().clone();
+                                    let view_mode = editor.read(cx).view_mode();
+                                    let notes_vm = notes.clone();
+                                    Button::new("notes-title-view-mode")
+                                        .small()
+                                        .ghost()
+                                        .selected(view_mode == crate::wysiwyg::editor::ViewMode::Source)
+                                        .icon(IconName::Eye)
+                                        .tooltip(if view_mode == crate::wysiwyg::editor::ViewMode::Source {
+                                            rust_i18n::t!("markdown.switch_to_rendered").to_string()
+                                        } else {
+                                            rust_i18n::t!("markdown.switch_to_source").to_string()
+                                        })
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            let _ = notes_vm.update(cx, |p, cx| p.toggle_view_mode(cx));
+                                        }))
+                                })
+                                .child(
+                                    Button::new("notes-title-import")
+                                        .ghost()
+                                        .small()
+                                        .icon(vicon(IMPORT))
+                                        .label(rust_i18n::t!("notes.import").to_string())
+                                        .on_click(cx.listener(move |_, _, window, cx| {
+                                            let _ = notes_import.update(cx, |p, cx| {
+                                                p.import_markdown_dialog(window, cx);
+                                            });
+                                        })),
+                                )
+                                .child(
+                                    Button::new("notes-title-export")
+                                        .ghost()
+                                        .small()
+                                        .icon(vicon(EXPORT))
+                                        .label(rust_i18n::t!("notes.export").to_string())
+                                        .on_click(cx.listener(move |_, _, window, cx| {
+                                            let _ = notes_export.update(cx, |p, cx| {
+                                                p.export_active_note_dialog(window, cx);
+                                            });
+                                        })),
+                                )
+                                .child(self.render_lang_picker(cx)),
+                        ),
                     ),
             )
-            .child(div().flex_1())
-            // WYSIWYG formatting toolbar — right-aligned with the source/import/
-            // export actions so it sits next to the source toggle. (Previously
-            // it was on the far left, far from the source toggle.)
-            .child({
-                let editor = notes.read(cx).editor().clone();
-                self.render_editor_toolbar(&editor, cx)
-            })
-            // View-mode toggle (Rendered ↔ Source) — right-aligned with the
-            // other action buttons, same affordance as the markdown title bar.
-            .child({
-                let editor = notes.read(cx).editor().clone();
-                let view_mode = editor.read(cx).view_mode();
-                let notes_vm = notes.clone();
-                Button::new("notes-title-view-mode")
-                    .small()
-                    .ghost()
-                    .selected(view_mode == crate::wysiwyg::editor::ViewMode::Source)
-                    .icon(IconName::Eye)
-                    .tooltip(if view_mode == crate::wysiwyg::editor::ViewMode::Source {
-                        rust_i18n::t!("markdown.switch_to_rendered").to_string()
-                    } else {
-                        rust_i18n::t!("markdown.switch_to_source").to_string()
-                    })
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = notes_vm.update(cx, |p, cx| p.toggle_view_mode(cx));
-                    }))
-            })
-            // Import button.
-            .child(
-                Button::new("notes-title-import")
-                    .ghost()
-                    .small()
-                    .icon(vicon(IMPORT))
-                    .label(rust_i18n::t!("notes.import").to_string())
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        let _ = notes_import.update(cx, |p, cx| {
-                            p.import_markdown_dialog(window, cx);
-                        });
-                    })),
-            )
-            // Export button.
-            .child(
-                Button::new("notes-title-export")
-                    .ghost()
-                    .small()
-                    .icon(vicon(EXPORT))
-                    .label(rust_i18n::t!("notes.export").to_string())
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        let _ = notes_export.update(cx, |p, cx| {
-                            p.export_active_note_dialog(window, cx);
-                        });
-                    })),
-            )
-            .child(self.render_lang_picker(cx))
     }
 
     /// cmd-o — open a Markdown file in the markdown editor view.

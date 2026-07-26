@@ -122,6 +122,10 @@ impl NotesPanel {
             list_collapsed: false,
             row_menu_open: None,
         };
+        // Re-render when the sidebar resize state changes (driven by the
+        // title-bar's h_resizable handle).
+        let sidebar_sub = cx.observe(&panel.sidebar_resize, |_, _, cx| cx.notify());
+        panel._subs.push(sidebar_sub);
         panel.rebuild_tree(cx);
         panel
     }
@@ -386,6 +390,12 @@ impl NotesPanel {
     /// The embedded WYSIWYG editor entity (used by the title-bar toolbar).
     pub fn editor(&self) -> &Entity<crate::wysiwyg::editor::Editor> {
         &self.editor
+    }
+
+    /// The shared sidebar-resize state — the title bar's h_resizable handle
+    /// drives this, and NotesPanel::render reads it for the sidebar width.
+    pub fn sidebar_resize(&self) -> &Entity<gpui_component::resizable::ResizableState> {
+        &self.sidebar_resize
     }
 
     /// cmd-w (Notes) — close the current note: save it, clear the active
@@ -1475,16 +1485,23 @@ impl Render for NotesPanel {
         // (expanded) or beside the collapsed strip. Only one branch runs, so
         // the conditional move of `editor_el` is fine.
         let editor_el = self.render_editor(window, cx);
+        // Sidebar width from the shared ResizableState (driven by the
+        // title-bar's h_resizable handle). Falls back to 260 before the title
+        // bar's h_resizable syncs the state on first render.
+        let sidebar_w = self
+            .sidebar_resize
+            .read(cx)
+            .sizes()
+            .first()
+            .copied()
+            .unwrap_or(gpui::px(260.));
         let body = if !self.list_collapsed {
-            // Fixed-width sidebar (resizable re-implementation pending — the
-            // drag handle should live in the title-bar region, not span the
-            // full content height).
             h_flex()
                 .w_full()
                 .h_full()
                 .child(
                     div()
-                        .w(px(260.))
+                        .w(sidebar_w)
                         .h_full()
                         .flex_shrink_0()
                         .child(self.render_note_list(cx)),

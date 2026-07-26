@@ -1,6 +1,6 @@
 [package]
 name = "verve"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 description = "Verve — an offline-first, one-stop developer workbench built with Rust."
 publish = false
@@ -14,7 +14,7 @@ homepage = "https://github.com/lijingrs/verve"
 name = "Verve"
 identifier = "com.verve.app"
 icon = ["assets/icons/verve.icns"]
-version = "0.1.0"
+version = "0.3.0"
 resources = []
 copyright = "Copyright (c) 2026 Verve. All rights reserved."
 category = "Developer Tool"

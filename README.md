@@ -12,8 +12,8 @@ Verve is built on **Rust + [GPUI](https://github.com/zed-industries/zed)** (the 
 
 <br/>
 
-> 🚫 **Stop juggling Postman + iTerm2 + Docker Desktop + Swagger + a notes app + a JSON formatter + a hosts editor…**
-> Verve is the single native desktop app that absorbs your daily high-frequency dev workflow — built in Rust + GPUI for developers who refuse to settle for sluggish Electron bloat.
+> 🚫 **Stop juggling Postman + an SSH client like Termius + Swagger + a notes app + a Markdown editor like MarkText + a PDF editor + a JSON formatter + a hosts editor…**
+> Verve absorbs the high-frequency dev workflow into one native window — built in Rust + GPUI for developers who refuse to settle for sluggish Electron bloat.
 
 <br/>
 
@@ -56,11 +56,11 @@ Verve comes in two editions, with the same native app and the same daily API wor
 
 ### 🆍 Community Edition — Free & Open-Source
 
-The **Community Edition** is free and planned to be released under the **GPL-3.0** license. It covers everything an individual developer needs for daily API work: HTTP debugging, traffic capture, JSON formatting, hosts management, local mock server, and **local document sharing** — in a fast, lightweight native app.
+The **Community Edition** is free and planned to be released under the **AGPL-3.0** license. It covers everything an individual developer needs for daily API work: full HTTP debugging (incl. multi-protocol clients), traffic capture, JSON formatting, hosts management, local mock server, local document sharing, **and Git-based cross-machine sync** — in a fast, lightweight native app. It is intentionally strong enough to stand on its own against any individual API client.
 
 ### 💎 Pro Edition — Sponsor to Unlock
 
-The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regular **¥199**). On top of the Community Edition it adds: server triage (**SSH / Docker / Kubernetes pod inspection**), **stress testing** and **automated test suites**, **Markdown notes & file editor**, **Git multi-workspace sync**, and **cloud document sharing** (push to a self-hosted `verve-server` for a public URL).
+The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regular **¥199**). It layers on the advanced, professional capabilities an individual API client doesn't cover: server triage (**SSH / Docker / Kubernetes pod inspection**), **stress testing** and **automated test suites**, a **Markdown notes & file editor** (replaces tools like MarkText), a **PDF viewer/editor**, and **cloud document sharing** (push to a self-hosted `verve-server` for a public URL).
 
 → Full feature comparison: [Community vs Pro](#-community-vs-pro)
 → How to get it: [Pro Edition](#-pro-edition--sponsor-to-unlock)
@@ -69,7 +69,7 @@ The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regula
 
 ## 🆚 Community vs Pro
 
-**Edition principle**: local, individual capabilities → Community Edition (open-source, free); server-side triage, testing, knowledge tooling, and cloud deployment → Pro Edition (sponsorware).
+**Edition principle**: the Community Edition covers everything an individual developer needs for daily, standalone API work (strong enough to compete head-on with Postman). The Pro Edition layers on professional capabilities beyond individual API debugging — server triage, testing, knowledge tooling, and cloud deployment.
 
 > ✅ Included in both · ❌ Not in this edition · 💎 Pro-only feature
 
@@ -77,8 +77,8 @@ The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regula
 
 | | 🆍 Community Edition | 💎 Pro Edition |
 |---|---|---|
-| **Positioning** | Personal developer's local API toolbox | Local toolbox + server triage + testing + knowledge + cloud |
-| **License** | GPL-3.0 (planned open-source) | Proprietary (Verve Pro License) |
+| **Positioning** | Individual developer's daily API toolbox | Toolbox + server triage + testing + knowledge + cloud |
+| **License** | AGPL-3.0 (planned open-source) | Proprietary (Verve Pro License) |
 | **Source code** | Open & auditable | Closed |
 | **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
 | **Audience** | Individual devs, students, OSS community | Pro devs, ops engineers, small teams |
@@ -92,12 +92,14 @@ The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regula
 | Request body (none / form-data / x-www-form-urlencoded / raw JSON·XML·Text·HTML·JS) | ✅ | ✅ |
 | `{{variable}}` placeholder (request > folder > env > global priority) | ✅ | ✅ |
 | Pre-request & Tests scripts (JavaScript, boa_engine) | ✅ | ✅ |
-| Multi-protocol clients (gRPC / TCP / SSE / WebSocket) | ✅ | ✅ |
+| Multi-protocol clients — **HTTP / gRPC(gRPC-Web) / TCP / SSE / WebSocket / Socket.IO** | ✅ | ✅ |
 | Response panel (status / time / size / headers / body, JSON pretty) | ✅ | ✅ |
 | Project tree (folders, multi-level nesting, drag-reorder) | ✅ | ✅ |
+| Multi-environment variable management (4-scope priority) | ✅ | ✅ |
 | Request/response history | ✅ | ✅ |
-| Local Mock server (Exact → Prefix → Regex matching, priority) | ✅ | ✅ |
-| **HTTP capture proxy** (`127.0.0.1:<port>`, ring buffer) | ✅ | ✅ |
+| Local Mock server (Exact → Prefix → Regex matching, priority, template vars) | ✅ | ✅ |
+| **HTTP capture proxy** — plaintext HTTP only on `127.0.0.1:<port>` (no HTTPS MITM) | ✅ | ✅ |
+| **Git cross-machine sync** — per-workspace branch, auto commit + sync, HTTPS + token auth | ✅ | ✅ |
 | **Stress testing** — native engine, concurrency/duration/QPS, live latency chart (p50/p90/p95/p99) | ❌ | 💎 |
 | Stress scenario mode — multi-step test cases looped across workers | ❌ | 💎 |
 | **Automated test suites** — suite/case/step, Request/If/Loop/Wait/Script steps, `apt.assert` + JsonPath/Header/Status extractors | ❌ | 💎 |
@@ -110,7 +112,7 @@ The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regula
 | Hosts manager (read `/etc/hosts`, profiles, env binding) | ✅ | ✅ |
 | 22 built-in themes (Catppuccin / Gruvbox / Tokyo Night / Solarized …) | ✅ | ✅ |
 | i18n (Simplified Chinese default / English) | ✅ | ✅ |
-| Import (Postman v2.1 / OpenAPI 3 / Postman 7+) | ✅ | ✅ |
+| Import (Postman v2.1 / OpenAPI 3 / Swagger 2.0 / Postman 7+) | ✅ | ✅ |
 | Export (Markdown / JSON / Postman, round-trip) | ✅ | ✅ |
 
 ### 🖥️ Server Triage (Pro-only)
@@ -135,7 +137,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 | K8s — `kubectl logs -f`, `kubectl exec -it` (PTY), `kubectl port-forward` | ❌ | 💎 |
 | K8s — Direct (API server) or **SSH-tunnel** connection mode | ❌ | 💎 |
 
-> **Not implemented (by design)**: SSH Agent auth & remote `-R` forwarding; Docker image build/pull/push, network/volume/compose/swarm, container inspect & resource stats; Kubernetes resources other than pods/namespaces (no service/deployment/configmap/…), no apply/create/delete, no helm/kustomize.
+> **Not implemented (by design)**: SSH Agent auth & remote `-R` forwarding; Docker image build/pull/push, network/volume/compose/swarm, container inspect & resource stats; Kubernetes resources other than pods/namespaces (no service/deployment/configmap/…), no apply/create/delete, no helm/kustomize. The Docker/K8s panels focus on **log inspection and shell exec** — they do not replace a full Docker Desktop or cluster manager.
 
 ### 📝 Docs & Knowledge (split)
 
@@ -147,41 +149,39 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 | Document sharing — field-level display toggles (9 switches) | ✅ | ✅ |
 | **Markdown notes** — block editor, notes tree (folders/pin/tags), live preview canvas | ❌ | 💎 |
 | **Notes → PDF export** (built-in fonts, headings/code/lists/links) | ❌ | 💎 |
-| **PDF viewer / editor** (Pdfium native, text/image/erase/page ops) | ❌ | 💎 |
-| **Standalone Markdown file editor** (multi-tab, Finder double-click / `verve file.md`) | ❌ | 💎 |
+| **PDF viewer / editor** (Pdfium native, text/image/erase/page ops) — replaces a standalone PDF editor | ❌ | 💎 |
+| **Standalone Markdown file editor** (multi-tab, Finder double-click / `verve file.md`) — replaces tools like MarkText | ❌ | 💎 |
 
-### 🌍 Cloud & Sync (Pro-only)
+### 🌍 Cloud Sharing (Pro-only)
 
 | Feature | Community | Pro |
 |---|:---:|:---:|
-| **Git multi-workspace sync** (each workspace = a git branch, 30-min auto-commit + sync) | ❌ | 💎 |
-| Git — username/password/token auth, branch management UI, per-workspace `workspace.json` isolation | ❌ | 💎 |
 | **Self-hosted `verve-server`** (standalone binary, binds `0.0.0.0`, file-backed store) | ❌ | 💎 |
 | **Cloud document sharing** — push a project to remote `verve-server`, get a public `/s/<id>` URL | ❌ | 💎 |
 | `verve-server` `/admin` Web UI — upload / create / browse / delete shares, multi-tenant | ❌ | 💎 |
 
-> ℹ️ Document sharing produces a **read-only snapshot** of the project at upload time. There is no real-time co-editing or live sync of an already-shared document.
+> ℹ️ Document sharing produces a **read-only snapshot** of the project at upload time. There is no real-time co-editing or live sync of an already-shared document. Note: Git-based workspace sync (cross-machine) is available in **both** editions — see the API & Testing table above.
 
 ### 📄 Licensing & Usage Rights
 
 | | Community | Pro |
 |---|---|---|
 | **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
-| **License type** | GPL-3.0 (planned) | Proprietary (Verve Pro License) |
+| **License type** | AGPL-3.0 (planned) | Proprietary (Verve Pro License) |
 | **Source visible** | ✅ Open | ❌ Closed |
 | **Personal use** | ✅ | ✅ |
 | **Commercial use** | ✅ | ✅ (after sponsorship) |
-| **Modify / fork** | ✅ (derivative works must also be GPL-3.0) | ❌ |
-| **Redistribute** | ✅ (under GPL-3.0, source required) | ❌ |
-| **Hosted / SaaS use** | ✅ | ❌ (contact author) |
+| **Modify / fork** | ✅ (derivative works & network use must also be AGPL-3.0) | ❌ |
+| **Redistribute** | ✅ (under AGPL-3.0, source required) | ❌ |
+| **Hosted / SaaS use** | ✅ (must open-source under AGPL-3.0) | ❌ (contact author) |
 | **Reverse engineering** | ✅ | ❌ |
 | **Updates** | Community-maintained / self-build | Official pre-built binaries + continuous updates |
 | **Support** | Community issues | Priority support + early access to new features |
 
 ### Which one should I pick?
 
-- **Community Edition** — you're an individual developer or student whose daily work is debugging APIs, capturing traffic, formatting JSON, managing hosts, running local mocks, and sharing docs locally; you want a fast, open, free native toolbox.
-- **Pro Edition** — you also need to SSH into servers to triage, tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit files, keep workspaces in sync across machines, or share documents at a public cloud URL.
+- **Community Edition** — you're an individual developer or student whose daily work is debugging APIs (including gRPC/WebSocket/SSE), capturing traffic, formatting JSON, managing hosts, running local mocks, sharing docs locally, and keeping your workspace in sync across machines; you want a fast, open, free native toolbox that can fully replace an individual API client.
+- **Pro Edition** — you also need to SSH into servers to triage, tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit Markdown & PDF files, or share documents at a public cloud URL.
 
 ---
 
@@ -211,8 +211,10 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - Request body: none / form-data / x-www-form-urlencoded / raw (JSON / XML / Text / HTML / JS)
 - `{{variable}}` placeholder substitution with multi-scope priority (request > folder > environment > global)
 - Pre-request & Tests scripts (JavaScript)
+- Multi-protocol clients: **HTTP / gRPC (gRPC-Web) / TCP / SSE / WebSocket / Socket.IO**
+- Multi-environment variable management (4-scope priority: system < global < environment < folder < request)
 - Response panel: status / time / size / headers / body with JSON pretty-print
-- API clone, JSON format & validation, history hidden
+- API clone, JSON format & validation, history
 
 ### 🌐 HTTP Capture Proxy
 <div align="center">
@@ -220,7 +222,8 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 </div>
 
 - Local HTTP forward proxy on `127.0.0.1:<port>`
-- Records request + response pairs to a ring buffer for in-app inspection
+- Records request + response pairs to an in-memory ring buffer for in-app inspection
+- **Plaintext HTTP only — HTTPS / MITM decryption is not supported**
 
 ### 🎭 Local Mock Server
 <div align="center">
@@ -228,7 +231,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 </div>
 
 - Rule-based mock responses served on the unified share server (port 3097)
-- Matching by method + path (Exact → Prefix → Regex) + query + headers, priority-ordered
+- Matching by method + path (Exact → Prefix → Regex) + query + headers, priority-ordered; template-variable substitution; one-click default-mock generation
 
 ### 📄 Document Sharing (Local)
 <div align="center">
@@ -240,7 +243,20 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - QR code sharing + link sharing + HTML export
 - Strict access control: expiration + password protection (enforced by the local server)
 - Field-level display toggles (9 switches: description / params / headers / body / auth / cookies / path / examples / mock)
-- **Pushing to a remote `verve-server` for a public URL is a Pro-only feature** — see [Cloud & Sync](#-cloud--sync-pro-only)
+- **Pushing to a remote `verve-server` for a public URL is a Pro-only feature** — see [Cloud Sharing](#-cloud-sharing-pro-only)
+
+### 🌍 Git Cross-Machine Sync
+<div align="center">
+  <img src="./assets/verve_demo/git_sync_time.png" width="850" alt="Git Version Sync" />
+</div>
+
+- Multi-workspace support — **each workspace = a git branch** (default workspace → `main`, others → `verve/<id>`)
+- Auto-commit + auto-sync every 30 minutes (configurable); commit on workspace switch
+- Per-workspace `workspace.json` isolation; machine-local config (SSH hosts, layout, etc.) is git-ignored
+- HTTPS remote + username / token (PAT) auth — token never touches disk, argv, or `.git/config` (uses a `GIT_ASKPASS` helper)
+- Fast-forward-only sync (`--ff-only`); conflict detection with ours/theirs resolution
+- Designed for **single-user cross-machine sync** (e.g. office + home), not concurrent team collaboration
+- Works fully offline as a local version history even without a remote configured
 
 ### 🛠️ More Tools
 <div align="center">
@@ -263,7 +279,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - **Hosts file manager** — read `/etc/hosts`, manage profiles
 - i18n: Simplified Chinese (default) / English
 - 22 built-in themes (Catppuccin, Gruvbox, Tokyo Night, Solarized, Everforest, Flexoki…)
-- Import: Postman v2.1 / OpenAPI 3 / Postman 7+ (full format compatibility)
+- Import: Postman v2.1 / OpenAPI 3 / Swagger 2.0 / Postman 7+ (full format compatibility)
 - Export: Markdown / JSON / Postman format (round-trip compatible)
 - Configurable home view · Auto-update check · Cross-platform packaging (macOS / Linux / Windows)
 
@@ -291,7 +307,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - TOFU `known_hosts` — first-seen records, re-connect compares, mismatch refused
 - Host card management with **secure credential storage** (OS keychain + AES-256-GCM / Argon2id encrypted vault)
 
-> *SSH Agent authentication and remote (`-R`) port forwarding are not implemented yet.*
+> *SSH Agent authentication and remote (`-R`) port forwarding are not implemented yet. This is an SSH client for triage, not a full iTerm2 replacement.*
 
 ### 📁 SFTP & File Transfer
 <div align="center">
@@ -330,7 +346,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - **Logs** — `docker logs -f --tail=N` streaming
 - **Exec** — `docker exec -it` with a real PTY (auto-detects bash/sh/dash/ash), multi-tab
 
-> *Image build/pull/push, networks, volumes, compose, swarm, and container resource stats are not supported — this is a triage tool, not a full Docker manager.*
+> *Focused on log inspection and shell exec. Image build/pull/push, networks, volumes, compose, swarm, and container resource stats are not supported — this is a lightweight triage tool, not a full Docker Desktop replacement.*
 
 ### ☸️ Kubernetes
 <div align="center">
@@ -352,7 +368,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - **Port-forward** — `kubectl port-forward pod/<pod> <local>:<remote>` (auto-allocates a local port)
 - Two connection modes: **Direct** (API server) or **SSH tunnel** (via a Verve SSH bastion)
 
-> *Only pods and namespaces are supported — no service/deployment/configmap/ingress/node, no apply/create/delete, no helm/kustomize. This is a pod-level observation & debugging tool.*
+> *Focused on pod-level observation & debugging. Only pods and namespaces are supported — no service/deployment/configmap/ingress/node, no apply/create/delete, no helm/kustomize.*
 
 ### ⚡ Stress Testing
 <div align="center">
@@ -388,17 +404,8 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 
 - Note tree (folders, pin, tags) with **live preview canvas**
 - Export notes to **PDF** (built-in fonts, headings, code blocks, lists, links)
-- PDF viewer with zoom · PDF editor
-
-### 🌍 Git Sync & Cloud
-<div align="center">
-  <img src="./assets/verve_demo/git_sync_time.png" width="850" alt="Git Version Sync" />
-</div>
-
-- Multi-workspace support (each workspace = a git branch)
-- Auto-commit + auto-sync every 30 minutes
-- Per-workspace `workspace.json` isolation
-- Username / password / token authentication · Branch management UI
+- **PDF viewer / editor** — Pdfium native, text / image / erase / page operations (replaces a standalone PDF editor)
+- **Standalone Markdown file editor** — multi-tab, Finder double-click / `verve file.md` (replaces tools like MarkText)
 
 ### 📦 Self-hosted `verve-server` (Cloud Sharing)
 
@@ -443,13 +450,13 @@ The Pro Edition (pre-compiled binaries + continuous updates + priority support) 
 
 > ⚠️ **Limited-Time Launch Pricing — ends soon!**
 
-The **Pro Edition** unlocks everything beyond the Community Edition — SSH / Docker / Kubernetes pod triage, stress & automated testing, Markdown notes & file editor, Git multi-workspace sync, and cloud document sharing via a self-hosted `verve-server`. It is obtained through a **sponsorship** model, and the entry price below is a **time-limited early-bird rate**.
+The **Pro Edition** unlocks everything beyond the Community Edition — SSH / Docker / Kubernetes pod triage, stress & automated testing, Markdown notes & file editor, PDF editor, and cloud document sharing via a self-hosted `verve-server`. It is obtained through a **sponsorship** model, and the entry price below is a **time-limited early-bird rate**.
 
 ### 🔥 Early-Bird Special — sponsor **¥99** (CNY)
 The current **¥99** early-bird price is a limited-time launch offer. **It will return to the regular ¥199 once the promotion ends.** Lock in the lowest price now:
 
 > **Sponsor ¥99+ today** to unlock the Pro Edition, including:
-> - ✅ All Pro capabilities (SSH / Docker / K8s pod triage / stress testing / automated testing / Markdown notes / Git sync / cloud document sharing)
+> - ✅ All Pro capabilities (SSH / Docker / K8s pod triage / stress testing / automated testing / Markdown notes & editor / PDF editor / cloud document sharing)
 > - ✅ All official version updates (every future release, free)
 > - ✅ Priority technical support
 > - ✅ Early access to new features
@@ -489,10 +496,10 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 Verve is available in two editions under different licenses:
 
-- **Community Edition** — planned to be released under the **GPL-3.0** open-source license. Source code will be public; you may use, modify, and redistribute it under the terms of GPL-3.0 (derivative works must be released under a compatible license and source must be disclosed).
+- **Community Edition** — planned to be released under the **AGPL-3.0** open-source license. Source code will be public; you may use, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**
 - **Pro Edition** — proprietary software under the **Verve Pro License**. Source code is **not open**. Without the author's written permission, the following are **prohibited**: reverse engineering / decompiling / disassembling; copying / modifying / redistributing the software or derivatives; using it for commercial resale or hosted services. The Pro Edition is obtained via sponsorship. For commercial licensing or team plans, contact the author via WeChat above.
 
-> **Note**: The current repository `LICENSE` file is a transitional closed-source agreement; the Community Edition will switch to GPL-3.0 when its source is officially released.
+> **Note**: The current repository `LICENSE` file is a transitional closed-source agreement; the Community Edition will switch to AGPL-3.0 when its source is officially released.
 
 ---
 

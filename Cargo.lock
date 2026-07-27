@@ -11987,6 +11987,7 @@ dependencies = [
  "log",
  "markup5ever_rcdom",
  "mermaid-rs-renderer",
+ "notify",
  "oha",
  "pdfium-render",
  "portable-pty",

@@ -207,6 +207,10 @@ toml = "1"
 schemars = "1"
 # `sys-locale` to detect the OS locale for wysiwyg i18n.
 sys-locale = "0.3"
+# `notify` cross-platform filesystem watcher for the Markdown panel: detects
+# when an open `.md` file is modified by an external program so the editor can
+# auto-reload (clean buffer) or prompt to reload (dirty buffer).
+notify = "7.0"
 
 [features]
 default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config"]

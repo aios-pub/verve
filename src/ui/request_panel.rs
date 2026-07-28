@@ -1326,13 +1326,15 @@ impl RequestPanel {
         ) {
             Ok(p) => p,
             Err(e) => {
+                let err_resp = Response {
+                    error: Some(format!("{e}")),
+                    ..Default::default()
+                };
                 self.state.update(cx, |s, _cx| {
                     if let Some(project) = s.active_project_mut() {
                         if let Some((_, r)) = project.find_request_mut(&id) {
-                            r.last_response = Some(Response {
-                                error: Some(format!("{e}")),
-                                ..Default::default()
-                            });
+                            r.last_response = Some(err_resp.clone());
+                            apply_autosave_example(r, &err_resp);
                         }
                     }
                 });
@@ -1447,6 +1449,7 @@ impl RequestPanel {
                                 match project.find_request_mut(&id_clone) {
                                     Some((_, r)) => {
                                         r.last_response = Some(resp.clone());
+                                        apply_autosave_example(r, &resp);
                                         let qp: Vec<(String, String)> = r
                                             .params
                                             .iter()
@@ -1646,6 +1649,7 @@ impl RequestPanel {
                     if let Some(project) = s.active_project_mut() {
                         if let Some((_, r)) = project.find_request_mut(&id_clone) {
                             r.last_response = Some(resp.clone());
+                            apply_autosave_example(r, &resp);
                         }
                     }
                     s.sending = None;
@@ -1740,6 +1744,11 @@ impl RequestPanel {
                             if let Some(resp) = r.last_response.as_mut() {
                                 resp.streaming = false;
                                 resp.body = log.clone();
+                                resp.size = log.len() as u64;
+                            }
+                            // Clone the response and apply autosave separately to avoid double-borrow.
+                            if let Some(resp) = r.last_response.clone() {
+                                apply_autosave_example(r, &resp);
                             }
                         }
                     }
@@ -1835,6 +1844,10 @@ impl RequestPanel {
                             if let Some(resp) = r.last_response.as_mut() {
                                 resp.streaming = false;
                                 resp.body = log.clone();
+                                resp.size = log.len() as u64;
+                            }
+                            if let Some(resp) = r.last_response.clone() {
+                                apply_autosave_example(r, &resp);
                             }
                         }
                     }
@@ -1891,6 +1904,7 @@ impl RequestPanel {
                     if let Some(project) = s.active_project_mut() {
                         if let Some((_, r)) = project.find_request_mut(&id_clone) {
                             r.last_response = Some(resp.clone());
+                            apply_autosave_example(r, &resp);
                         }
                     }
                     s.sending = None;
@@ -1994,6 +2008,10 @@ impl RequestPanel {
                             if let Some(resp) = r.last_response.as_mut() {
                                 resp.streaming = false;
                                 resp.body = log.clone();
+                                resp.size = log.len() as u64;
+                            }
+                            if let Some(resp) = r.last_response.clone() {
+                                apply_autosave_example(r, &resp);
                             }
                         }
                     }
@@ -2009,14 +2027,16 @@ impl RequestPanel {
     /// gRPC / Socket.IO placeholder (only for unimplemented edge cases).
     fn send_placeholder(&mut self, id: String, protocol: Protocol, cx: &mut Context<Self>) {
         let name = protocol.to_string();
+        let placeholder_resp = Response {
+            status_text: name.clone(),
+            error: Some(format!("{name} 协议支持开发中，敬请期待。")),
+            ..Default::default()
+        };
         self.state.update(cx, |s, _cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, r)) = project.find_request_mut(&id) {
-                    r.last_response = Some(Response {
-                        status_text: name.clone(),
-                        error: Some(format!("{name} 协议支持开发中，敬请期待。")),
-                        ..Default::default()
-                    });
+                    r.last_response = Some(placeholder_resp.clone());
+                    apply_autosave_example(r, &placeholder_resp);
                 }
             }
         });
@@ -2034,13 +2054,15 @@ impl RequestPanel {
 
     /// Helper: write a plain error response onto the request.
     fn set_error_response(&mut self, id: &str, msg: String, cx: &mut Context<Self>) {
+        let err_resp = Response {
+            error: Some(msg),
+            ..Default::default()
+        };
         self.state.update(cx, |s, _cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, r)) = project.find_request_mut(id) {
-                    r.last_response = Some(Response {
-                        error: Some(msg),
-                        ..Default::default()
-                    });
+                    r.last_response = Some(err_resp.clone());
+                    apply_autosave_example(r, &err_resp);
                 }
             }
         });
@@ -4870,4 +4892,39 @@ fn resolve_folder_base_url(
         }
     }
     None
+}
+
+/// Apply autosave logic: if the global autosave setting is enabled, save the
+/// response as a success or failure example on the request.
+///
+/// - Success responses (2xx/3xx, no error) → stored as the single `success_example` (overwrite).
+/// - Failure responses (4xx/5xx/network error) → appended to `fail_examples`, deduplicated by
+///   (status + body) so identical responses don't accumulate duplicates.
+fn apply_autosave_example(req: &mut ApiRequest, resp: &Response) {
+    use crate::state::persistence::AutoSaveMode;
+
+    let mode = crate::state::persistence::load_autosave_mode();
+    if mode == AutoSaveMode::Off {
+        return;
+    }
+
+    let is_success = ResponseExample::is_success_status(resp.status, resp.error.as_deref());
+
+    // Route by outcome: success → single success example (overwrite);
+    // failure → deduplicated failure examples list. A "both" mode handles each.
+    if is_success && mode.saves_success() {
+        req.success_example = Some(ResponseExample::from_response(resp));
+    }
+    if !is_success && mode.saves_failure() {
+        let example = ResponseExample::from_response(resp);
+        // Deduplicate: remove any existing example with the same
+        // (status + body) key, then push the new one at the front.
+        let key = example.dedup_key();
+        req.fail_examples.retain(|e| e.dedup_key() != key);
+        req.fail_examples.insert(0, example);
+        // Cap failure examples at 20 to prevent unbounded growth.
+        if req.fail_examples.len() > 20 {
+            req.fail_examples.truncate(20);
+        }
+    }
 }

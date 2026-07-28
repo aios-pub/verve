@@ -677,6 +677,51 @@ pub struct Response {
     pub streaming: bool,
 }
 
+/// A saved response example, stored on the request for the "响应示例" tab.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponseExample {
+    pub status: u16,
+    #[serde(default)]
+    pub status_text: String,
+    #[serde(default)]
+    pub body: String,
+    /// ISO-8601 timestamp when the example was saved.
+    #[serde(default)]
+    pub saved_at: String,
+}
+
+impl ResponseExample {
+    /// Create a ResponseExample from a captured Response.
+    pub fn from_response(resp: &Response) -> Self {
+        // Strip script-output footers so saved examples contain clean bodies.
+        // Handles both the post-request script marker and the SSE pre-script marker.
+        let mut body = resp.body.as_str();
+        if let Some(idx) = body.find("\n\n// ── Script Output ──") {
+            body = &body[..idx];
+        }
+        if let Some(idx) = body.find("\n\n// ── 预执行脚本输出 ──") {
+            body = &body[..idx];
+        }
+        Self {
+            status: resp.status,
+            status_text: resp.status_text.clone(),
+            body: body.to_string(),
+            saved_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        }
+    }
+
+    /// Deduplication key: status + body content (same content = same example).
+    pub fn dedup_key(&self) -> String {
+        format!("{}:{}", self.status, self.body)
+    }
+
+    /// Whether this response represents a successful request.
+    /// Success = 2xx/3xx status and no error.
+    pub fn is_success_status(status: u16, error: Option<&str>) -> bool {
+        error.is_none() && (200..400).contains(&status)
+    }
+}
+
 /// An API request definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiRequest {
@@ -722,6 +767,12 @@ pub struct ApiRequest {
     /// Last captured response (for re-opening the app with state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_response: Option<Response>,
+    /// Saved success response example (single, overwritten on each autosave).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success_example: Option<ResponseExample>,
+    /// Saved failure response examples (multiple, deduplicated by content).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fail_examples: Vec<ResponseExample>,
     /// Creator display name (audit metadata).
     #[serde(default)]
     pub created_by: String,
@@ -763,6 +814,8 @@ impl ApiRequest {
             tests_script: String::new(),
             mock: None,
             last_response: None,
+            success_example: None,
+            fail_examples: Vec::new(),
             created_by: "me".to_string(),
             created_at: now.clone(),
             updated_by: "me".to_string(),

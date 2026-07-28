@@ -328,6 +328,65 @@ pub struct PanelLayout {
     /// Applied at startup via `init_with_keybindings`. Absent = use defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shortcuts: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// After-send autosave behavior for response examples.
+    /// 0 = off (不保存), 1 = save success example (自动保存到成功示例),
+    /// 2 = save failure examples (自动保存到失败示例).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autosave_examples: Option<u8>,
+}
+
+/// After-send autosave mode for response examples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoSaveMode {
+    /// Do not autosave (default).
+    #[default]
+    Off,
+    /// Autosave successful responses (2xx/3xx) as the success example.
+    SaveSuccess,
+    /// Autosave failed responses (4xx/5xx/errors) as failure examples.
+    SaveFailure,
+    /// Autosave both: success responses to the success example, failures to
+    /// the failure examples list.
+    SaveBoth,
+}
+
+impl AutoSaveMode {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => AutoSaveMode::SaveSuccess,
+            2 => AutoSaveMode::SaveFailure,
+            3 => AutoSaveMode::SaveBoth,
+            _ => AutoSaveMode::Off,
+        }
+    }
+
+    fn to_u8(self) -> u8 {
+        match self {
+            AutoSaveMode::Off => 0,
+            AutoSaveMode::SaveSuccess => 1,
+            AutoSaveMode::SaveFailure => 2,
+            AutoSaveMode::SaveBoth => 3,
+        }
+    }
+
+    /// Whether this mode saves successful responses as the success example.
+    pub fn saves_success(self) -> bool {
+        matches!(self, AutoSaveMode::SaveSuccess | AutoSaveMode::SaveBoth)
+    }
+
+    /// Whether this mode saves failed responses as failure examples.
+    pub fn saves_failure(self) -> bool {
+        matches!(self, AutoSaveMode::SaveFailure | AutoSaveMode::SaveBoth)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AutoSaveMode::Off => "不保存（默认）",
+            AutoSaveMode::SaveSuccess => "自动保存到成功示例",
+            AutoSaveMode::SaveFailure => "自动保存到失败示例",
+            AutoSaveMode::SaveBoth => "同时自动保存到成功和失败示例",
+        }
+    }
 }
 
 /// Persisted Git integration settings.
@@ -611,5 +670,20 @@ pub fn load_remote_config() -> RemoteConfig {
 pub fn save_remote_config(cfg: &RemoteConfig) {
     let mut layout = load_layout().unwrap_or_default();
     layout.remote = Some(cfg.clone());
+    let _ = save_layout(&layout);
+}
+
+/// Load the configured after-send autosave mode for response examples.
+pub fn load_autosave_mode() -> AutoSaveMode {
+    load_layout()
+        .and_then(|l| l.autosave_examples)
+        .map(AutoSaveMode::from_u8)
+        .unwrap_or_default()
+}
+
+/// Persist the after-send autosave mode for response examples.
+pub fn save_autosave_mode(mode: AutoSaveMode) {
+    let mut layout = load_layout().unwrap_or_default();
+    layout.autosave_examples = Some(mode.to_u8());
     let _ = save_layout(&layout);
 }

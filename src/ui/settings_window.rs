@@ -42,6 +42,8 @@ pub enum SettingsSection {
     General,
     /// Environment / global variable / cookie managers.
     Environments,
+    /// After-send behavior (autosave examples, tab switching).
+    AfterSend,
     /// Remote document-sharing server settings.
     Remote,
     /// WYSIWYG editor keyboard-shortcut mapping + customization.
@@ -55,12 +57,21 @@ impl SettingsSection {
         match self {
             SettingsSection::General => rust_i18n::t!("settings.general").to_string(),
             SettingsSection::Environments => rust_i18n::t!("settings.environments").to_string(),
+            SettingsSection::AfterSend => "发送后设置".to_string(),
             SettingsSection::Remote => rust_i18n::t!("settings.remote").to_string(),
             SettingsSection::Shortcuts => rust_i18n::t!("settings.shortcuts").to_string(),
             SettingsSection::About => rust_i18n::t!("settings.about").to_string(),
         }
     }
 }
+
+/// Autosave example mode options shown in the dropdown.
+const AUTOSAVE_MODES: [crate::state::persistence::AutoSaveMode; 4] = [
+    crate::state::persistence::AutoSaveMode::Off,
+    crate::state::persistence::AutoSaveMode::SaveSuccess,
+    crate::state::persistence::AutoSaveMode::SaveFailure,
+    crate::state::persistence::AutoSaveMode::SaveBoth,
+];
 
 /// Preset sync intervals (minutes) shown in the dropdown.
 const SYNC_INTERVALS: [u32; 6] = [5, 10, 15, 30, 60, 120];
@@ -87,12 +98,16 @@ pub struct SettingsWindow {
     pub sync_interval_minutes: u32,
     /// Remote document-sharing server configuration.
     pub remote: crate::state::persistence::RemoteConfig,
+    /// After-send response-example autosave mode.
+    pub autosave_mode: crate::state::persistence::AutoSaveMode,
     /// Dropdown for the home-view (首页指向) selector.
     pub home_view_select: Entity<SelectState<Vec<String>>>,
     /// Dropdown for the git auto-sync interval selector.
     pub sync_interval_select: Entity<SelectState<Vec<String>>>,
     /// Dropdown for the interface language selector.
     pub language_select: Entity<SelectState<Vec<String>>>,
+    /// Dropdown for the autosave response-examples setting.
+    pub autosave_select: Entity<SelectState<Vec<String>>>,
     /// Text input for the publicly-advertised remote service address.
     pub remote_address_input: Entity<InputState>,
     /// Shortcut id currently being rebound (capture mode), or None.
@@ -122,6 +137,7 @@ impl SettingsWindow {
         let hidden_rails = persistence::load_hidden_rails();
         let sync_interval_minutes = persistence::load_sync_interval_minutes();
         let remote = persistence::load_remote_config();
+        let autosave_mode = persistence::load_autosave_mode();
 
         // Build dropdowns.
         let home_options: Vec<String> = SideView::ALL.iter().map(|v| v.label()).collect();
@@ -181,10 +197,25 @@ impl SettingsWindow {
             )
         });
 
+        let autosave_options: Vec<String> = AUTOSAVE_MODES.iter().map(|m| m.label().to_string()).collect();
+        let autosave_idx = AUTOSAVE_MODES
+            .iter()
+            .position(|&m| m == autosave_mode)
+            .unwrap_or(0);
+        let autosave_select = cx.new(|cx| {
+            SelectState::new(
+                autosave_options,
+                Some(gpui_component::IndexPath::new(autosave_idx)),
+                window,
+                cx,
+            )
+        });
+
         let sub_home = cx.subscribe(&home_view_select, Self::on_home_view_change);
         let sub_sync = cx.subscribe(&sync_interval_select, Self::on_sync_interval_change);
         let sub_lang = cx.subscribe(&language_select, Self::on_language_change);
         let sub_addr = cx.subscribe(&remote_address_input, Self::on_remote_address_change);
+        let sub_autosave = cx.subscribe(&autosave_select, Self::on_autosave_change);
 
         Self {
             state,
@@ -197,14 +228,16 @@ impl SettingsWindow {
             update_check_result: None,
             sync_interval_minutes,
             remote,
+            autosave_mode,
             home_view_select,
             sync_interval_select,
             language_select,
+            autosave_select,
             remote_address_input,
             editing_shortcut: None,
             pending_keystroke: None,
             shortcut_draft: crate::state::persistence::load_shortcuts(),
-            _subs: vec![sub_home, sub_sync, sub_lang, sub_addr],
+            _subs: vec![sub_home, sub_sync, sub_lang, sub_addr, sub_autosave],
         }
     }
 
@@ -280,6 +313,22 @@ impl SettingsWindow {
                 // menus / dialogs follow the new language immediately.
                 crate::wysiwyg::sync::sync_editor_language(code, cx);
                 cx.refresh_windows();
+                cx.notify();
+            }
+        }
+    }
+
+    /// React to the autosave-examples dropdown changing selection.
+    fn on_autosave_change(
+        &mut self,
+        src: Entity<SelectState<Vec<String>>>,
+        _ev: &SelectEvent<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(idx) = src.read(cx).selected_index(cx) {
+            if let Some(&mode) = AUTOSAVE_MODES.get(idx.row) {
+                persistence::save_autosave_mode(mode);
+                self.autosave_mode = mode;
                 cx.notify();
             }
         }
@@ -612,6 +661,10 @@ impl Render for SettingsWindow {
         if new_remote != self.remote {
             self.remote = new_remote;
         }
+        let new_autosave = persistence::load_autosave_mode();
+        if new_autosave != self.autosave_mode {
+            self.autosave_mode = new_autosave;
+        }
 
         // Keep the dropdown selections in sync with persisted state when it
         // changes from outside this window.
@@ -644,6 +697,16 @@ impl Render for SettingsWindow {
             let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
             if cur != lang_idx {
                 s.set_selected_index(Some(gpui_component::IndexPath::new(lang_idx)), window, cx);
+            }
+        });
+        let autosave_idx = AUTOSAVE_MODES
+            .iter()
+            .position(|&m| m == self.autosave_mode)
+            .unwrap_or(0);
+        self.autosave_select.update(cx, |s, cx| {
+            let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
+            if cur != autosave_idx {
+                s.set_selected_index(Some(gpui_component::IndexPath::new(autosave_idx)), window, cx);
             }
         });
 
@@ -754,6 +817,31 @@ impl Render for SettingsWindow {
                                     .child(SettingsSection::Environments.label().to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.active_section = SettingsSection::Environments;
+                                        cx.notify();
+                                    }))
+                            })
+                            // AfterSend nav item.
+                            .child({
+                                let is_active = active == SettingsSection::AfterSend;
+                                let fg = theme.foreground;
+                                let accent = theme.accent;
+                                let mf = muted;
+                                div()
+                                    .id("settings-nav-after-send")
+                                    .px_2()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .when(is_active, |d| {
+                                        d.bg(accent.opacity(0.5)).text_color(fg)
+                                    })
+                                    .when(!is_active, |d| {
+                                        d.text_color(mf).hover(|s| s.bg(accent.opacity(0.2)))
+                                    })
+                                    .child(SettingsSection::AfterSend.label().to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_section = SettingsSection::AfterSend;
                                         cx.notify();
                                     }))
                             })
@@ -1004,6 +1092,33 @@ impl Render for SettingsWindow {
                                     div()
                                         .size_full()
                                         .child(self.envs_view.clone())
+                                        .into_any_element()
+                                }
+                                SettingsSection::AfterSend => {
+                                    let autosave_sel = self.autosave_select.clone();
+                                    v_flex()
+                                        .size_full()
+                                        .id("settings-after-send-scroll")
+                                        .overflow_y_scroll()
+                                        .p_6()
+                                        .gap_6()
+                                        // Section: 发送请求后结果保存响应示例
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_base()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child("发送请求后结果保存响应示例"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .mt_2()
+                                                        .w(px(340.))
+                                                        .child(Select::new(&autosave_sel).small().appearance(true)),
+                                                )
+                                        )
                                         .into_any_element()
                                 }
                                 SettingsSection::Remote => {

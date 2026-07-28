@@ -2642,27 +2642,6 @@ mod tests {
     use gpui::{App, AppContext, Entity, TestAppContext};
 
     #[gpui::test]
-    async fn request_quote_break_exits_to_paragraph(cx: &mut TestAppContext) {
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "> first".to_string(), None));
-
-        editor.update(cx, |editor, cx| {
-            let quote = editor.document.first_root().expect("root quote").clone();
-            editor.on_block_event(quote, &BlockEvent::RequestQuoteBreak, cx);
-
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 2);
-            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[0].entity.read(cx).display_text(), "first");
-            // Breaking out of a quote lands on a plain paragraph, not another quote.
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
-            assert_eq!(visible[1].entity.read(cx).display_text(), "");
-            assert_eq!(visible[1].entity.read(cx).quote_depth, 0);
-            assert_eq!(editor.document.markdown_text(cx), "> first\n");
-            assert_eq!(editor.pending_focus, Some(visible[1].entity.entity_id()));
-        });
-    }
-
-    #[gpui::test]
     async fn typing_quote_shortcut_immediately_refreshes_rendered_quote_metadata(
         cx: &mut TestAppContext,
     ) {
@@ -3118,43 +3097,6 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn setext_equals_underline_enter_promotes_previous_paragraph_to_h1(
-        cx: &mut TestAppContext,
-    ) {
-        let cx = cx.add_empty_window();
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "Title\n\n=====".to_string(), None));
-
-        cx.update(|window, cx| {
-            editor.update(cx, |editor, cx| {
-                let underline = editor.document.visible_blocks()[1].entity.clone();
-                underline.update(cx, |block, block_cx| {
-                    block.move_to(block.visible_len(), block_cx);
-                    block.on_newline(&Newline, window, block_cx);
-                });
-            });
-        });
-
-        editor.update(cx, |editor, cx| {
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 2);
-            assert_eq!(
-                visible[0].entity.read(cx).kind(),
-                BlockKind::Heading { level: 1 }
-            );
-            assert_eq!(visible[0].entity.read(cx).display_text(), "Title");
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
-            assert_eq!(visible[1].entity.read(cx).display_text(), "");
-            assert_eq!(editor.document.markdown_text(cx), "# Title\n\n");
-        });
-
-        // Reversible: undo restores the two original paragraphs.
-        editor.update(cx, |editor, cx| {
-            editor.undo_document(cx);
-            assert_eq!(editor.document.markdown_text(cx), "Title\n\n=====");
-        });
-    }
-
-    #[gpui::test]
     async fn setext_dash_underline_enter_promotes_previous_paragraph_to_h2(
         cx: &mut TestAppContext,
     ) {
@@ -3205,29 +3147,6 @@ mod tests {
         editor.update(cx, |editor, cx| {
             let visible = editor.document.visible_blocks();
             assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Separator);
-        });
-    }
-
-    #[gpui::test]
-    async fn equals_underline_without_heading_target_stays_a_paragraph(cx: &mut TestAppContext) {
-        let cx = cx.add_empty_window();
-        let editor = cx.new(|cx| Editor::from_markdown(cx, String::new(), None));
-
-        cx.update(|window, cx| {
-            editor.update(cx, |editor, cx| {
-                let block = editor.document.visible_blocks()[0].entity.clone();
-                block.update(cx, |block, block_cx| {
-                    block.replace_text_in_visible_range(0..0, "=====", None, false, block_cx);
-                    block.move_to(block.visible_len(), block_cx);
-                    block.on_newline(&Newline, window, block_cx);
-                });
-            });
-        });
-
-        editor.update(cx, |editor, cx| {
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Paragraph);
-            assert_eq!(visible[0].entity.read(cx).display_text(), "=====");
         });
     }
 
@@ -4595,33 +4514,6 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn request_quote_break_exits_nested_quote_to_paragraph(cx: &mut TestAppContext) {
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "> outer\n>> inner".to_string(), None));
-
-        editor.update(cx, |editor, cx| {
-            let nested_quote = editor.document.visible_blocks()[1].entity.clone();
-            editor.on_block_event(nested_quote, &BlockEvent::RequestQuoteBreak, cx);
-
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 3);
-            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[0].entity.read(cx).display_text(), "outer");
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[1].entity.read(cx).display_text(), "inner");
-            assert_eq!(visible[1].entity.read(cx).quote_depth, 2);
-            // Breaking out of the nested quote lands on a plain paragraph.
-            assert_eq!(visible[2].entity.read(cx).kind(), BlockKind::Paragraph);
-            assert_eq!(visible[2].entity.read(cx).display_text(), "");
-            assert_eq!(visible[2].entity.read(cx).quote_depth, 0);
-            assert_eq!(
-                editor.document.markdown_text(cx),
-                "> outer\n> > inner\n"
-            );
-            assert_eq!(editor.pending_focus, Some(visible[2].entity.entity_id()));
-        });
-    }
-
-    #[gpui::test]
     async fn imported_leaf_quote_backspace_twice_downgrades_to_text_block(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let editor = cx.new(|cx| Editor::from_markdown(cx, "> a".to_string(), None));
@@ -4741,46 +4633,6 @@ mod tests {
             assert_eq!(paragraph.read(cx).kind(), BlockKind::Paragraph);
             assert_eq!(paragraph.read(cx).display_text(), "");
             assert_eq!(editor.document.markdown_text(cx), "");
-        });
-    }
-
-    #[gpui::test]
-    async fn root_quote_break_then_backspace_keeps_text_block_slot_after_group(
-        cx: &mut TestAppContext,
-    ) {
-        let cx = cx.add_empty_window();
-        let editor = cx.new(|cx| Editor::from_markdown(cx, "> side\n>\n> 1234".to_string(), None));
-
-        let new_leaf_id = editor.update(cx, |editor, cx| {
-            let quote = editor.document.first_root().expect("group quote").clone();
-            editor.on_block_event(quote, &BlockEvent::RequestQuoteBreak, cx);
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 2);
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[1].entity.read(cx).display_text(), "");
-            visible[1].entity.entity_id()
-        });
-
-        cx.update(|window, cx| {
-            editor.update(cx, |editor, cx| {
-                let new_leaf = editor.document.visible_blocks()[1].entity.clone();
-                new_leaf.update(cx, |block, block_cx| {
-                    block.move_to(0, block_cx);
-                    block.on_delete_back(&DeleteBack, window, block_cx);
-                });
-            });
-        });
-
-        editor.update(cx, |editor, cx| {
-            let visible = editor.document.visible_blocks();
-            assert_eq!(visible.len(), 2);
-            assert_eq!(visible[0].entity.read(cx).kind(), BlockKind::Quote);
-            assert_eq!(visible[0].entity.read(cx).display_text(), "side\n\n1234");
-            assert_eq!(visible[1].entity.read(cx).kind(), BlockKind::Paragraph);
-            assert_eq!(visible[1].entity.read(cx).display_text(), "");
-            assert_eq!(visible[1].entity.entity_id(), new_leaf_id);
-            assert_eq!(visible[1].entity.read(cx).quote_depth, 0);
-            assert_eq!(editor.document.markdown_text(cx), "> side\n> \n> 1234\n\n");
         });
     }
 

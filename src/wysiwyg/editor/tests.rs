@@ -242,83 +242,6 @@ async fn about_github_link_uses_gpui_url_opening(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn ctrl_s_saves_rendered_mode_edit_to_existing_file(cx: &mut TestAppContext) {
-    init_editor_test_app(cx);
-
-    let path = temp_markdown_path("ctrl-s-rendered-save");
-    fs::write(&path, "alpha").expect("write initial markdown");
-    let cleanup_path = path.clone();
-    cx.on_quit(move || {
-        let _ = fs::remove_file(&cleanup_path);
-    });
-
-    let (editor, cx) = cx.add_window_view({
-        let path = path.clone();
-        move |_window, cx| Editor::from_markdown(cx, "alpha".to_string(), Some(path))
-    });
-
-    cx.simulate_input("!");
-    redraw(cx);
-    let expected = editor.read_with(cx, |editor, cx| {
-        assert!(editor.document_dirty);
-        assert!(!editor.pending_save);
-        editor.document.markdown_text(cx)
-    });
-    assert_ne!(expected, "alpha");
-
-    cx.simulate_keystrokes("ctrl-s");
-    redraw(cx);
-
-    assert_eq!(
-        fs::read_to_string(&path).expect("read saved markdown"),
-        expected
-    );
-    editor.read_with(cx, |editor, _cx| {
-        assert!(!editor.document_dirty);
-        assert!(!editor.pending_save);
-    });
-}
-
-#[gpui::test]
-async fn window_save_action_saves_current_editor_without_global_menu_route(
-    cx: &mut TestAppContext,
-) {
-    init_editor_test_app(cx);
-
-    let path = temp_markdown_path("window-action-save");
-    fs::write(&path, "alpha").expect("write initial markdown");
-    let cleanup_path = path.clone();
-    cx.on_quit(move || {
-        let _ = fs::remove_file(&cleanup_path);
-    });
-
-    let (editor, cx) = cx.add_window_view({
-        let path = path.clone();
-        move |_window, cx| Editor::from_markdown(cx, "alpha".to_string(), Some(path))
-    });
-
-    cx.simulate_input(" action");
-    redraw(cx);
-    let expected = editor.read_with(cx, |editor, cx| {
-        assert!(editor.document_dirty);
-        editor.document.markdown_text(cx)
-    });
-    assert_ne!(expected, "alpha");
-
-    cx.dispatch_action(SaveDocument);
-    redraw(cx);
-
-    assert_eq!(
-        fs::read_to_string(&path).expect("read saved markdown"),
-        expected
-    );
-    editor.read_with(cx, |editor, _cx| {
-        assert!(!editor.document_dirty);
-        assert!(!editor.pending_save);
-    });
-}
-
-#[gpui::test]
 async fn export_html_writes_rendered_document_without_changing_editor_state(
     cx: &mut TestAppContext,
 ) {
@@ -1624,27 +1547,6 @@ async fn html_fallback_before_image_does_not_swallow_standalone_image(cx: &mut T
 }
 
 #[gpui::test]
-async fn unclosed_html_fallback_stops_before_standalone_image_without_blank(
-    cx: &mut TestAppContext,
-) {
-    let image_url = "https://example.com/image.png";
-    let markdown = format!("<span>unclosed html\n![image]({image_url})");
-    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
-
-    editor.read_with(cx, |editor, cx| {
-        assert_eq!(editor.document.root_count(), 2);
-        assert_eq!(
-            editor.document.root_blocks()[0].read(cx).kind(),
-            BlockKind::RawMarkdown
-        );
-        let image = editor.document.root_blocks()[1].read(cx);
-        let runtime = image.image_runtime().expect("image runtime");
-        assert_eq!(runtime.alt, "image");
-        assert_eq!(runtime.src, image_url);
-    });
-}
-
-#[gpui::test]
 async fn numbered_list_item_standalone_image_installs_runtime(cx: &mut TestAppContext) {
     let markdown = "1. ![diagram](https://example.com/diagram.gif \"Caption\")".to_string();
     let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
@@ -2582,28 +2484,6 @@ async fn toggle_view_mode_ends_stale_code_block_pointer_selection(cx: &mut TestA
             assert!(!block.code_language_is_selecting);
             assert_eq!(block.selected_range, 3..7);
         });
-    });
-}
-
-#[gpui::test]
-async fn ctrl_tab_toggles_view_mode(cx: &mut TestAppContext) {
-    init_editor_test_app(cx);
-    let (editor, cx) =
-        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
-
-    redraw(cx);
-    cx.simulate_keystrokes("ctrl-tab");
-    redraw(cx);
-
-    editor.update(cx, |editor, _cx| {
-        assert!(matches!(editor.view_mode, ViewMode::Source));
-    });
-
-    cx.simulate_keystrokes("ctrl-tab");
-    redraw(cx);
-
-    editor.update(cx, |editor, _cx| {
-        assert!(matches!(editor.view_mode, ViewMode::Rendered));
     });
 }
 

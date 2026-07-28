@@ -2258,16 +2258,25 @@ impl Render for Block {
         }
 
         // An HTML-wrapper child that is itself an HtmlBlock (e.g. a `<table>`,
-        // `<img>`, `<details>` parsed from the wrapper's inner Markdown).
+        // `<img>`, `<details>` parsed from the wrapper's inner Markdown) or a
+        // `RawMarkdown` source block (a markdown pipe-table downgraded in
+        // `install_html_wrapper_runtime`, since its `table_runtime` is never
+        // installed for wrapper children).
         //
         // - A standalone `<br/>` renders as an invisible vertical spacer (the
         //   user should never see the literal `<br/>` tag).
         // - A `<table>` renders as a markdown table visual when unfocused
         //   (reusing the HTML table renderer); when focused it shows the raw
         //   `<table>` source as an editable code block.
-        // - Any other HtmlBlock child (`<img>`, `<details>`, …) renders as a
-        //   source code block.
-        if self.is_html_wrapper_child() && self.kind() == BlockKind::HtmlBlock {
+        // - Any other HtmlBlock child (`<img>`, `<details>`, …) and any
+        //   RawMarkdown child (a downgraded pipe-table) render as a source
+        //   code block: `code_bg` when unfocused (preview state, no caret),
+        //   `source_mode_block_bg` + caret when focused (edit state). This
+        //   gives each wrapper child an independent edit state so clicking one
+        //   child does not make the whole wrapper look edited.
+        if self.is_html_wrapper_child()
+            && matches!(self.kind(), BlockKind::HtmlBlock | BlockKind::RawMarkdown)
+        {
             if self.is_html_break_child() {
                 return div()
                     .id(block_id.clone())

@@ -96,6 +96,7 @@ impl Editor {
         self.view_mode = ViewMode::Rendered;
         self.document.replace_roots(roots, cx);
         self.table_cells.clear();
+        self.clear_html_wrapper_children();
         self.rebuild_table_runtimes(cx);
         self.rebuild_image_runtimes(cx);
 

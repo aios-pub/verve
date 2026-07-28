@@ -24,3 +24,8 @@ pub use state::*;
 // markdown module's unit tests (the block render test module is gated behind
 // a feature flag that is not always enabled).
 pub(crate) use render::{inline_word_chunks, is_cjk_break_char};
+
+// Text-layout helpers used by the editor's HTML-wrapper first-click
+// resolution (mapping a click point to a character offset in a re-shaped
+/// visual line, then onto a wrapper child block).
+pub(crate) use element::{hard_line_ranges, wrapped_line_for_y};

@@ -1795,6 +1795,11 @@ impl Render for Editor {
         if self.owns_window {
             self.install_close_guard(cx, window);
         }
+        // Sync wrapper runtimes FIRST (before apply_pending_focus) so that a
+        // first-click on an editable wrapper resolves the precise child + caret
+        // and sets pending_focus to the correct target in a single frame,
+        // avoiding the 2-frame flash of child 0 focused at offset 0.
+        self.sync_html_wrapper_runtimes(window, cx);
         self.apply_pending_focus(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.apply_click_scroll_anchor(window, cx);
@@ -2579,6 +2584,8 @@ mod tests {
             name: name.into(),
             action: Box::new(NoRecentFiles),
             os_action: None,
+            checked: false,
+            disabled: true,
         }
     }
 
@@ -2587,6 +2594,8 @@ mod tests {
             name: "Add Theme Config".into(),
             action: Box::new(AddThemeConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2595,6 +2604,8 @@ mod tests {
             name: "Add Language Config".into(),
             action: Box::new(AddLanguageConfig),
             os_action: None,
+            checked: false,
+            disabled: false,
         }
     }
 
@@ -2917,7 +2928,10 @@ mod tests {
                     name: r"C:\Users\someone\Documents\notes.md".into(),
                     action: Box::new(NoRecentFiles),
                     os_action: None,
+                    checked: false,
+                    disabled: false,
                 }],
+                disabled: false,
             }),
         ];
         let submenu_labels = match &items[1] {
@@ -2955,7 +2969,10 @@ mod tests {
                 name: r"C:\Users\someone\Documents\Very Long Folder\notes.md".into(),
                 action: Box::new(NoRecentFiles),
                 os_action: None,
+                checked: false,
+                disabled: false,
             }],
+            disabled: false,
         })];
         let submenu_labels = match &items[0] {
             OwnedMenuItem::Submenu(submenu) => owned_menu_item_labels(&submenu.items),

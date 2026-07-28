@@ -250,6 +250,17 @@ impl BlockKind {
         matches!(self, Self::Separator)
     }
 
+    /// Kinds whose content is inherently raw source (edited as a single text
+    /// buffer, not rich text). Used to decide whether an HTML-wrapper child
+    /// block should keep `SourceRaw` editing mode (rendered as a code block).
+    pub fn is_raw_source_block(&self) -> bool {
+        matches!(
+            self,
+            Self::HtmlBlock | Self::MathBlock | Self::MermaidBlock
+                | Self::RawMarkdown | Self::Comment
+        )
+    }
+
     pub fn can_nest_under(&self, parent: &Self) -> bool {
         if !parent.is_list_item() {
             return false;

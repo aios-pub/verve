@@ -18,8 +18,10 @@ use self::toolbar::ToolbarState;
 use self::tree::DocumentTree;
 use crate::wysiwyg::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
-    FootnoteRegistry, FootnoteResolvedOccurrence, ImageReferenceDefinitions, InlineTextTree,
-    LinkReferenceDefinitions, parse_image_reference_definitions, parse_link_reference_definitions,
+    FootnoteRegistry, FootnoteResolvedOccurrence, HtmlWrapperRuntime, HtmlWrapperShape,
+    ImageReferenceDefinitions, InlineTextTree, LinkReferenceDefinitions,
+    extract_editable_inline_wrapper, parse_image_reference_definitions,
+    parse_link_reference_definitions,
 };
 use crate::wysiwyg::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
@@ -34,6 +36,7 @@ mod export;
 mod find;
 mod file_drop;
 mod history;
+mod html_wrapper_edit;
 mod persistence;
 mod render;
 mod runtime_context;
@@ -76,11 +79,21 @@ pub(crate) struct PendingOpenLink {
 pub struct Editor {
     document: DocumentTree,
     table_cells: HashMap<EntityId, TableCellBinding>,
+    /// Side map of HTML-wrapper child blocks (only populated while a wrapper
+    /// is focused). Key = child `EntityId`, value = binding to its wrapper
+    /// parent + index. Mirrors `table_cells`.
+    html_wrapper_children: HashMap<EntityId, HtmlWrapperChildBinding>,
     /// Which view the editor is currently presenting.
     pub(crate) view_mode: ViewMode,
     /// Deferred focus target applied during render when a [`Window`] is
     /// available.
     pending_focus: Option<EntityId>,
+    /// When a wrapper HtmlBlock is first clicked, the click point is stashed
+    /// here so that once the child-block runtime installs and the children
+    /// render, the editor can focus the child nearest the click and place the
+    /// caret at the exact click X offset instead of always the first child.
+    /// Cleared once consumed.
+    pending_wrapper_click_point: Option<Point<Pixels>>,
     active_entity_id: Option<EntityId>,
     pending_scroll_active_block_into_view: bool,
     pending_scroll_recheck_after_layout: bool,
@@ -201,6 +214,17 @@ struct TableCellBinding {
     table_block: Entity<Block>,
     cell: Entity<Block>,
     position: TableCellPosition,
+}
+
+/// Runtime binding between a focused HTML-wrapper block and one of its child
+/// blocks (parsed from the wrapper's inner Markdown). Mirrors
+/// [`TableCellBinding`]: the wrapper is a document-tree leaf, children live
+/// out-of-band in this side map so focus routing + serialization can find them.
+#[derive(Clone)]
+pub(super) struct HtmlWrapperChildBinding {
+    pub(super) wrapper_block: Entity<Block>,
+    pub(super) child: Entity<Block>,
+    pub(super) index: usize,
 }
 
 /// Selected row or column in a rendered native table.
@@ -359,8 +383,10 @@ impl Editor {
         let mut editor = Self {
             document,
             table_cells: HashMap::new(),
+            html_wrapper_children: HashMap::new(),
             view_mode: ViewMode::Rendered,
             pending_focus,
+            pending_wrapper_click_point: None,
             active_entity_id: pending_focus,
             pending_scroll_active_block_into_view: true,
             pending_scroll_recheck_after_layout: true,
@@ -516,6 +542,7 @@ impl Editor {
         self.history_restore_in_progress = false;
 
         self.rebuild_table_runtimes(cx);
+        self.clear_html_wrapper_children();
         self.rebuild_image_runtimes(cx);
         self.pending_focus = self.first_focusable_entity_id(cx);
         self.active_entity_id = self.pending_focus;

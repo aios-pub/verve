@@ -219,9 +219,14 @@ default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "
 # feature is always on.
 wysiwyg-render = []
 # velotype's gpui `test-support`-based integration tests (block/editor). Off
-# by default — verve's zed-fork gpui does not expose the test helpers these
-# rely on; they will be re-ported in stage 5.
-wysiwyg-gpui-tests = []
+# by default; enabling it pulls in gpui's `test-support` feature, which exposes
+# `TestAppContext` / `VisualTestContext` and the `#[gpui::test]` harness.
+wysiwyg-gpui-tests = ["gpui/test-support"]
+# Multi-window / app-menu integration tests in `editor/tests.rs` that need the
+# `app_menu::open_editor_window` / `dispatch_menu_action` helpers. Those live in
+# the `ui` app layer (wysiwyg can't reach up to it), so the tests are not yet
+# portable; off by default until the window-management porting (stage 5) lands.
+wysiwyg-window-tests = []
 code-highlight-core = ["dep:tree-sitter", "dep:tree-sitter-highlight"]
 code-highlight-official = [
     "code-highlight-core",

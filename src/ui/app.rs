@@ -258,21 +258,21 @@ impl SideView {
     /// All rail-selectable views, in rail order.
     pub const ALL: &'static [SideView] = &[
         SideView::Api,
-        SideView::AutoTest,
-        SideView::Stress,
-        SideView::Proxy,
         SideView::Share,
+        SideView::Mock,
         SideView::ProjectManage,
-        SideView::K8s,
-        SideView::Docker,
+        SideView::Stress,
+        SideView::AutoTest,
+        SideView::JsonFormat,
         SideView::Hosts,
+        SideView::Proxy,
+        SideView::Ssh,
+        SideView::Docker,
+        SideView::K8s,
+        SideView::PdfEditor,
+        SideView::History,
         SideView::Notes,
         SideView::MarkdownEditor,
-        SideView::JsonFormat,
-        SideView::PdfEditor,
-        SideView::Mock,
-        SideView::History,
-        SideView::Ssh,
     ];
 
     /// A stable string key for persistence.
@@ -2291,9 +2291,10 @@ impl Render for VerveApp {
             // Editor toolbar dropdown overlay (rendered at root so the title
             // bar's height doesn't clip the panel). Only the active editor's
             // toolbar can have an open dropdown.
-            .when_some(self.active_editor_entity_for_toolbar(cx), |this, overlay| {
-                this.child(overlay)
-            })
+            .when_some(
+                self.active_editor_entity_for_toolbar(cx),
+                |this, overlay| this.child(overlay),
+            )
     }
 }
 
@@ -2301,10 +2302,7 @@ impl VerveApp {
     /// Build the toolbar dropdown overlay for the active editor (Notes or
     /// Markdown), if a dropdown is open. Returns None otherwise or when the
     /// active view has no editor.
-    fn active_editor_entity_for_toolbar(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    fn active_editor_entity_for_toolbar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let editor: Entity<crate::wysiwyg::editor::Editor> = match self.active_view {
             SideView::Notes => self.notes.read(cx).editor().clone(),
             SideView::MarkdownEditor => self.markdown.read(cx).editor().clone(),
@@ -2736,10 +2734,10 @@ impl VerveApp {
         editor: &Entity<crate::wysiwyg::editor::Editor>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use crate::wysiwyg::components::actions::{ShortcutCommand, resolved_shortcut_keys};
         use crate::wysiwyg::editor::toolbar::{
             BlockKindSnapshot, ToolbarAction, ToolbarDropdown, ToolbarSnapshot,
         };
-        use crate::wysiwyg::components::actions::{resolved_shortcut_keys, ShortcutCommand};
         use gpui_component::kbd::Kbd;
 
         let theme = cx.theme().clone();
@@ -2772,7 +2770,11 @@ impl VerveApp {
                     .flex()
                     .items_center()
                     .rounded(px(4.))
-                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .bg(if active {
+                        active_bg
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    })
                     .hover(|t| t.bg(hover_bg))
                     .cursor_pointer()
                     .text_size(px(13.))
@@ -2790,13 +2792,24 @@ impl VerveApp {
         bar = bar.child(toolbar_divider(&theme));
 
         // B / I / S / U (glyphs decorated via the format itself)
-        let inline_buttons: [(char, ToolbarAction, ShortcutCommand, fn(gpui::Div) -> gpui::Div); 4] = [
-            ('B', ToolbarAction::Bold, ShortcutCommand::BoldSelection, |d: gpui::Div| {
-                d.font_weight(FontWeight::BOLD)
-            }),
-            ('I', ToolbarAction::Italic, ShortcutCommand::ItalicSelection, |d: gpui::Div| {
-                d.italic()
-            }),
+        let inline_buttons: [(
+            char,
+            ToolbarAction,
+            ShortcutCommand,
+            fn(gpui::Div) -> gpui::Div,
+        ); 4] = [
+            (
+                'B',
+                ToolbarAction::Bold,
+                ShortcutCommand::BoldSelection,
+                |d: gpui::Div| d.font_weight(FontWeight::BOLD),
+            ),
+            (
+                'I',
+                ToolbarAction::Italic,
+                ShortcutCommand::ItalicSelection,
+                |d: gpui::Div| d.italic(),
+            ),
             (
                 'U',
                 ToolbarAction::Underline,
@@ -2829,7 +2842,11 @@ impl VerveApp {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.))
-                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .bg(if active {
+                        active_bg
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    })
                     .hover(|t| t.bg(hover_bg))
                     .cursor_pointer()
                     .text_size(px(13.))
@@ -2847,18 +2864,34 @@ impl VerveApp {
         // table, image, clear formatting. Rendered as custom SVG icons (see
         // assets/verve_icons/), inheriting the button's text color.
         let flat_buttons: [(&str, &str, ToolbarAction); 7] = [
-            (crate::assets::TB_LIST_ORDERED, "ordered", ToolbarAction::NumberedList),
-            (crate::assets::TB_LIST, "bullet", ToolbarAction::BulletedList),
+            (
+                crate::assets::TB_LIST_ORDERED,
+                "ordered",
+                ToolbarAction::NumberedList,
+            ),
+            (
+                crate::assets::TB_LIST,
+                "bullet",
+                ToolbarAction::BulletedList,
+            ),
             (crate::assets::TB_QUOTE, "quote", ToolbarAction::Quote),
             (crate::assets::TB_CODE, "code", ToolbarAction::CodeBlock),
             (crate::assets::TB_TABLE, "table", ToolbarAction::InsertTable),
             (crate::assets::TB_IMAGE, "image", ToolbarAction::InsertImage),
-            (crate::assets::TB_ERASER, "clear", ToolbarAction::ClearFormatting),
+            (
+                crate::assets::TB_ERASER,
+                "clear",
+                ToolbarAction::ClearFormatting,
+            ),
         ];
         let block_kind = &snap.block_kind;
         let flat_active = |a: &ToolbarAction| match a {
-            ToolbarAction::NumberedList => matches!(block_kind, Some(BlockKindSnapshot::NumberedList)),
-            ToolbarAction::BulletedList => matches!(block_kind, Some(BlockKindSnapshot::BulletedList)),
+            ToolbarAction::NumberedList => {
+                matches!(block_kind, Some(BlockKindSnapshot::NumberedList))
+            }
+            ToolbarAction::BulletedList => {
+                matches!(block_kind, Some(BlockKindSnapshot::BulletedList))
+            }
             ToolbarAction::Quote => matches!(block_kind, Some(BlockKindSnapshot::Quote)),
             ToolbarAction::CodeBlock => matches!(block_kind, Some(BlockKindSnapshot::CodeBlock)),
             _ => false,
@@ -2875,7 +2908,11 @@ impl VerveApp {
                     .items_center()
                     .justify_center()
                     .rounded(px(4.))
-                    .bg(if active { active_bg } else { hsla(0., 0., 0., 0.) })
+                    .bg(if active {
+                        active_bg
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    })
                     .hover(|t| t.bg(hover_bg))
                     .cursor_pointer()
                     .text_color(if active { active_fg } else { idle_fg })
@@ -2894,8 +2931,14 @@ impl VerveApp {
 
         // Paragraph / Format dropdown triggers
         for (label, dropdown) in [
-            (rust_i18n::t!("toolbar.paragraph").to_string(), ToolbarDropdown::Paragraph),
-            (rust_i18n::t!("toolbar.format").to_string(), ToolbarDropdown::Format),
+            (
+                rust_i18n::t!("toolbar.paragraph").to_string(),
+                ToolbarDropdown::Paragraph,
+            ),
+            (
+                rust_i18n::t!("toolbar.format").to_string(),
+                ToolbarDropdown::Format,
+            ),
         ] {
             let is_open = open == Some(dropdown);
             let ed = editor.clone();
@@ -2908,20 +2951,31 @@ impl VerveApp {
                     .items_center()
                     .gap(px(4.))
                     .rounded(px(4.))
-                    .bg(if is_open { hover_bg } else { hsla(0., 0., 0., 0.) })
+                    .bg(if is_open {
+                        hover_bg
+                    } else {
+                        hsla(0., 0., 0., 0.)
+                    })
                     .hover(|t| t.bg(hover_bg))
                     .cursor_pointer()
                     .text_size(px(13.))
                     .text_color(idle_fg)
                     .child(label.to_string())
-                    .child(div().text_size(px(10.)).child(if is_open { "▲" } else { "▼" }))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        let _ = ed.update(cx, |e, cx| {
-                            e.toolbar_toggle_dropdown(dropdown, f32::from(event.position.x), cx)
-                        });
-                        cx.notify();
-                        cx.stop_propagation();
-                    })),
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .child(if is_open { "▲" } else { "▼" }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            let _ = ed.update(cx, |e, cx| {
+                                e.toolbar_toggle_dropdown(dropdown, f32::from(event.position.x), cx)
+                            });
+                            cx.notify();
+                            cx.stop_propagation();
+                        }),
+                    ),
             );
         }
 
@@ -2998,25 +3052,121 @@ impl VerveApp {
             _ => ShortcutCommand::Heading6,
         };
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
-            (rust_i18n::t!("toolbar.heading_1").to_string(), level == Some(1), command_keycap(mk(1)), false, ToolbarAction::Heading(1)),
-            (rust_i18n::t!("toolbar.heading_2").to_string(), level == Some(2), command_keycap(mk(2)), false, ToolbarAction::Heading(2)),
-            (rust_i18n::t!("toolbar.heading_3").to_string(), level == Some(3), command_keycap(mk(3)), false, ToolbarAction::Heading(3)),
-            (rust_i18n::t!("toolbar.heading_4").to_string(), level == Some(4), command_keycap(mk(4)), false, ToolbarAction::Heading(4)),
-            (rust_i18n::t!("toolbar.heading_5").to_string(), level == Some(5), command_keycap(mk(5)), false, ToolbarAction::Heading(5)),
-            (rust_i18n::t!("toolbar.heading_6").to_string(), level == Some(6), command_keycap(mk(6)), false, ToolbarAction::Heading(6)),
+            (
+                rust_i18n::t!("toolbar.heading_1").to_string(),
+                level == Some(1),
+                command_keycap(mk(1)),
+                false,
+                ToolbarAction::Heading(1),
+            ),
+            (
+                rust_i18n::t!("toolbar.heading_2").to_string(),
+                level == Some(2),
+                command_keycap(mk(2)),
+                false,
+                ToolbarAction::Heading(2),
+            ),
+            (
+                rust_i18n::t!("toolbar.heading_3").to_string(),
+                level == Some(3),
+                command_keycap(mk(3)),
+                false,
+                ToolbarAction::Heading(3),
+            ),
+            (
+                rust_i18n::t!("toolbar.heading_4").to_string(),
+                level == Some(4),
+                command_keycap(mk(4)),
+                false,
+                ToolbarAction::Heading(4),
+            ),
+            (
+                rust_i18n::t!("toolbar.heading_5").to_string(),
+                level == Some(5),
+                command_keycap(mk(5)),
+                false,
+                ToolbarAction::Heading(5),
+            ),
+            (
+                rust_i18n::t!("toolbar.heading_6").to_string(),
+                level == Some(6),
+                command_keycap(mk(6)),
+                false,
+                ToolbarAction::Heading(6),
+            ),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // separator marker
-            (rust_i18n::t!("toolbar.table").to_string(), false, command_keycap(ShortcutCommand::InsertTable), false, ToolbarAction::InsertTable),
-            (rust_i18n::t!("toolbar.code_fences").to_string(), matches!(kind, Some(BlockKindSnapshot::CodeBlock)), command_keycap(ShortcutCommand::ConvertToCodeBlock), false, ToolbarAction::CodeBlock),
-            (rust_i18n::t!("toolbar.quote_block").to_string(), matches!(kind, Some(BlockKindSnapshot::Quote)), command_keycap(ShortcutCommand::ConvertToQuote), false, ToolbarAction::Quote),
-            (rust_i18n::t!("toolbar.math_block").to_string(), matches!(kind, Some(BlockKindSnapshot::MathBlock)), None, false, ToolbarAction::InsertMathBlock),
-            (rust_i18n::t!("toolbar.html_block").to_string(), matches!(kind, Some(BlockKindSnapshot::HtmlBlock)), None, false, ToolbarAction::InsertHtmlBlock),
+            (
+                rust_i18n::t!("toolbar.table").to_string(),
+                false,
+                command_keycap(ShortcutCommand::InsertTable),
+                false,
+                ToolbarAction::InsertTable,
+            ),
+            (
+                rust_i18n::t!("toolbar.code_fences").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::CodeBlock)),
+                command_keycap(ShortcutCommand::ConvertToCodeBlock),
+                false,
+                ToolbarAction::CodeBlock,
+            ),
+            (
+                rust_i18n::t!("toolbar.quote_block").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::Quote)),
+                command_keycap(ShortcutCommand::ConvertToQuote),
+                false,
+                ToolbarAction::Quote,
+            ),
+            (
+                rust_i18n::t!("toolbar.math_block").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::MathBlock)),
+                None,
+                false,
+                ToolbarAction::InsertMathBlock,
+            ),
+            (
+                rust_i18n::t!("toolbar.html_block").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::HtmlBlock)),
+                None,
+                false,
+                ToolbarAction::InsertHtmlBlock,
+            ),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
-            (rust_i18n::t!("toolbar.ordered_list").to_string(), matches!(kind, Some(BlockKindSnapshot::NumberedList)), command_keycap(ShortcutCommand::ConvertToNumberedList), false, ToolbarAction::NumberedList),
-            (rust_i18n::t!("toolbar.bullet_list").to_string(), matches!(kind, Some(BlockKindSnapshot::BulletedList)), command_keycap(ShortcutCommand::ConvertToBulletedList), false, ToolbarAction::BulletedList),
-            (rust_i18n::t!("toolbar.task_list").to_string(), matches!(kind, Some(BlockKindSnapshot::TaskList)), command_keycap(ShortcutCommand::ConvertToTaskList), false, ToolbarAction::TaskList),
+            (
+                rust_i18n::t!("toolbar.ordered_list").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::NumberedList)),
+                command_keycap(ShortcutCommand::ConvertToNumberedList),
+                false,
+                ToolbarAction::NumberedList,
+            ),
+            (
+                rust_i18n::t!("toolbar.bullet_list").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::BulletedList)),
+                command_keycap(ShortcutCommand::ConvertToBulletedList),
+                false,
+                ToolbarAction::BulletedList,
+            ),
+            (
+                rust_i18n::t!("toolbar.task_list").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::TaskList)),
+                command_keycap(ShortcutCommand::ConvertToTaskList),
+                false,
+                ToolbarAction::TaskList,
+            ),
             ("".into(), false, None, false, ToolbarAction::Paragraph), // sep
-            (rust_i18n::t!("toolbar.paragraph_restore").to_string(), matches!(kind, Some(BlockKindSnapshot::Paragraph)), command_keycap(ShortcutCommand::ConvertToParagraph), false, ToolbarAction::Paragraph),
-            (rust_i18n::t!("toolbar.horizontal_rule").to_string(), matches!(kind, Some(BlockKindSnapshot::Separator)), command_keycap(ShortcutCommand::InsertHorizontalRule), false, ToolbarAction::InsertHorizontalRule),
+            (
+                rust_i18n::t!("toolbar.paragraph_restore").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::Paragraph)),
+                command_keycap(ShortcutCommand::ConvertToParagraph),
+                false,
+                ToolbarAction::Paragraph,
+            ),
+            (
+                rust_i18n::t!("toolbar.horizontal_rule").to_string(),
+                matches!(kind, Some(BlockKindSnapshot::Separator)),
+                command_keycap(ShortcutCommand::InsertHorizontalRule),
+                false,
+                ToolbarAction::InsertHorizontalRule,
+            ),
         ];
 
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -3024,7 +3174,9 @@ impl VerveApp {
             if label.is_empty() {
                 rows.push(dropdown_separator(theme));
             } else {
-                rows.push(self.render_dropdown_item(editor, &label, checked, keycap, disabled, action, theme, cx));
+                rows.push(self.render_dropdown_item(
+                    editor, &label, checked, keycap, disabled, action, theme, cx,
+                ));
             }
         }
         dropdown_panel("paragraph-dropdown", rows, theme)
@@ -3043,22 +3195,118 @@ impl VerveApp {
 
         let style = &snap.style;
         let items: Vec<(String, bool, Option<AnyElement>, bool, ToolbarAction)> = vec![
-            (rust_i18n::t!("toolbar.bold").to_string(), style.bold, command_keycap(ShortcutCommand::BoldSelection), false, ToolbarAction::Bold),
-            (rust_i18n::t!("toolbar.italic").to_string(), style.italic, command_keycap(ShortcutCommand::ItalicSelection), false, ToolbarAction::Italic),
-            (rust_i18n::t!("toolbar.underline").to_string(), style.underline, command_keycap(ShortcutCommand::UnderlineSelection), false, ToolbarAction::Underline),
-            (rust_i18n::t!("toolbar.strikethrough").to_string(), style.strikethrough, command_keycap(ShortcutCommand::StrikethroughSelection), false, ToolbarAction::Strikethrough),
-            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            (rust_i18n::t!("toolbar.superscript").to_string(), style.script == InlineScript::Superscript, command_keycap(ShortcutCommand::SuperscriptSelection), false, ToolbarAction::Superscript),
-            (rust_i18n::t!("toolbar.subscript").to_string(), style.script == InlineScript::Subscript, command_keycap(ShortcutCommand::SubscriptSelection), false, ToolbarAction::Subscript),
-            (rust_i18n::t!("toolbar.highlight").to_string(), style.highlight, command_keycap(ShortcutCommand::HighlightSelection), false, ToolbarAction::Highlight),
-            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            (rust_i18n::t!("toolbar.inline_code").to_string(), style.code, command_keycap(ShortcutCommand::CodeSelection), false, ToolbarAction::InlineCode),
-            (rust_i18n::t!("toolbar.inline_math").to_string(), false, None, false, ToolbarAction::InlineMath),
-            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            (rust_i18n::t!("toolbar.hyperlink").to_string(), false, command_keycap(ShortcutCommand::InsertLink), false, ToolbarAction::InsertLink),
-            (rust_i18n::t!("toolbar.image").to_string(), false, command_keycap(ShortcutCommand::InsertImage), false, ToolbarAction::InsertImage),
-            ("".into(), false, None, false, ToolbarAction::ClearFormatting), // sep
-            (rust_i18n::t!("toolbar.clear_formatting").to_string(), false, None, false, ToolbarAction::ClearFormatting),
+            (
+                rust_i18n::t!("toolbar.bold").to_string(),
+                style.bold,
+                command_keycap(ShortcutCommand::BoldSelection),
+                false,
+                ToolbarAction::Bold,
+            ),
+            (
+                rust_i18n::t!("toolbar.italic").to_string(),
+                style.italic,
+                command_keycap(ShortcutCommand::ItalicSelection),
+                false,
+                ToolbarAction::Italic,
+            ),
+            (
+                rust_i18n::t!("toolbar.underline").to_string(),
+                style.underline,
+                command_keycap(ShortcutCommand::UnderlineSelection),
+                false,
+                ToolbarAction::Underline,
+            ),
+            (
+                rust_i18n::t!("toolbar.strikethrough").to_string(),
+                style.strikethrough,
+                command_keycap(ShortcutCommand::StrikethroughSelection),
+                false,
+                ToolbarAction::Strikethrough,
+            ),
+            (
+                "".into(),
+                false,
+                None,
+                false,
+                ToolbarAction::ClearFormatting,
+            ), // sep
+            (
+                rust_i18n::t!("toolbar.superscript").to_string(),
+                style.script == InlineScript::Superscript,
+                command_keycap(ShortcutCommand::SuperscriptSelection),
+                false,
+                ToolbarAction::Superscript,
+            ),
+            (
+                rust_i18n::t!("toolbar.subscript").to_string(),
+                style.script == InlineScript::Subscript,
+                command_keycap(ShortcutCommand::SubscriptSelection),
+                false,
+                ToolbarAction::Subscript,
+            ),
+            (
+                rust_i18n::t!("toolbar.highlight").to_string(),
+                style.highlight,
+                command_keycap(ShortcutCommand::HighlightSelection),
+                false,
+                ToolbarAction::Highlight,
+            ),
+            (
+                "".into(),
+                false,
+                None,
+                false,
+                ToolbarAction::ClearFormatting,
+            ), // sep
+            (
+                rust_i18n::t!("toolbar.inline_code").to_string(),
+                style.code,
+                command_keycap(ShortcutCommand::CodeSelection),
+                false,
+                ToolbarAction::InlineCode,
+            ),
+            (
+                rust_i18n::t!("toolbar.inline_math").to_string(),
+                false,
+                None,
+                false,
+                ToolbarAction::InlineMath,
+            ),
+            (
+                "".into(),
+                false,
+                None,
+                false,
+                ToolbarAction::ClearFormatting,
+            ), // sep
+            (
+                rust_i18n::t!("toolbar.hyperlink").to_string(),
+                false,
+                command_keycap(ShortcutCommand::InsertLink),
+                false,
+                ToolbarAction::InsertLink,
+            ),
+            (
+                rust_i18n::t!("toolbar.image").to_string(),
+                false,
+                command_keycap(ShortcutCommand::InsertImage),
+                false,
+                ToolbarAction::InsertImage,
+            ),
+            (
+                "".into(),
+                false,
+                None,
+                false,
+                ToolbarAction::ClearFormatting,
+            ), // sep
+            (
+                rust_i18n::t!("toolbar.clear_formatting").to_string(),
+                false,
+                None,
+                false,
+                ToolbarAction::ClearFormatting,
+            ),
         ];
 
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -3066,7 +3314,9 @@ impl VerveApp {
             if label.is_empty() {
                 rows.push(dropdown_separator(theme));
             } else {
-                rows.push(self.render_dropdown_item(editor, &label, checked, keycap, disabled, action, theme, cx));
+                rows.push(self.render_dropdown_item(
+                    editor, &label, checked, keycap, disabled, action, theme, cx,
+                ));
             }
         }
         dropdown_panel("format-dropdown", rows, theme)
@@ -3107,8 +3357,18 @@ impl VerveApp {
             h_flex()
                 .items_center()
                 .gap(px(6.))
-                .child(div().w(px(14.)).text_color(accent).child(if checked { "✓" } else { "" }))
-                .child(div().text_size(px(13.)).text_color(fg).child(label.to_string())),
+                .child(
+                    div()
+                        .w(px(14.))
+                        .text_color(accent)
+                        .child(if checked { "✓" } else { "" }),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(fg)
+                        .child(label.to_string()),
+                ),
         );
         row = row.child(h_flex().gap(px(2.)).when_some(keycap, |t, k| t.child(k)));
         if disabled {
@@ -4374,9 +4634,7 @@ impl VerveApp {
     fn on_close_file(&mut self, _: &CloseFile, w: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
             SideView::MarkdownEditor => {
-                let _ = self
-                    .markdown
-                    .update(cx, |p, cx| p.close_active_tab(w, cx));
+                let _ = self.markdown.update(cx, |p, cx| p.close_active_tab(w, cx));
             }
             SideView::Notes => {
                 let _ = self.notes.update(cx, |p, cx| p.close_current_note(w, cx));
@@ -4554,7 +4812,11 @@ fn dropdown_separator(theme: &gpui_component::Theme) -> AnyElement {
 }
 
 /// The floating dropdown panel container.
-fn dropdown_panel(id: &'static str, items: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
+fn dropdown_panel(
+    id: &'static str,
+    items: Vec<AnyElement>,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
     div()
         .id(id)
         .w(px(240.))
@@ -4838,7 +5100,18 @@ impl VerveApp {
 
         let theme = cx.theme().clone();
         let md = self.markdown.clone();
-        let (title, dirty, file_path, outline_open, view_mode, word_total, word_sel, open_popover, export_popover, recents) = {
+        let (
+            title,
+            dirty,
+            file_path,
+            outline_open,
+            view_mode,
+            word_total,
+            word_sel,
+            open_popover,
+            export_popover,
+            recents,
+        ) = {
             let r = md.read(cx);
             let (wt, ws) = r.word_count(cx);
             (
@@ -5212,7 +5485,10 @@ impl VerveApp {
                             .rounded(px(4.))
                             .bg(theme.accent.opacity(0.2))
                             .text_color(theme.foreground)
-                            .child(rust_i18n::t!("autotest.suite_count", count = suite_count).to_string()),
+                            .child(
+                                rust_i18n::t!("autotest.suite_count", count = suite_count)
+                                    .to_string(),
+                            ),
                     ),
             )
             .child(div().flex_1())
@@ -5245,8 +5521,16 @@ impl VerveApp {
                 Button::new("autotest-title-run")
                     .primary()
                     .small()
-                    .icon(if running { IconName::Pause } else { IconName::Play })
-                    .label(if running { "运行中…" } else { "运行用例" })
+                    .icon(if running {
+                        IconName::Pause
+                    } else {
+                        IconName::Play
+                    })
+                    .label(if running {
+                        "运行中…"
+                    } else {
+                        "运行用例"
+                    })
                     .disabled(!has_project || !has_case || running)
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = at_run.update(cx, |p, cx| p.run_selected_from_title(cx));

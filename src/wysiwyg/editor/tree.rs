@@ -431,7 +431,11 @@ impl DocumentTree {
             && block.children.is_empty()
     }
 
-    fn collect_root_markdown_lines(blocks: &[Entity<Block>], cx: &App, lines: &mut Vec<String>) {
+    pub(super) fn collect_root_markdown_lines(
+        blocks: &[Entity<Block>],
+        cx: &App,
+        lines: &mut Vec<String>,
+    ) {
         let mut pending_empty_roots = 0usize;
         let mut wrote_non_empty_root = false;
         let mut previous_was_list_item = false;
@@ -674,7 +678,8 @@ impl DocumentTree {
 mod tests {
     use gpui::{AppContext, TestAppContext};
 
-    use crate::wysiwyg::components::{BlockKind, BlockRecord, Editor};
+    use crate::wysiwyg::components::{BlockKind, BlockRecord};
+    use crate::wysiwyg::editor::Editor;
 
     #[gpui::test]
     async fn snapshot_tracks_nested_visible_order(cx: &mut TestAppContext) {

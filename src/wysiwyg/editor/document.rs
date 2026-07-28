@@ -1835,7 +1835,8 @@ mod tests {
         is_reference_definition_start, parse_list_marker, parse_opening_fence,
         strip_indented_code_prefix, strip_one_quote_level,
     };
-    use crate::wysiwyg::components::{BlockKind, CalloutVariant, Editor, HtmlCssColor};
+    use crate::wysiwyg::components::{BlockKind, CalloutVariant, HtmlCssColor};
+    use crate::wysiwyg::editor::Editor;
 
     #[test]
     fn closing_fence_must_match_exact_opening_run_length() {
@@ -3289,6 +3290,43 @@ mod tests {
             let visible = editor.document.visible_blocks();
             assert_eq!(visible.len(), 1);
             let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::HtmlBlock);
+            assert_eq!(block.display_text(), markdown);
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn editable_html_wrapper_imports_and_round_trips(cx: &mut TestAppContext) {
+        // A wrapper (<div align=center>…markdown…</div>) imports as a single
+        // HtmlBlock whose disk serialization is the raw HTML. When focused it
+        // surfaces its inner Markdown as N independent child blocks (see
+        // Editor focus handling in html_wrapper_edit.rs); this test only guards
+        // the import + serialization invariants the child-block layer relies on.
+        let markdown = "<div align=\"center\">\n\n# Title\n\n**bold** text\n\n</div>".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::HtmlBlock);
+            // Unfocused display_text is the raw HTML.
+            assert_eq!(block.display_text(), markdown);
+            // Disk serialization round-trips the wrapper verbatim.
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn non_wrapper_html_block_stays_raw_html(cx: &mut TestAppContext) {
+        // A standalone <img> block is not an editable wrapper; it stays a raw
+        // HtmlBlock whose display/serialization is the raw HTML.
+        let markdown = "<img src=\"a.png\" alt=\"a\" />".to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let block = editor.document.visible_blocks()[0].entity.read(cx);
             assert_eq!(block.kind(), BlockKind::HtmlBlock);
             assert_eq!(block.display_text(), markdown);
             assert_eq!(editor.document.markdown_text(cx), markdown);

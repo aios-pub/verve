@@ -1456,6 +1456,158 @@ impl Editor {
         }
     }
 
+    /// Handler for events emitted by a child block of a focused HTML wrapper.
+    /// The wrapper's inner content is a real multi-block document, so children
+    /// behave like ordinary blocks for most gestures (Enter splits, Backspace
+    /// merges, arrows move between children). The wrapper-specific concerns are:
+    /// (1) every `Changed` re-syncs the child markdown back into the wrapper's
+    /// HTML record; (2) navigation off the first/last child exits the wrapper.
+    fn on_html_wrapper_child_event(
+        &mut self,
+        binding: super::HtmlWrapperChildBinding,
+        event: &BlockEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if let BlockEvent::PrepareUndo { kind } = event {
+            self.prepare_undo_capture_from_stable_snapshot(*kind);
+            return;
+        }
+
+        match event {
+            BlockEvent::Changed => {
+                self.sync_html_wrapper_record_from_runtime(&binding.wrapper_block, cx);
+                self.rebuild_image_runtimes(cx);
+                self.mark_dirty(cx);
+                self.request_active_block_scroll_into_view(cx);
+                self.finalize_pending_undo_capture(cx);
+            }
+            BlockEvent::RequestFocus => {
+                self.focus_block_from_click(binding.child.entity_id(), cx);
+                cx.notify();
+            }
+            // FocusPrev off the first child → leave the wrapper upward.
+            BlockEvent::RequestFocusPrev { .. } => {
+                if binding.index == 0 {
+                    self.focus_block_adjacent_to_html_wrapper(
+                        &binding.wrapper_block,
+                        -1,
+                        cx,
+                    );
+                } else if !self.focus_html_wrapper_child_neighbor(
+                    &binding.wrapper_block,
+                    binding.index,
+                    -1,
+                    cx,
+                ) {
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, -1, cx);
+                }
+            }
+            // FocusNext off the last child → leave the wrapper downward.
+            BlockEvent::RequestFocusNext { .. } => {
+                let last = self
+                    .is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
+                if last {
+                    self.focus_block_adjacent_to_html_wrapper(
+                        &binding.wrapper_block,
+                        1,
+                        cx,
+                    );
+                } else if !self.focus_html_wrapper_child_neighbor(
+                    &binding.wrapper_block,
+                    binding.index,
+                    1,
+                    cx,
+                ) {
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, 1, cx);
+                }
+            }
+            BlockEvent::RequestBlockUp => {
+                if binding.index == 0 {
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, -1, cx);
+                } else {
+                    self.focus_html_wrapper_child_neighbor(&binding.wrapper_block, binding.index, -1, cx);
+                }
+            }
+            BlockEvent::RequestBlockDown => {
+                let last = self
+                    .is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
+                if last {
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, 1, cx);
+                } else {
+                    self.focus_html_wrapper_child_neighbor(&binding.wrapper_block, binding.index, 1, cx);
+                }
+            }
+            BlockEvent::RequestOpenLink {
+                prompt_target,
+                open_target,
+            } => {
+                self.request_open_link_prompt(prompt_target.clone(), open_target.clone(), cx);
+            }
+            BlockEvent::RequestJumpToFootnoteDefinition { id, .. } => {
+                let _ = self.jump_to_footnote_definition(id, cx);
+            }
+            BlockEvent::RequestJumpToFootnoteBackref { id } => {
+                let _ = self.jump_to_footnote_backref(id, cx);
+            }
+            // Structural events (Newline split / MergeIntoPrev / Paste / etc.)
+            // are handled by the normal document-block path below: the child is
+            // mutated in place, and the resulting `Changed` re-syncs the wrapper.
+            // Falling through requires re-dispatch as a document block, which the
+            // child is NOT (it lives out-of-band), so we re-emit the structural
+            // handlers by calling the editor's block helpers directly below.
+            other => {
+                self.on_html_wrapper_child_structural_event(binding.clone(), other, cx);
+            }
+        }
+    }
+
+    fn is_last_html_wrapper_child(
+        &self,
+        wrapper_block: &Entity<super::Block>,
+        index: usize,
+        cx: &App,
+    ) -> bool {
+        wrapper_block
+            .read(cx)
+            .html_wrapper_runtime
+            .as_ref()
+            .map(|runtime| index + 1 >= runtime.children.len())
+            .unwrap_or(true)
+    }
+
+    fn on_html_wrapper_child_structural_event(
+        &mut self,
+        binding: super::HtmlWrapperChildBinding,
+        event: &BlockEvent,
+        cx: &mut Context<Self>,
+    ) {
+        // Structural child events (newline split, merge, paste, indent, …) need
+        // document-tree-style handling, but children live out-of-band in the
+        // wrapper runtime, not in DocumentTree. The simplest correct behavior
+        // for v1: let the child handle it locally (it already mutated itself
+        // before emitting), then re-sync the wrapper. Most of these events are
+        // preceeded by a PrepareUndo (handled above) and followed by Changed.
+        match event {
+            BlockEvent::RequestNewline { .. }
+            | BlockEvent::RequestMergeIntoPrev { .. }
+            | BlockEvent::RequestPasteMultiline { .. }
+            | BlockEvent::RequestIndent
+            | BlockEvent::RequestOutdent
+            | BlockEvent::RequestQuoteBreak
+            | BlockEvent::RequestCalloutBreak => {
+                // Re-sync and mark dirty; the child's own state already reflects
+                // the edit. Full structural mutation of the wrapper's child list
+                // (split into two children, merge two children) is a follow-up;
+                // for now the child edits in place.
+                self.sync_html_wrapper_record_from_runtime(&binding.wrapper_block, cx);
+                self.mark_dirty(cx);
+                self.finalize_pending_undo_capture(cx);
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
     fn nearest_quote_ancestor(
         &self,
         entity_id: EntityId,
@@ -1677,6 +1829,11 @@ impl Editor {
 
         if let Some(binding) = self.table_cell_binding(block.entity_id()) {
             self.on_table_cell_event(binding, event, cx);
+            return;
+        }
+
+        if let Some(binding) = self.html_wrapper_child_binding(block.entity_id()) {
+            self.on_html_wrapper_child_event(binding, event, cx);
             return;
         }
 
@@ -2448,7 +2605,22 @@ impl Editor {
                 self.close_menu_bar(cx);
                 self.clear_table_axis_preview(cx);
                 self.clear_table_axis_selection(cx);
+                // First click on a wrapper: install the runtime now and record
+                // the click point so the editor's render sync
+                // (`sync_html_wrapper_runtimes`) can resolve it to a precise
+                // caret on the clicked child via the wrapper's HTML-visual hit
+                // records. The runtime must be installed this frame so the
+                // children exist when sync resolves the click.
+                let is_editable_wrapper = block.read(cx).is_editable_html_wrapper();
+                let click_point = block.read(cx).last_click_point;
                 self.focus_block_from_click(block.entity_id(), cx);
+                if is_editable_wrapper {
+                    let installed = self.install_html_wrapper_runtime(&block, cx);
+                    if installed {
+                        self.pending_wrapper_click_point = click_point;
+                        cx.notify();
+                    }
+                }
                 for visible in self.document.flatten_visible_blocks() {
                     visible.entity.update(cx, |_, cx| cx.notify());
                 }

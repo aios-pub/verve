@@ -85,6 +85,20 @@ impl Editor {
         block
     }
 
+    /// Wraps an already-built child block (parsed from the wrapper's inner
+    /// Markdown) into wrapper-child mode at `index`. The block's own kind
+    /// (Paragraph/Heading/…) is preserved; only the wrapper-child marker +
+    /// rich-text edit mode are applied.
+    pub(super) fn mark_html_wrapper_child(
+        cx: &mut Context<Self>,
+        block: &Entity<Block>,
+        index: usize,
+    ) {
+        block.update(cx, |block, _cx| {
+            block.set_html_wrapper_child_mode(index);
+        });
+    }
+
     pub(super) fn image_base_dir(&self) -> Option<PathBuf> {
         self.file_path
             .as_ref()
@@ -231,6 +245,10 @@ impl Editor {
             self.table_cells
                 .get(&entity_id)
                 .map(|binding| binding.cell.clone())
+        }).or_else(|| {
+            self.html_wrapper_children
+                .get(&entity_id)
+                .map(|binding| binding.child.clone())
         })
     }
 
@@ -291,6 +309,12 @@ impl Editor {
                     .find(|binding| binding.cell.read(cx).focus_handle.is_focused(window))
                     .map(|binding| binding.cell.entity_id())
             })
+            .or_else(|| {
+                self.html_wrapper_children
+                    .values()
+                    .find(|binding| binding.child.read(cx).focus_handle.is_focused(window))
+                    .map(|binding| binding.child.entity_id())
+            })
     }
 
     pub(super) fn focused_edit_target(&self, window: &Window, cx: &App) -> Option<Entity<Block>> {
@@ -306,5 +330,24 @@ impl Editor {
         self.document
             .block_entity_by_id(entity_id)
             .filter(|block| block.read(cx).kind() == BlockKind::Table)
+    }
+
+    /// The HTML-wrapper-child binding for `entity_id`, if it is a child of a
+    /// focused wrapper block.
+    pub(super) fn html_wrapper_child_binding(
+        &self,
+        entity_id: EntityId,
+    ) -> Option<HtmlWrapperChildBinding> {
+        self.html_wrapper_children.get(&entity_id).cloned()
+    }
+
+    /// The wrapper (parent) HtmlBlock owning `child_id`, if it is a wrapper child.
+    pub(super) fn html_wrapper_block_for_child(
+        &self,
+        child_id: EntityId,
+    ) -> Option<Entity<Block>> {
+        self.html_wrapper_children
+            .get(&child_id)
+            .map(|binding| binding.wrapper_block.clone())
     }
 }

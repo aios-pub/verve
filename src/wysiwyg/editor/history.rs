@@ -286,6 +286,7 @@ impl Editor {
                 block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.table_cells.clear();
+                self.clear_html_wrapper_children();
             }
         }
 

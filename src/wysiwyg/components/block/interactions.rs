@@ -1510,6 +1510,17 @@ impl Block {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Remember the click point so the editor can focus the wrapper child
+        // nearest the click when the wrapper's runtime is first installed.
+        self.last_click_point = Some(event.position);
+        // An HTML-wrapper container with an active child-block runtime renders
+        // its children as nested focusable blocks. Let the clicked child handle
+        // the event; the container itself is not an edit target. Without this,
+        // the container's handler would also fire (events bubble) and re-focus
+        // the container, fighting the child's focus.
+        if self.has_html_wrapper_runtime() {
+            return;
+        }
         if self.showing_rendered_image() {
             self.is_selecting = false;
             self.request_image_edit_expansion();

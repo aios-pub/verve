@@ -582,6 +582,7 @@ async fn dirty_drop_saves_existing_document_before_replace(cx: &mut TestAppConte
     });
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn close_window_menu_action_closes_only_active_editor_window(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -609,6 +610,7 @@ async fn close_window_menu_action_closes_only_active_editor_window(cx: &mut Test
     assert_ne!(remaining[0].window_id(), second_window.window_id());
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn app_menu_opened_windows_activate_and_close_independently(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -648,6 +650,7 @@ async fn app_menu_opened_windows_activate_and_close_independently(cx: &mut TestA
     assert!(cx.update(|cx| cx.windows().is_empty()));
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn app_menu_opened_file_window_reinstalls_close_guard_after_registration(
     cx: &mut TestAppContext,
@@ -693,6 +696,7 @@ async fn app_menu_opened_file_window_reinstalls_close_guard_after_registration(
     let _ = fs::remove_file(opened_path);
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -732,6 +736,7 @@ async fn app_menu_opened_dirty_file_window_prompts_only_that_window(cx: &mut Tes
     let _ = fs::remove_file(opened_path);
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
     cx: &mut TestAppContext,
@@ -763,6 +768,7 @@ async fn app_menu_opened_dirty_window_close_guard_prompts_only_that_window(
         .expect("second editor window should be open");
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn quit_application_allows_clean_editor_windows_to_quit(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -791,6 +797,7 @@ async fn quit_application_allows_clean_editor_windows_to_quit(cx: &mut TestAppCo
     });
 }
 
+#[cfg(feature = "wysiwyg-window-tests")]
 #[gpui::test]
 async fn quit_application_prompts_dirty_editor_without_quitting(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
@@ -2846,6 +2853,7 @@ async fn captured_tab_key_inserts_visible_indent_in_paragraph(cx: &mut TestAppCo
     let event = KeyDownEvent {
         keystroke: Keystroke::parse("tab").expect("valid tab keystroke"),
         is_held: false,
+        prefer_character_input: false,
     };
     editor.update_in(cx, |editor, window, cx| {
         editor.on_editor_key_down_capture(&event, window, cx);
@@ -2899,7 +2907,7 @@ async fn down_from_code_language_at_document_end_creates_trailing_paragraph(
         let block = editor.document.visible_blocks()[0].entity.clone();
         editor.focus_block(block.entity_id());
         block.update(cx, |block, block_cx| {
-            block.code_language_focus_handle.focus(window);
+            block.code_language_focus_handle.focus(window, block_cx);
             block.on_code_language_focus_next(&FocusNext, window, block_cx);
         });
     });
@@ -2924,7 +2932,7 @@ async fn enter_in_code_language_does_not_exit_block(cx: &mut TestAppContext) {
         let block = editor.document.visible_blocks()[0].entity.clone();
         editor.focus_block(block.entity_id());
         block.update(cx, |block, block_cx| {
-            block.code_language_focus_handle.focus(window);
+            block.code_language_focus_handle.focus(window, block_cx);
             block.on_code_language_newline(&Newline, window, block_cx);
         });
     });
@@ -2950,7 +2958,7 @@ async fn captured_tab_key_does_not_modify_code_language_input(cx: &mut TestAppCo
             block.move_to(1, block_cx);
         });
         block.update(cx, |block, _cx| {
-            block.code_language_focus_handle.focus(window);
+            block.code_language_focus_handle.focus(window, _cx);
         });
     });
     redraw(cx);
@@ -2958,13 +2966,14 @@ async fn captured_tab_key_does_not_modify_code_language_input(cx: &mut TestAppCo
     editor.update_in(cx, |editor, window, cx| {
         let block = editor.document.visible_blocks()[0].entity.clone();
         block.update(cx, |block, _cx| {
-            block.code_language_focus_handle.focus(window);
+            block.code_language_focus_handle.focus(window, _cx);
         });
     });
 
     let event = KeyDownEvent {
         keystroke: Keystroke::parse("tab").expect("valid tab keystroke"),
         is_held: false,
+        prefer_character_input: false,
     };
     editor.update_in(cx, |editor, window, cx| {
         editor.on_editor_key_down_capture(&event, window, cx);

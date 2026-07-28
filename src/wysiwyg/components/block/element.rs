@@ -243,7 +243,7 @@ fn build_code_text_runs(
 /// Compute byte ranges of each hard-line (`\n`-separated) segment in the
 /// visible text.  Index `i` in the returned Vec corresponds to the `i`-th
 /// WrappedLine produced by `shape_text`.
-pub(super) fn hard_line_ranges(text: &str) -> Vec<Range<usize>> {
+pub(crate) fn hard_line_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut start = 0;
     for (idx, _) in text.match_indices('\n') {
@@ -293,7 +293,7 @@ pub(super) fn wrapped_line_top(
     })
 }
 
-pub(super) fn wrapped_line_for_y(
+pub(crate) fn wrapped_line_for_y(
     lines: &[WrappedLine],
     line_height: Pixels,
     relative_y: Pixels,
@@ -1427,7 +1427,7 @@ mod tests {
         });
 
         block.update(cx, |block, _cx| {
-            block.last_layout = Some(lines.clone());
+            block.last_layout = Some(lines);
             block.last_bounds = Some(bounds);
             block.last_line_height = px(20.0);
             block.selected_range = 0..0;
@@ -1654,5 +1654,174 @@ mod tests {
         let first_height = lines[0].size(px(20.0)).height;
         assert!(first_height > px(20.0));
         assert_eq!(super::wrapped_line_top(&lines, px(20.0), 1), first_height);
+    }
+}
+
+/// A transparent element wrapper that records its own prepaint bounds into
+/// the Block's `visual_line_hits[index].bounds` slot. Wraps one rendered text
+/// line of the unfocused editable-wrapper HTML visual so the editor's
+/// first-click resolution (`Editor::resolve_wrapper_click`) can map the click
+/// point to the visual line that was hit. Mirrors [`BoundsCaptureElement`]:
+/// entity updates are only permitted during paint, so prepaint forwards the
+/// bounds to paint.
+pub struct VisualLineBoundsElement {
+    block: Entity<Block>,
+    index: usize,
+    child: AnyElement,
+}
+
+impl VisualLineBoundsElement {
+    pub fn new(block: Entity<Block>, index: usize, child: AnyElement) -> Self {
+        Self {
+            block,
+            index,
+            child,
+        }
+    }
+}
+
+impl IntoElement for VisualLineBoundsElement {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for VisualLineBoundsElement {
+    type RequestLayoutState = ();
+    type PrepaintState = Bounds<Pixels>;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let (layout_id, ()) = Element::request_layout(&mut self.child, id, inspector_id, window, cx);
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.child.prepaint(window, cx);
+        bounds
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let bounds = *prepaint;
+        let index = self.index;
+        self.block.update(cx, |block, _cx| {
+            if let Some(hit) = block.visual_line_hits.borrow_mut().get_mut(index) {
+                hit.bounds = Some(bounds);
+            }
+        });
+        self.child.paint(window, cx);
+    }
+}
+
+/// A transparent element wrapper that records its own prepaint bounds into a
+/// Block's `last_bounds` field. Used for non-text children of HTML wrappers
+/// (e.g. rendered `<table>` visuals) that don't go through BlockTextElement,
+/// so the editor's nearest-child click resolution can find them.
+pub struct BoundsCaptureElement {
+    block: Entity<Block>,
+    child: AnyElement,
+}
+
+impl BoundsCaptureElement {
+    pub fn new(block: Entity<Block>, child: AnyElement) -> Self {
+        Self { block, child }
+    }
+}
+
+impl IntoElement for BoundsCaptureElement {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for BoundsCaptureElement {
+    type RequestLayoutState = ();
+    type PrepaintState = Bounds<Pixels>;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let (layout_id, ()) = Element::request_layout(&mut self.child, id, inspector_id, window, cx);
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        // Delegate to child; framework has already set up the element offset.
+        self.child.prepaint(window, cx);
+        // Pass bounds through to paint so we can record them there (entity
+        // updates are only permitted during paint per GPUI's lifecycle).
+        bounds
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // Record bounds in window space (matching the coordinate system of
+        // BlockTextElement's text_bounds, which is also window-space).
+        // Entity updates must happen during paint, not prepaint.
+        self.block.update(cx, |block, _cx| {
+            block.last_bounds = Some(*prepaint);
+        });
+        // Delegate to child; framework has already set up the element offset.
+        self.child.paint(window, cx);
     }
 }

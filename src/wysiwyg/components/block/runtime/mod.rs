@@ -30,6 +30,9 @@ use crate::wysiwyg::components::markdown::inline::{
     InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineRenderCache, InlineScript,
     InlineSpan, InlineStyle, InlineTextTree, StyleFlag,
 };
+use crate::wysiwyg::components::markdown::html::{
+    HtmlWrapperShape, extract_editable_inline_wrapper, is_html_table_block,
+};
 use crate::wysiwyg::components::{
     TableAxisHighlight, TableAxisMarker, TableCellPosition, TableColumnAlignment, TableRuntime,
 };
@@ -125,6 +128,10 @@ pub struct Block {
     pub marked_range: Option<Range<usize>>,
     pub last_layout: Option<Vec<WrappedLine>>,
     pub last_bounds: Option<Bounds<Pixels>>,
+    /// The window-space point of the most recent mouse-down on this block.
+    /// Used by the editor to focus the wrapper child nearest the click when a
+    /// wrapper's child-block runtime is first installed.
+    pub(crate) last_click_point: Option<Point<Pixels>>,
     pub last_line_height: Pixels,
     pub render_depth: usize,
     pub quote_depth: usize,
@@ -144,6 +151,24 @@ pub struct Block {
     /// Cached projection used to show editable inline delimiters for the
     /// currently touched inline span(s).
     pub(crate) projection: Option<ExpandedInlineProjection>,
+    /// Focused-state child-block runtime for an editable HTML wrapper block
+    /// (`<div align="center">…markdown…</div>`). When present, the block
+    /// renders its inner Markdown as N independently-focusable child blocks
+    /// instead of the raw HTML tags, while `record.title` / `raw_fallback`
+    /// keep the full HTML for disk serialization. `None` unless the block is
+    /// a focused, editable wrapper in the rendered (non-source) view mode.
+    pub(crate) html_wrapper_runtime: Option<HtmlWrapperRuntime>,
+    /// When `Some(index)`, this block is a child of an HTML wrapper block,
+    /// living at position `index` in its `html_wrapper_runtime.children`.
+    /// Marks the block for wrapper-child focus routing / rendering (analogous
+    /// to `table_cell_position`).
+    pub(crate) html_wrapper_child: Option<usize>,
+    /// Per-line hit-testing metadata recorded while rendering the UNFOCUSED
+    /// editable-wrapper HTML visual (see [`VisualLineHit`]). RefCell because
+    /// the visual render path is `&self` all the way down; written during
+    /// render (push) and paint (bounds), read by the editor on the first
+    /// wrapper click.
+    pub(crate) visual_line_hits: std::cell::RefCell<Vec<VisualLineHit>>,
     /// Inputs that produced the current `projection`. When the next
     /// `sync_inline_projection_for_focus` computes the same inputs, the
     /// rebuild is skipped — saves a full O(fragments + text) walk per
@@ -208,6 +233,81 @@ pub(crate) enum CollapsedCaretAffinity {
     OuterEnd,
 }
 
+/// Focused-state runtime for an editable HTML wrapper block. Mirrors the
+/// table-cell pattern: the wrapper is a leaf in the document tree, but while
+/// focused it owns an out-of-band list of child `Entity<Block>`s — each one a
+/// normal editable block parsed from the wrapper's inner Markdown (a `# heading`,
+/// a paragraph, a `<table>`, …). Clicking focuses the child that was hit;
+/// editing a child re-serializes the whole inner Markdown and re-wraps it into
+/// the original HTML structure ([`HtmlWrapperShape::wrap`]) so the on-disk file
+/// keeps the `<div …>…</div>` shape.
+#[derive(Clone)]
+pub(crate) struct HtmlWrapperRuntime {
+    /// Child blocks parsed from the wrapper's inner Markdown, in document
+    /// order. Each child has `html_wrapper_child = Some(index)` set.
+    pub(crate) children: Vec<Entity<Block>>,
+    /// The wrapper's preserved shape (tag + attrs) used to re-wrap on edits.
+    pub(crate) shape: HtmlWrapperShape,
+}
+
+/// Leading non-text decoration of a rendered wrapper-visual line. Affects only
+/// the x-origin used when resolving a click back to a character offset.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum VisualLinePrefix {
+    /// Plain line / heading: text starts at the line's left edge.
+    None,
+    /// Blockquote line: text starts after the quote border + padding.
+    Quote,
+    /// List-item line: text starts after the rendered marker + its right
+    /// margin. Carries the exact marker string that was rendered.
+    ListMarker(SharedString),
+}
+
+/// The kind of a rendered wrapper-visual line.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum VisualLineKind {
+    /// A text line (heading/paragraph/quote/list-item/plain). `raw_text` is the
+    /// line's text AFTER block-marker stripping (ATX `#`, `> `, list marker) —
+    /// exactly what was parsed into the rendered inline tree, i.e. the display
+    /// text re-derives from it 1:1.
+    Text,
+    /// A thematic break (`---`/`***`/`___`): no text, maps to a Separator
+    /// child; only used for y-hit so the click focuses the right child.
+    Separator,
+}
+
+/// Hit-testing metadata for ONE rendered text line of the UNFOCUSED editable
+/// HTML-wrapper visual (`render_html_markdown_text`). The visual renders plain
+/// `div` rows with no text layout, so a first click on the wrapper cannot be
+/// resolved by the usual `index_for_mouse_position` path. Instead the visual
+/// records, per rendered line: which source line it came from, the text it
+/// shows, its font metrics, and (at paint time) its window-space bounds. The
+/// editor then resolves the click in the VISUAL's own coordinate space
+/// (y → line via bounds, x → char offset via a one-off re-shape) and transfers
+/// the resulting CHARACTER offset — which is font/alignment independent — onto
+/// the matching wrapper child block. See `Editor::resolve_wrapper_click`.
+#[derive(Clone, Debug)]
+pub(crate) struct VisualLineHit {
+    /// Window-space bounds of the line's row element, recorded at paint.
+    /// `None` until the line has painted at least once.
+    pub(crate) bounds: Option<Bounds<Pixels>>,
+    /// Line index within the wrapper's inner Markdown source (`split('\n')`
+    /// of `HtmlWrapperShape::inner_source`), counting blank lines.
+    pub(crate) source_line: usize,
+    /// The line text after block-marker stripping (what the inline tree was
+    /// built from). Used at click resolution to re-derive display text +
+    /// styled runs for shaping.
+    pub(crate) raw_text: SharedString,
+    /// Absolute font size the line was rendered at (headings scale up).
+    pub(crate) font_size: Pixels,
+    /// Base font weight (BOLD for headings).
+    pub(crate) font_weight: FontWeight,
+    /// Line kind (text vs. separator).
+    pub(crate) kind: VisualLineKind,
+    /// Leading decoration affecting the text's x-origin.
+    pub(crate) prefix: VisualLinePrefix,
+}
+
 impl Block {
     pub fn with_record(cx: &mut Context<Self>, record: BlockRecord) -> Self {
         let edit_mode = EditMode::for_kind(&record.kind);
@@ -231,6 +331,7 @@ impl Block {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            last_click_point: None,
             last_line_height: px(20.0),
             render_depth: 0,
             quote_depth: 0,
@@ -248,6 +349,9 @@ impl Block {
             vertical_motion_x: None,
             cursor_blink_task: None,
             projection: None,
+            html_wrapper_runtime: None,
+            html_wrapper_child: None,
+            visual_line_hits: std::cell::RefCell::new(Vec::new()),
             projection_cache_key: None,
             cached_display_text: SharedString::default(),
             collapsed_caret_affinity: CollapsedCaretAffinity::Default,
@@ -753,7 +857,104 @@ impl Block {
             .unwrap_or(&self.render_cache)
     }
 
+    /// Whether this block currently has a focused HTML-wrapper child-block
+    /// runtime. When true the block renders its inner Markdown as N child
+    /// blocks instead of the raw HTML tags.
+    pub(crate) fn has_html_wrapper_runtime(&self) -> bool {
+        self.html_wrapper_runtime.is_some()
+    }
+
+    /// Whether this HtmlBlock is an editable HTML wrapper container — a block
+    /// whose parsed HTML has an extractable wrapper shape (e.g.
+    /// `<div align="center">…</div>`). Such blocks must NEVER render as raw
+    /// source: unfocused they render the HTML visual; focused they render their
+    /// child-block runtime. Used to bypass the source-raw render guard so the
+    /// first focused frame doesn't flash raw HTML before the runtime installs.
+    pub(crate) fn is_editable_html_wrapper(&self) -> bool {
+        self.record.kind == BlockKind::HtmlBlock
+            && self
+                .record
+                .html
+                .as_ref()
+                .is_some_and(|doc| extract_editable_inline_wrapper(doc).is_some())
+    }
+
+    /// Whether this block is a child of an HTML wrapper block (set by
+    /// `set_html_wrapper_child_mode`).
+    pub(crate) fn is_html_wrapper_child(&self) -> bool {
+        self.html_wrapper_child.is_some()
+    }
+
+    /// Whether this wrapper child is a standalone `<br/>` (a line-break spacer
+    /// that should render invisibly rather than as a code block).
+    pub(crate) fn is_html_break_child(&self) -> bool {
+        self.is_html_wrapper_child()
+            && self.record.kind == BlockKind::HtmlBlock
+            && matches!(
+                self.record.raw_fallback.as_deref().unwrap_or("").trim(),
+                "<br>" | "<br/>" | "<br />"
+            )
+    }
+
+    /// Whether this wrapper child is an HTML `<table>` block (rendered as a
+    /// markdown table visual when unfocused, as an editable source code block
+    /// when focused).
+    pub(crate) fn is_html_table_child(&self) -> bool {
+        self.is_html_wrapper_child()
+            && self.record.kind == BlockKind::HtmlBlock
+            && self
+                .record
+                .html
+                .as_ref()
+                .is_some_and(|doc| is_html_table_block(doc))
+    }
+
+    /// The index of this block within its wrapper parent's children, if any.
+    pub(crate) fn html_wrapper_child_index(&self) -> Option<usize> {
+        self.html_wrapper_child
+    }
+
+    /// Marks this block as a child of an HTML wrapper at `index`. Puts it into
+    /// rich-text editing mode, EXCEPT for kinds that are inherently raw-source
+    /// (HtmlBlock/MathBlock/MermaidBlock/RawMarkdown/Comment) — those keep
+    /// their `SourceRaw` mode so a wrapper child like `<table>` edits as a
+    /// source code block. Analogous to `set_table_cell_mode`.
+    pub(crate) fn set_html_wrapper_child_mode(&mut self, index: usize) {
+        self.html_wrapper_child = Some(index);
+        if !self.record.kind.is_raw_source_block() {
+            self.edit_mode = EditMode::RenderedRich;
+        }
+        self.clear_inline_projection();
+        self.sync_render_cache();
+    }
+
+    /// Clears the wrapper-child marker (e.g. when detached from its parent).
+    pub(crate) fn clear_html_wrapper_child_mode(&mut self) {
+        if self.html_wrapper_child.is_some() {
+            self.html_wrapper_child = None;
+            self.sync_edit_mode_from_kind();
+            self.sync_render_cache();
+        }
+    }
+
+    /// Installs the focused child-block runtime (built by the editor in
+    /// `install_html_wrapper_runtime`).
+    pub(crate) fn set_html_wrapper_runtime(&mut self, runtime: HtmlWrapperRuntime) {
+        self.html_wrapper_runtime = Some(runtime);
+    }
+
+    /// Drops the focused child-block runtime. Does NOT touch `record` — the
+    /// editor syncs child markdown back into `record` before calling this.
+    pub(crate) fn clear_html_wrapper_runtime(&mut self) {
+        self.html_wrapper_runtime = None;
+    }
+
     pub(crate) fn sync_inline_projection_for_focus(&mut self, focused: bool) {
+        // NOTE: the HTML-wrapper child-block runtime is installed/torn down by
+        // the Editor on focus changes (it needs editor-level state: the
+        // `html_wrapper_children` side map + `build_root_blocks_from_markdown`).
+        // The Block only owns the runtime field; see `Editor::on_focus_change`.
+
         let supports_projection = self.edit_mode.supports_inline_projection();
         if !focused || !supports_projection {
             self.clear_inline_projection();

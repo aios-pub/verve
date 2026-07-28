@@ -225,6 +225,113 @@ impl HtmlDocument {
     }
 }
 
+/// Shape of an "editable inline-content wrapper" HTML block — a single block
+/// container (e.g. `<div align="center">…</div>`) that holds only inline
+/// content (`#text` + inline-semantic tags). For such blocks the rendered view
+/// already re-parses the inner text as Markdown; this shape lets the *focused*
+/// editing view do the same while preserving the wrapper's exact source so the
+/// on-disk file keeps the HTML structure after edits.
+///
+/// Built by [`extract_editable_inline_wrapper`]; `None` means the block is not
+/// an editable wrapper and the focused view keeps showing raw HTML source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HtmlWrapperShape {
+    /// Lowercase tag name of the wrapper (e.g. `div`).
+    tag_name: String,
+    /// Safe attributes retained from the wrapper's open tag.
+    attrs: Vec<HtmlAttr>,
+}
+
+impl HtmlWrapperShape {
+    /// Reconstructs the wrapper around `inner_markdown`, producing the exact
+    /// HTML source to store. `inner_markdown` is inserted verbatim (no escape)
+    /// because the stored form is Markdown source, matching how such blocks
+    /// already round-trip through `parse_html_document` today.
+    pub(crate) fn wrap(&self, inner_markdown: &str) -> String {
+        format!(
+            "{}{inner_markdown}{}",
+            serialize_open_tag(&self.tag_name, &self.attrs, false),
+            serialize_close_tag(&self.tag_name),
+        )
+    }
+
+    /// The inner Markdown source carried by the wrapper's children, i.e. the
+    /// concatenation of each child's `raw_source` (mirrors how the rendered
+    /// view already derives its inline source at `block/render.rs`).
+    pub(crate) fn inner_source(node: &HtmlNode) -> String {
+        node.children
+            .iter()
+            .map(|child| child.raw_source.as_str())
+            .collect()
+    }
+}
+
+/// Extracts an editable wrapper shape from a parsed HTML document, or `None`
+/// when the block is not a single safe block container.
+///
+/// Whitelist (all must hold):
+/// - `doc.is_semantic()` and exactly one top-level node;
+/// - the node is a block container (`div`/`p`/`section`/… — see
+///   [`is_editable_wrapper_tag`]);
+/// - it has no dangerous attributes (already enforced by the parser, but we
+///   double-check defensively).
+///
+/// The wrapper's children may be inline content *or* nested block elements
+/// (`<br/>`, `<table>`, `<img>`, …). When focused, the block shows the inner
+/// Markdown source (the concatenation of the children's `raw_source`) instead
+/// of the raw `<div>` tags, so README-style wrappers become editable Markdown
+/// while their HTML structure is preserved on disk via [`HtmlWrapperShape::wrap`].
+pub(crate) fn extract_editable_inline_wrapper(doc: &HtmlDocument) -> Option<HtmlWrapperShape> {
+    if !doc.is_semantic() || doc.nodes.len() != 1 {
+        return None;
+    }
+    let node = &doc.nodes[0];
+    if !is_editable_wrapper_tag(&node.tag_name) {
+        return None;
+    }
+    if has_dangerous_attrs(&node.attrs) {
+        return None;
+    }
+    Some(HtmlWrapperShape {
+        tag_name: node.tag_name.clone(),
+        attrs: node.attrs.clone(),
+    })
+}
+
+/// The inner Markdown source of an editable wrapper's single node, or `None`
+/// if the document is not an editable wrapper. Convenience wrapper around
+/// [`extract_editable_inline_wrapper`] + [`HtmlWrapperShape::inner_source`].
+pub(crate) fn editable_wrapper_inner_markdown(doc: &HtmlDocument) -> Option<String> {
+    extract_editable_inline_wrapper(doc)?;
+    // `extract_…` returning Some guarantees exactly one top-level node.
+    HtmlWrapperShape::inner_source(&doc.nodes[0]).into()
+}
+
+/// Whether a parsed HTML document is a single `<table>` element (used to render
+/// a wrapper child as a markdown table visual instead of a raw-source code
+/// block). Whitespace-only `#text` nodes around the table are ignored.
+pub(crate) fn is_html_table_block(doc: &HtmlDocument) -> bool {
+    if !doc.is_semantic() {
+        return false;
+    }
+    doc.nodes.iter().any(|node| node.tag_name == "table")
+        && doc
+            .nodes
+            .iter()
+            .all(|node| node.tag_name == "table" || node.raw_source.trim().is_empty())
+}
+
+/// Tags whose wrapper shape is exposed for Markdown-projection editing. Kept
+/// narrower than `is_block_tag`/`is_block_html_tag`: containers that commonly
+/// wrap a single paragraph of inline content. Table/details/pre/img etc. stay
+/// raw because their inner content is not Markdown prose.
+fn is_editable_wrapper_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "div" | "p" | "section" | "article" | "aside" | "header" | "footer" | "main"
+    )
+}
+
 impl HtmlCssColor {
     pub(crate) fn to_css(self) -> String {
         match self {
@@ -1929,6 +2036,134 @@ mod tests {
         let table = div.children.iter().find(|c| c.tag_name == "table").unwrap();
         let td = find_first_tag(table, "td").unwrap();
         assert!(has_only_inline_content(&td));
+    }
+
+    // --- editable wrapper extraction ----------------------------------------
+
+    #[test]
+    fn extracts_readme_div_align_wrapper() {
+        let src = "<div align=\"center\">\n\n**调试接口、排查问题。** 内置 HTTP 调试。\n\n</div>";
+        let doc = parse_html_document(src);
+        let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
+        assert_eq!(shape.tag_name, "div");
+        assert_eq!(shape.attrs.len(), 1);
+        assert_eq!(shape.attrs[0].name, "align");
+        assert_eq!(shape.attrs[0].value.as_deref(), Some("center"));
+        // Inner markdown is the concatenation of children raw_source.
+        let inner = editable_wrapper_inner_markdown(&doc).expect("inner markdown");
+        assert!(inner.contains("**调试接口、排查问题。**"));
+        assert!(inner.contains("内置 HTTP 调试。"));
+        assert!(!inner.contains("<div"));
+        // Re-wrapping reproduces the original wrapper tag + attr.
+        let wrapped = shape.wrap(&inner);
+        assert!(wrapped.starts_with("<div align=\"center\">"));
+        assert!(wrapped.ends_with("</div>"));
+        assert!(wrapped.contains("**调试接口、排查问题。**"));
+    }
+
+    #[test]
+    fn wrapper_round_trip_preserves_html_structure() {
+        let src = "<div align=\"center\">simple text</div>";
+        let doc = parse_html_document(src);
+        let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
+        let inner = editable_wrapper_inner_markdown(&doc).expect("inner markdown");
+        // Re-wrapping with the unchanged inner text reproduces the source.
+        assert_eq!(shape.wrap(&inner), src);
+    }
+
+    #[test]
+    fn wrapper_wrap_applies_edited_inner_markdown() {
+        let src = "<div align=\"center\">old</div>";
+        let doc = parse_html_document(src);
+        let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
+        assert_eq!(shape.wrap("new **bold**"), "<div align=\"center\">new **bold**</div>");
+    }
+
+    #[test]
+    fn non_wrapper_blocks_are_not_editable() {
+        // Standalone <img> → single void block, not a wrapper tag.
+        let img = parse_html_document("<img src=\"a.png\" alt=\"a\" />");
+        assert!(extract_editable_inline_wrapper(&img).is_none());
+
+        // <details> is not in the editable-wrapper whitelist even if inline-only.
+        let details = parse_html_document("<details><summary>s</summary></details>");
+        assert!(extract_editable_inline_wrapper(&details).is_none());
+
+        // Two top-level nodes → not a single wrapper.
+        let two = parse_html_document("<div>a</div><div>b</div>");
+        assert!(extract_editable_inline_wrapper(&two).is_none());
+
+        // Raw-text block (risky content) → not semantic.
+        let raw = parse_html_document("<script>alert(1)</script>");
+        assert!(extract_editable_inline_wrapper(&raw).is_none());
+    }
+
+    #[test]
+    fn wrapper_with_block_children_is_editable() {
+        // A <div> wrapping a <table> (block child) IS an editable wrapper:
+        // focused view shows the inner source (including the <table> markup)
+        // as Markdown source, and edits re-wrap into the <div>. This is what
+        // makes README-style <div align=center>…<table>…</div> editable.
+        let src = "<div align=\"center\"><table><tr><td>x</td></tr></table></div>";
+        let doc = parse_html_document(src);
+        let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
+        assert_eq!(shape.tag_name, "div");
+        let inner = editable_wrapper_inner_markdown(&doc).expect("inner markdown");
+        assert!(inner.contains("<table>"));
+        // Re-wrap produces valid HTML that re-parses to the same shape. Note
+        // html5ever normalizes tables (injects <tbody>), so the wrapped output
+        // is semantically — not byte — equal to the input; verify by round
+        // tripping it back through the parser.
+        let wrapped = shape.wrap(&inner);
+        let reparsed = parse_html_document(&wrapped);
+        assert!(reparsed.is_semantic());
+        let reshaped = extract_editable_inline_wrapper(&reparsed).expect("still a wrapper");
+        assert_eq!(reshaped.tag_name, "div");
+        // Re-wrapping is idempotent: wrapping the re-parsed inner again yields
+        // the same bytes (the normalized form is stable).
+        let re_inner = editable_wrapper_inner_markdown(&reparsed).expect("inner markdown");
+        assert_eq!(reshaped.wrap(&re_inner), wrapped);
+    }
+
+    #[test]
+    fn readme_header_div_is_editable() {
+        // The actual README header block: <div align=center> wrapping a mix of
+        // # headings, **bold**, <br/>, <table>, [link](url). Must be editable.
+        let src = "<div align=\"center\">\n\n# ⚡ Verve\n\n**基于 Rust 构建。**\n\n<br/>\n\n<table>\n  <tr>\n    <td>🦀 Rust 原生</td>\n  </tr>\n</table>\n\n[功能特性](#功能特性)\n\n</div>";
+        let doc = parse_html_document(src);
+        assert!(doc.is_semantic());
+        let shape = extract_editable_inline_wrapper(&doc).expect("README div editable");
+        assert_eq!(shape.tag_name, "div");
+        let inner = editable_wrapper_inner_markdown(&doc).expect("inner markdown");
+        // Inner Markdown source contains the headings/bold/table markup but
+        // NOT the outer <div> wrapper tags.
+        assert!(inner.contains("# ⚡ Verve"));
+        assert!(inner.contains("**基于 Rust 构建。**"));
+        assert!(inner.contains("<table>"));
+        assert!(!inner.starts_with("<div"));
+        // Re-wrap keeps the wrapper tag + align attr and stays semantic.
+        let wrapped = shape.wrap(&inner);
+        assert!(wrapped.starts_with("<div align=\"center\">"));
+        assert!(wrapped.ends_with("</div>"));
+        let reparsed = parse_html_document(&wrapped);
+        assert!(reparsed.is_semantic());
+        assert_eq!(
+            extract_editable_inline_wrapper(&reparsed)
+                .expect("still a wrapper")
+                .tag_name,
+            "div"
+        );
+    }
+
+    #[test]
+    fn wrapper_with_inline_children_is_editable() {
+        // A <p> mixing text + <strong> is inline-only → editable.
+        let src = "<p>调试接口、<strong>排查问题</strong>、查看日志。</p>";
+        let doc = parse_html_document(src);
+        let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
+        assert_eq!(shape.tag_name, "p");
+        let inner = editable_wrapper_inner_markdown(&doc).expect("inner markdown");
+        assert_eq!(shape.wrap(&inner), src);
     }
 
     fn find_first_tag<'a>(node: &'a HtmlNode, tag: &str) -> Option<&'a HtmlNode> {

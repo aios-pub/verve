@@ -8,7 +8,10 @@ use gpui::*;
 
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 
-use super::element::{BlockTextElement, CodeLanguageInputElement};
+use super::element::{
+    BlockTextElement, BoundsCaptureElement, CodeLanguageInputElement, VisualLineBoundsElement,
+};
+use super::runtime::{VisualLineHit, VisualLineKind, VisualLinePrefix};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::wysiwyg::components::{
     HtmlBoxEdges, HtmlCssColor, HtmlDocument, HtmlInlineStyle, HtmlLength, HtmlNode, HtmlNodeKind,
@@ -1219,6 +1222,12 @@ impl Block {
         let c = &theme.colors;
         let d = &theme.dimensions;
         let t = &theme.typography;
+        // Fresh visual render of an editable wrapper: drop the previous
+        // frame's per-line hit records; `render_html_markdown_text` rebuilds
+        // them for the wrapper's inline content below.
+        if self.is_editable_html_wrapper() {
+            self.visual_line_hits.borrow_mut().clear();
+        }
         if !document.is_semantic() {
             return div()
                 .w_full()
@@ -1271,8 +1280,10 @@ impl Block {
         }
 
         if node.tag_name == "#text" {
+            // `#text` children of mixed containers are not the wrapper's own
+            // inline content — never record click-hit lines for them.
             return self
-                .render_html_markdown_text(node, inherited_style, theme, cx)
+                .render_html_markdown_text(node, inherited_style, theme, false, cx)
                 .into_any_element();
         }
 
@@ -1471,6 +1482,19 @@ impl Block {
                 let mut element = if html_has_only_inline_content(node) {
                     let inline_source: String =
                         node.children.iter().map(|c| c.raw_source.as_str()).collect();
+                    // Record per-line click hits only when this inline-content
+                    // container IS the editable wrapper's own content (its
+                    // inline source equals the wrapper's inner Markdown).
+                    // Nested containers inside mixed wrappers must not record:
+                    // their line indices are relative to a different source.
+                    let record_hits = self.is_editable_html_wrapper()
+                        && self.visual_line_hits.borrow().is_empty()
+                        && self
+                            .record
+                            .html
+                            .as_ref()
+                            .and_then(crate::wysiwyg::components::markdown::html::editable_wrapper_inner_markdown)
+                            .is_some_and(|inner| inner == inline_source);
                     let inline_node = HtmlNode {
                         kind: HtmlNodeKind::InlineSemantic,
                         tag_name: "#text".into(),
@@ -1488,6 +1512,7 @@ impl Block {
                             &inline_node,
                             node_style.computed,
                             theme,
+                            record_hits,
                             cx,
                         ))
                 } else {
@@ -1529,6 +1554,7 @@ impl Block {
         node: &HtmlNode,
         inherited_style: HtmlComputedStyle,
         theme: &Theme,
+        record_hits: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let c = &theme.colors;
@@ -1547,7 +1573,7 @@ impl Block {
         // direct child of a flex container, so each line becomes its own
         // flex-row paragraph.
         let mut lines: Vec<AnyElement> = Vec::new();
-        for raw_line in text.split('\n') {
+        for (source_line, raw_line) in text.split('\n').enumerate() {
             // Skip leading/trailing blank lines (common when a <div> wraps a
             // newline-separated block) but preserve internal blank lines.
             let trimmed = raw_line.trim();
@@ -1565,39 +1591,65 @@ impl Block {
                     _ => base_size,
                 };
                 let tree = self.inline_tree_from_markdown_with_context(&heading_text);
-                lines.push(
-                    div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_wrap()
-                        .text_size(px(size))
-                        .text_color(base_color)
-                        .font_weight(FontWeight::BOLD)
-                        .mt(px(if lines.is_empty() { 0.0 } else { d.block_gap * 0.5 }))
-                        .children(self.render_inline_tree_children(
-                            &tree,
-                            theme,
-                            base_color,
-                            size,
-                            FontWeight::BOLD,
-                            cx,
-                        ))
-                        .into_any_element(),
+                let element = div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_wrap()
+                    .text_size(px(size))
+                    .text_color(base_color)
+                    .font_weight(FontWeight::BOLD)
+                    .mt(px(if lines.is_empty() { 0.0 } else { d.block_gap * 0.5 }))
+                    .children(self.render_inline_tree_children(
+                        &tree,
+                        theme,
+                        base_color,
+                        size,
+                        FontWeight::BOLD,
+                        cx,
+                    ))
+                    .into_any_element();
+                self.push_html_markdown_visual_line(
+                    &mut lines,
+                    record_hits,
+                    VisualLineHit {
+                        bounds: None,
+                        source_line,
+                        raw_text: SharedString::from(heading_text),
+                        font_size: px(size),
+                        font_weight: FontWeight::BOLD,
+                        kind: VisualLineKind::Text,
+                        prefix: VisualLinePrefix::None,
+                    },
+                    element,
+                    cx,
                 );
                 continue;
             }
 
             // 2) Thematic break (`---`, `***`, `___`).
             if BlockKind::parse_separator_line(trimmed) {
-                lines.push(
-                    div()
-                        .w_full()
-                        .h(px(d.separator_thickness))
-                        .my(px(d.separator_margin_y))
-                        .bg(c.separator_color)
-                        .rounded(px(999.0))
-                        .into_any_element(),
+                let element = div()
+                    .w_full()
+                    .h(px(d.separator_thickness))
+                    .my(px(d.separator_margin_y))
+                    .bg(c.separator_color)
+                    .rounded(px(999.0))
+                    .into_any_element();
+                self.push_html_markdown_visual_line(
+                    &mut lines,
+                    record_hits,
+                    VisualLineHit {
+                        bounds: None,
+                        source_line,
+                        raw_text: SharedString::default(),
+                        font_size: px(base_size),
+                        font_weight: FontWeight::NORMAL,
+                        kind: VisualLineKind::Separator,
+                        prefix: VisualLinePrefix::None,
+                    },
+                    element,
+                    cx,
                 );
                 continue;
             }
@@ -1605,29 +1657,42 @@ impl Block {
             // 3) Single-line blockquote: `> text`.
             if let Some(stripped) = strip_one_blockquote_prefix(raw_line) {
                 let tree = self.inline_tree_from_markdown_with_context(&stripped);
-                lines.push(
-                    div()
-                        .w_full()
-                        .pl(px(d.quote_padding_left))
-                        .border_l(px(d.quote_border_width))
-                        .border_color(c.border_quote)
-                        .text_size(px(base_size))
-                        .text_color(c.text_quote)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .min_w(px(0.0))
-                                .children(self.render_inline_tree_children(
-                                    &tree,
-                                    theme,
-                                    c.text_quote,
-                                    base_size,
-                                    FontWeight::NORMAL,
-                                    cx,
-                                )),
-                        )
-                        .into_any_element(),
+                let element = div()
+                    .w_full()
+                    .pl(px(d.quote_padding_left))
+                    .border_l(px(d.quote_border_width))
+                    .border_color(c.border_quote)
+                    .text_size(px(base_size))
+                    .text_color(c.text_quote)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .min_w(px(0.0))
+                            .children(self.render_inline_tree_children(
+                                &tree,
+                                theme,
+                                c.text_quote,
+                                base_size,
+                                FontWeight::NORMAL,
+                                cx,
+                            )),
+                    )
+                    .into_any_element();
+                self.push_html_markdown_visual_line(
+                    &mut lines,
+                    record_hits,
+                    VisualLineHit {
+                        bounds: None,
+                        source_line,
+                        raw_text: SharedString::from(stripped),
+                        font_size: px(base_size),
+                        font_weight: FontWeight::NORMAL,
+                        kind: VisualLineKind::Text,
+                        prefix: VisualLinePrefix::Quote,
+                    },
+                    element,
+                    cx,
                 );
                 continue;
             }
@@ -1635,38 +1700,14 @@ impl Block {
             // 4) Single-line list item: `- `, `* `, `+ `, `1. `, `2) `.
             if let Some((marker, item_text)) = parse_inline_list_item(raw_line) {
                 let tree = self.inline_tree_from_markdown_with_context(&item_text);
-                lines.push(
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_wrap()
-                        .gap_0()
-                        .text_size(px(base_size))
-                        .text_color(base_color)
-                        .child(div().mr(px(6.0)).child(SharedString::from(marker)))
-                        .children(self.render_inline_tree_children(
-                            &tree,
-                            theme,
-                            base_color,
-                            base_size,
-                            FontWeight::NORMAL,
-                            cx,
-                        ))
-                        .into_any_element(),
-                );
-                continue;
-            }
-
-            // 5) Default: parse the line as inline Markdown and wrap it.
-            let tree = self.inline_tree_from_markdown_with_context(raw_line);
-            lines.push(
-                div()
+                let element = div()
                     .w_full()
-                    .min_w(px(0.0))
                     .flex()
                     .flex_wrap()
+                    .gap_0()
                     .text_size(px(base_size))
                     .text_color(base_color)
+                    .child(div().mr(px(6.0)).child(SharedString::from(marker.clone())))
                     .children(self.render_inline_tree_children(
                         &tree,
                         theme,
@@ -1675,7 +1716,57 @@ impl Block {
                         FontWeight::NORMAL,
                         cx,
                     ))
-                    .into_any_element(),
+                    .into_any_element();
+                self.push_html_markdown_visual_line(
+                    &mut lines,
+                    record_hits,
+                    VisualLineHit {
+                        bounds: None,
+                        source_line,
+                        raw_text: SharedString::from(item_text),
+                        font_size: px(base_size),
+                        font_weight: FontWeight::NORMAL,
+                        kind: VisualLineKind::Text,
+                        prefix: VisualLinePrefix::ListMarker(SharedString::from(marker)),
+                    },
+                    element,
+                    cx,
+                );
+                continue;
+            }
+
+            // 5) Default: parse the line as inline Markdown and wrap it.
+            let tree = self.inline_tree_from_markdown_with_context(raw_line);
+            let element = div()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .flex_wrap()
+                .text_size(px(base_size))
+                .text_color(base_color)
+                .children(self.render_inline_tree_children(
+                    &tree,
+                    theme,
+                    base_color,
+                    base_size,
+                    FontWeight::NORMAL,
+                    cx,
+                ))
+                .into_any_element();
+            self.push_html_markdown_visual_line(
+                &mut lines,
+                record_hits,
+                VisualLineHit {
+                    bounds: None,
+                    source_line,
+                    raw_text: SharedString::from(raw_line.to_string()),
+                    font_size: px(base_size),
+                    font_weight: FontWeight::NORMAL,
+                    kind: VisualLineKind::Text,
+                    prefix: VisualLinePrefix::None,
+                },
+                element,
+                cx,
             );
         }
 
@@ -1694,6 +1785,36 @@ impl Block {
             .text_size(px(base_size))
             .text_color(base_color)
             .children(lines)
+    }
+
+    /// Pushes one rendered line of [`Self::render_html_markdown_text`]. When
+    /// `record_hits` is set (the line belongs to an editable wrapper's own
+    /// inline content), records the line's [`VisualLineHit`] metadata and
+    /// wraps the element in a [`VisualLineBoundsElement`] so its window-space
+    /// bounds are captured at paint. The editor reads these records to
+    /// resolve the first click on the wrapper to a precise child caret (see
+    /// `Editor::resolve_wrapper_click`).
+    fn push_html_markdown_visual_line(
+        &self,
+        lines: &mut Vec<AnyElement>,
+        record_hits: bool,
+        hit: VisualLineHit,
+        element: AnyElement,
+        cx: &mut Context<Self>,
+    ) {
+        if record_hits {
+            let index = {
+                let mut hits = self.visual_line_hits.borrow_mut();
+                let index = hits.len();
+                hits.push(hit);
+                index
+            };
+            lines.push(
+                VisualLineBoundsElement::new(cx.entity(), index, element).into_any_element(),
+            );
+        } else {
+            lines.push(element);
+        }
     }
 
     fn render_html_inline_container(
@@ -2136,8 +2257,85 @@ impl Render for Block {
                 .into_any_element();
         }
 
-        // Source-mode rendering: raw text with no formatting.
+        // An HTML-wrapper child that is itself an HtmlBlock (e.g. a `<table>`,
+        // `<img>`, `<details>` parsed from the wrapper's inner Markdown).
+        //
+        // - A standalone `<br/>` renders as an invisible vertical spacer (the
+        //   user should never see the literal `<br/>` tag).
+        // - A `<table>` renders as a markdown table visual when unfocused
+        //   (reusing the HTML table renderer); when focused it shows the raw
+        //   `<table>` source as an editable code block.
+        // - Any other HtmlBlock child (`<img>`, `<details>`, …) renders as a
+        //   source code block.
+        if self.is_html_wrapper_child() && self.kind() == BlockKind::HtmlBlock {
+            if self.is_html_break_child() {
+                return div()
+                    .id(block_id.clone())
+                    .h(px(d.block_gap * 0.6))
+                    .into_any_element();
+            }
+            if !focused && self.is_html_table_child() {
+                let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
+                    crate::wysiwyg::components::parse_html_document(
+                        self.record
+                            .raw_fallback
+                            .as_deref()
+                            .unwrap_or_else(|| self.display_text()),
+                    )
+                });
+                let table_base = self.render_shell(
+                    block_id.clone(),
+                    false,
+                    CursorStyle::IBeam,
+                    d.block_padding_x,
+                    d.block_padding_x,
+                    d,
+                    cx,
+                )
+                .text_size(px(t.text_size))
+                .text_color(c.text_default)
+                .line_height(rems(t.text_line_height))
+                .child(self.render_html_document(&html, &theme, cx))
+                .into_any_element();
+                // Wrap in BoundsCaptureElement so the table visual's bounds are
+                // recorded; the editor uses last_bounds to resolve the nearest
+                // child on the first wrapper click.
+                return BoundsCaptureElement::new(cx.entity(), table_base).into_any_element();
+            }
+            if focused && self.cursor_blink_task.is_none() {
+                self.start_cursor_blink(cx);
+            } else if !focused && self.cursor_blink_task.is_some() {
+                self.cursor_blink_task = None;
+            }
+            let code_base = self
+                .render_shell(
+                    block_id.clone(),
+                    true,
+                    CursorStyle::IBeam,
+                    d.block_padding_x,
+                    d.block_padding_x,
+                    d,
+                    cx,
+                )
+                .text_size(px(t.code_size))
+                .text_color(c.text_default)
+                .line_height(rems(t.text_line_height));
+            let code_base = if focused {
+                code_base.bg(c.source_mode_block_bg).rounded_sm()
+            } else {
+                code_base.bg(c.code_bg).rounded(px(d.code_bg_radius))
+            };
+            return code_base
+                .child(BlockTextElement::new(cx.entity(), is_placeholder))
+                .into_any_element();
+        }
+
+        // Source-mode rendering: raw text with no formatting. An editable
+        // HTML wrapper container NEVER takes this path (it would flash raw
+        // HTML on the first focused frame); it renders its HTML visual or, when
+        // focused, its child-block runtime (see the HtmlBlock arm below).
         if self.is_source_raw_mode()
+            && !self.is_editable_html_wrapper()
             && (focused
                 || !matches!(
                     self.kind(),
@@ -3250,20 +3448,37 @@ impl Render for Block {
                 }
             }
             BlockKind::HtmlBlock => {
-                let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
-                    crate::wysiwyg::components::parse_html_document(
-                        self.record
-                            .raw_fallback
-                            .as_deref()
-                            .unwrap_or_else(|| self.display_text()),
-                    )
-                });
-                focused_base
-                    .text_size(px(t.text_size))
-                    .text_color(c.text_default)
-                    .line_height(rems(t.text_line_height))
-                    .child(self.render_html_document(&html, &theme, cx))
-                    .into_any_element()
+                // Focused editable-wrapper HtmlBlock: render the inner Markdown
+                // as N independently-focusable child blocks (each child renders
+                // itself via its own `Render` impl, just like a normal block).
+                // Clicking a child focuses it directly; the on-disk HTML
+                // structure is preserved by the editor's sync-on-change
+                // write-back (see `sync_html_wrapper_record_from_runtime`).
+                if let Some(runtime) = self.html_wrapper_runtime.clone() {
+                    focused_base
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(d.block_gap * 0.4))
+                        .children(runtime.children)
+                        .into_any_element()
+                } else {
+                    let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
+                        crate::wysiwyg::components::parse_html_document(
+                            self.record
+                                .raw_fallback
+                                .as_deref()
+                                .unwrap_or_else(|| self.display_text()),
+                        )
+                    });
+                    focused_base
+                        .text_size(px(t.text_size))
+                        .text_color(c.text_default)
+                        .line_height(rems(t.text_line_height))
+                        .child(self.render_html_document(&html, &theme, cx))
+                        .into_any_element()
+                }
             }
             BlockKind::MathBlock => {
                 if !focused {
@@ -3637,7 +3852,7 @@ mod tests {
 
         cx.update(|window, cx| {
             block.update(cx, |block, _cx| {
-                block.focus_handle.focus(window);
+                block.focus_handle.focus(window, _cx);
             });
             window.draw(cx).clear();
         });

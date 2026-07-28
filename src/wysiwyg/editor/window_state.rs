@@ -297,6 +297,7 @@ impl Editor {
                 self.document.replace_roots(vec![block], cx);
                 self.view_mode = ViewMode::Source;
                 self.table_cells.clear();
+                self.clear_html_wrapper_children();
             }
             ViewMode::Source => {
                 let source = self.document.raw_source_text(cx);
@@ -307,6 +308,7 @@ impl Editor {
                 self.document.replace_roots(roots, cx);
                 self.view_mode = ViewMode::Rendered;
                 self.rebuild_table_runtimes(cx);
+                self.clear_html_wrapper_children();
                 self.rebuild_image_runtimes(cx);
             }
         }

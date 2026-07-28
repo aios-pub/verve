@@ -17,11 +17,15 @@ json:
   title: JSON 格式化工具
   input_ph: 在此粘贴原始 JSON 字符串...
   format_btn: 格式化
+  compact_btn: 精简
+  compact_on: 已精简：每个数组仅保留首项
+  compact_off: 已取消精简
   expand_all: 全部展开
   collapse_all: 全部折叠
   copy_btn: 复制
   invalid_json: JSON 格式无效
   copy_success: 已复制到剪贴板
+  parsing: 正在解析 JSON…
 
 pdf:
   title: PDF 编辑器

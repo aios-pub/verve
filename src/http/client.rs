@@ -45,16 +45,13 @@ pub fn prepare(
         }
     }
     let mut url = super::variable::substitute(raw_url, &url_vars);
-    // Auto-fix the URL: strip redundant leading slashes and prepend a default
-    // protocol if the user omitted it (e.g. "www.baidu.com" → "http://www.baidu.com").
-    url = normalize_url(&url, method);
 
-    // If the URL is a relative path (doesn't start with http/https), try to
-    // prepend the folder's base_url. The caller passes the folder chain via
-    // the `base_url` parameter.
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        // `base_url` is resolved by the caller (request_panel) from the folder chain.
-        // We pass it as a special variable "__folder_base_url__".
+    // If the URL is a relative path (no scheme), prepend the folder/request
+    // base_url resolved by the caller (request_panel) and stashed in the
+    // "__folder_base_url__" variable. This MUST run before normalize_url,
+    // which would otherwise turn "/api/users" into "http://api/users" and
+    // mask the relative-path case so the base_url never gets applied.
+    if !url.contains("://") {
         if let Some(base) = url_vars.get("__folder_base_url__") {
             if !base.is_empty() {
                 let base = base.trim_end_matches('/');
@@ -63,6 +60,12 @@ pub fn prepare(
             }
         }
     }
+
+    // Auto-fix the URL: strip redundant leading slashes and prepend a default
+    // protocol if the user omitted it (e.g. "www.baidu.com" → "http://www.baidu.com").
+    // By this point a relative path has already been joined onto the base_url,
+    // so only truly scheme-less hosts (or the no-base-url case) get a default scheme.
+    url = normalize_url(&url, method);
 
     // Attach enabled query params (after substitution) to the URL.
     let mut url = if params.iter().any(|p| p.enabled && !p.is_empty()) {

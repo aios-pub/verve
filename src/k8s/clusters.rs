@@ -534,24 +534,23 @@ pub fn write_verve_kubeconfig(clusters: &[ManualCluster]) {
         UserEntry,
     };
 
-    let mut cfg = load_verve_kubeconfig();
-    // Remove all entries that originated from manual clusters (we'll re-add them).
-    // Context names match cluster display names; clusters are "{name}-cluster", users "{name}-user".
-    let manual_ctx_names: std::collections::HashSet<&str> =
-        clusters.iter().map(|c| c.name.as_str()).collect();
-    let manual_cluster_names: std::collections::HashSet<String> = clusters
-        .iter()
-        .map(|c| format!("{}-cluster", c.name))
-        .collect();
-    let manual_user_names: std::collections::HashSet<String> = clusters
-        .iter()
-        .map(|c| format!("{}-user", c.name))
-        .collect();
-    cfg.clusters
-        .retain(|c| !manual_cluster_names.contains(&c.name));
-    cfg.contexts
-        .retain(|c| !manual_ctx_names.contains(c.name.as_str()));
-    cfg.users.retain(|u| !manual_user_names.contains(&u.name));
+    // The Verve-managed kubeconfig is a DERIVED artifact: every cluster /
+    // context / user entry in it is generated from the manual-cluster index, so
+    // we rebuild it from scratch each time and only carry over `current_context`.
+    //
+    // Rebuilding from scratch (rather than patching the existing file) is
+    // essential: a name-based "remove matching entries, re-add" approach cannot
+    // clean up entries left behind by a renamed or deleted cluster (their old
+    // names no longer match the current index), so they'd accumulate forever.
+    // That drift is exactly what made the K8s "刷新" button look like a no-op
+    // and hid the edit/delete buttons (the UI matches contexts to clusters by
+    // name, and stale context names never matched any cluster).
+    let mut cfg = KubeConfig::default();
+    let prev = load_verve_kubeconfig();
+    // Preserve the user's context selection across regenerations.
+    if !prev.current_context.is_empty() {
+        cfg.current_context = prev.current_context;
+    }
 
     for mc in clusters {
         let cluster_name = format!("{}-cluster", mc.name);

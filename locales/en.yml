@@ -17,11 +17,15 @@ json:
   title: JSON Formatter
   input_ph: Paste raw JSON string here...
   format_btn: Format
+  compact_btn: Compact
+  compact_on: "Compacted: each array keeps only its first item"
+  compact_off: Compact mode off
   expand_all: Expand All
   collapse_all: Collapse All
   copy_btn: Copy
   invalid_json: Invalid JSON
   copy_success: Copied to clipboard
+  parsing: Parsing JSON…
 
 pdf:
   title: PDF Editor

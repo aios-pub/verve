@@ -163,13 +163,139 @@ impl Editor {
     }
 
     pub(super) fn on_cut_capture(&mut self, _: &Cut, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(markdown) = self.cross_block_selected_markdown(cx) else {
-            cx.propagate();
+        if let Some(markdown) = self.cross_block_selected_markdown(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(markdown));
+            self.delete_cross_block_selection(cx);
+            cx.stop_propagation();
             return;
+        }
+        // No cross-block selection: cut the whole focused block when the caret
+        // has no selection in it either (VSCode/Notion "cut line" behavior).
+        // Falls through to block-level on_cut when there is an in-block range.
+        if self.cut_focused_block_if_caret(cx) {
+            cx.stop_propagation();
+            return;
+        }
+        cx.propagate();
+    }
+
+    /// Cmd+X with no selection cuts the entire focused block (mirrors the
+    /// `RequestDelete` handler in events.rs: delete the block, adopt its
+    /// children, refocus a neighbor, and keep the document non-empty). The
+    /// block's full Markdown is written to the clipboard first.
+    ///
+    /// Returns false (and leaves the Cut action to propagate) when there is no
+    /// focused document-level block — e.g. the caret is inside a table cell or
+    /// an HTML wrapper child, where cutting the "row" must not nuke the whole
+    /// table/HTML block — or when the focused block has an active in-block or
+    /// cross-block selection, which block-level `on_cut` handles.
+    fn cut_focused_block_if_caret(&mut self, cx: &mut Context<Self>) -> bool {
+        // Resolve the focused block. Only document-level blocks (roots / list /
+        // quote children in the visible snapshot) are eligible: table cells and
+        // HTML wrapper children resolve via `table_cells`/`html_wrapper_children`
+        // instead, so `block_entity_by_id` returns None for them and we bail.
+        let Some(entity_id) = self.active_entity_id else {
+            return false;
         };
+        let Some(block) = self.document.block_entity_by_id(entity_id) else {
+            return false;
+        };
+
+        // Bail if there is an active selection (block-level on_cut handles it).
+        let has_selection = {
+            let b = block.read(cx);
+            !b.selected_range.is_empty() || b.editor_selection_range.is_some()
+        };
+        if has_selection {
+            return false;
+        }
+
+        // Serialize the whole block to the clipboard. markdown_chunk_for_block
+        // with full_block=true covers every kind (paragraphs, headings, list
+        // items, tables, code fences, ...), matching what copy/cross-block-cut
+        // produce for the same block.
+        let source = self.current_document_source(cx);
+        let mappings = self.source_mapping_by_entity_id(cx);
+        let markdown = self.markdown_chunk_for_block(&block, 0..0, true, &source, &mappings, cx);
         cx.write_to_clipboard(ClipboardItem::new_string(markdown));
-        self.delete_cross_block_selection(cx);
-        cx.stop_propagation();
+
+        let visible_before = self.document.flatten_visible_blocks();
+        let current_visible_index = self
+            .document
+            .visible_index_for_entity_id(entity_id)
+            .unwrap_or(0);
+        let is_last_visible_leaf =
+            visible_before.len() == 1 && block.read(cx).children.is_empty();
+
+        // Empty-document guard: never delete the only block. Mirror RequestDelete
+        // by downgrading it to an empty paragraph (content already copied above).
+        if is_last_visible_leaf {
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            block.update(cx, |block, cx| {
+                // Clear the title first, then convert to paragraph: convert_to_paragraph
+                // re-syncs the render cache via mark_changed, picking up the now-empty title.
+                block.record.set_title(
+                    crate::wysiwyg::components::markdown::inline::InlineTextTree::plain(
+                        String::new(),
+                    ),
+                );
+                block.convert_to_paragraph(cx);
+                block.selected_range = 0..0;
+                block.selection_reversed = false;
+                block.marked_range = None;
+                block.vertical_motion_x = None;
+            });
+            self.focus_block(block.entity_id());
+            self.mark_dirty(cx);
+            self.finalize_pending_undo_capture(cx);
+            cx.notify();
+            return true;
+        }
+
+        let quote_related = self.block_is_quote_structure_related(&block, cx);
+        self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+
+        let visible_before_ids = visible_before
+            .iter()
+            .map(|visible| visible.entity.entity_id())
+            .collect::<Vec<_>>();
+        let focus_candidate = if current_visible_index > 0 {
+            Some(visible_before_ids[current_visible_index - 1])
+        } else {
+            visible_before_ids.get(current_visible_index + 1).copied()
+        };
+
+        let adopted_children = super::tree::DocumentTree::take_children(&block, cx);
+        let removed = self.document.with_structure_mutation(cx, |document, cx| {
+            let (_, location) = document.remove_block_by_id_raw(block.entity_id(), cx)?;
+            if !adopted_children.is_empty() {
+                document.insert_blocks_at_raw(
+                    location.parent.clone(),
+                    location.index,
+                    adopted_children.clone(),
+                    cx,
+                );
+            }
+            Some(location)
+        });
+
+        if removed.is_none() {
+            return false;
+        }
+
+        if let Some(focus_id) = focus_candidate {
+            self.focus_block(focus_id);
+        } else if let Some(first_root) = self.document.first_root() {
+            self.focus_block(first_root.entity_id());
+        }
+
+        if quote_related {
+            self.normalize_rendered_quote_structure(cx);
+        }
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        cx.notify();
+        true
     }
 
     pub(super) fn on_delete_capture(
@@ -1170,6 +1296,104 @@ mod tests {
                 Some("pha\n\nbeta\n\nga")
             );
         });
+        cx.quit();
+    }
+
+    #[test]
+    fn cut_with_no_selection_removes_the_focused_block_and_undo_restores() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let original = "alpha\n\nbeta\n\ngamma";
+        let (editor, cx) = cx.add_window_view({
+            let original = original.to_string();
+            move |_window, cx| Editor::from_markdown(cx, original.clone(), None)
+        });
+        redraw(cx);
+
+        // Focus the middle block ("beta") with a collapsed caret (no selection).
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 3, "alpha / beta / gamma");
+            let beta = visible[1].entity.clone();
+            beta.update(cx, |block, _cx| {
+                block.selected_range = 0..0;
+                block.editor_selection_range = None;
+            });
+            editor.clear_cross_block_selection(cx);
+            editor.focus_block(beta.entity_id());
+        });
+        redraw(cx);
+
+        cx.dispatch_action(Cut);
+        redraw(cx);
+
+        // The whole "beta" block is on the clipboard; the document drops it.
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                .unwrap_or(""),
+            "beta"
+        );
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.document.markdown_text(cx)),
+            "alpha\n\ngamma"
+        );
+
+        // Undo restores the block.
+        cx.dispatch_action(Undo);
+        redraw(cx);
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.document.markdown_text(cx)),
+            original
+        );
+        cx.quit();
+    }
+
+    #[test]
+    fn cut_with_no_selection_keeps_one_empty_block_when_document_has_a_single_block() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "only line".to_string(), None)
+        });
+        redraw(cx);
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            let block = visible[0].entity.clone();
+            block.update(cx, |block, _cx| {
+                block.selected_range = 0..0;
+                block.editor_selection_range = None;
+            });
+            editor.clear_cross_block_selection(cx);
+            editor.focus_block(block.entity_id());
+        });
+        redraw(cx);
+
+        cx.dispatch_action(Cut);
+        redraw(cx);
+
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                .unwrap_or(""),
+            "only line"
+        );
+        // The document never goes empty: the sole block is downgraded to a
+        // blank paragraph.
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.document.markdown_text(cx)),
+            ""
+        );
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor
+                .document
+                .visible_blocks()
+                .len()),
+            1
+        );
         cx.quit();
     }
 

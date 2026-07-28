@@ -124,7 +124,11 @@ impl Editor {
         blocks
     }
 
-    fn block_is_quote_structure_related(&self, block: &Entity<super::Block>, cx: &App) -> bool {
+    pub(super) fn block_is_quote_structure_related(
+        &self,
+        block: &Entity<super::Block>,
+        cx: &App,
+    ) -> bool {
         if self.view_mode != super::ViewMode::Rendered {
             return false;
         }

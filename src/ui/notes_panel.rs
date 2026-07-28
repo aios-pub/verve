@@ -307,7 +307,7 @@ impl NotesPanel {
         }));
     }
 
-    fn save_current(&mut self, cx: &mut Context<Self>) {
+    pub fn save_current(&mut self, cx: &mut Context<Self>) {
         let editor_val = self.editor.read(cx).markdown(cx);
         if let Some(active_id) = self.store.active_note.clone() {
             notes::update_note_content(&mut self.store, &active_id, editor_val);

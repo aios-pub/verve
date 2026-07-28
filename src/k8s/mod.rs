@@ -26,7 +26,7 @@ pub use clusters::{
 };
 pub use config::{
     Cluster, Context as KubeContext, KubeConfig, NamedCluster, NamedContext, NamedUser, UserEntry,
-    kubeconfig_path, load_default, load_merged,
+    kubeconfig_path, load_default, load_merged, reload_merged_kubeconfig,
 };
 pub use kubectl::{
     ContainerStatus, ExecSession, LogStream, Pod, PodError, PodMeta, PodStatus, PortForwardHandle,

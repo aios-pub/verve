@@ -180,6 +180,36 @@ pub fn project_to_apipost(project: &Project) -> serde_json::Result<String> {
     serde_json::to_string_pretty(&doc)
 }
 
+/// Find the server URL for an environment.
+///
+/// A "server" is any environment variable whose value looks like a base URL
+/// (starts with `http://` or `https://`). This includes the legacy manually
+/// named `baseUrl`/`base_url` variables as well as imported servers whose
+/// variable key is the server's display name (e.g. `默认服务`, `user-center`).
+/// Returns the first match.
+fn env_server_url(env: &crate::state::models::Environment) -> Option<String> {
+    env.variables.iter().find_map(|v| {
+        if !v.enabled {
+            return None;
+        }
+        let val = v.value.trim();
+        // Legacy names kept for back-compat with older project files.
+        let is_legacy_name = v
+            .key
+            .eq_ignore_ascii_case("baseurl")
+            || v.key.eq_ignore_ascii_case("base_url");
+        // Imported servers carry their display name as the key; we can't list
+        // them by name, so detect by value (same heuristic the request-panel
+        // base-URL dropdown uses).
+        let is_url_value = val.starts_with("http://") || val.starts_with("https://");
+        if (is_legacy_name || is_url_value) && !val.is_empty() {
+            Some(v.value.clone())
+        } else {
+            None
+        }
+    })
+}
+
 /// Build the postman JSON document (`serde_json::Value`) from a Verve project.
 fn build_postman_doc(project: &Project) -> serde_json::Value {
     use serde_json::{Map, json};
@@ -191,11 +221,18 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
         .enumerate()
         .map(|(i, env)| {
             let mut vars = Map::new();
-            // Find the baseUrl server URI (pull from variables named "baseUrl" or
-            // "server_1"; skip it from env_var_list so it lives in server_list).
+            // Pull the server URI out into server_list, leaving the rest of the
+            // env vars in env_var_list. A "server" is any variable whose value
+            // is an http(s) URL OR is named baseUrl/base_url (legacy).
             let mut server_uri = String::new();
             for v in &env.variables {
-                if v.key == "baseUrl" || v.key == "server_1" {
+                let is_legacy_name = v
+                    .key
+                    .eq_ignore_ascii_case("baseurl")
+                    || v.key.eq_ignore_ascii_case("base_url");
+                let val = v.value.trim();
+                let is_url_value = val.starts_with("http://") || val.starts_with("https://");
+                if server_uri.is_empty() && (is_legacy_name || is_url_value) && !val.is_empty() {
                     server_uri = v.value.clone();
                 } else {
                     vars.insert(v.key.clone(), json!(v.value));
@@ -273,10 +310,18 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
 fn folder_to_postman_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde_json::Value>) {
     let folder_id = format!("folder_{}", &folder.id[..8.min(folder.id.len())]);
     // Map folder.base_url → server_id:
-    // - Some("{{baseUrl}}") → server_id "1" (uses default server)
-    // - None or empty → server_id "0" (inherit from parent)
+    // - Some("{{<server name>}}") (any server placeholder) → server_id "1"
+    //   (the single default server we emit in `global.servers`).
+    // - None / empty / non-placeholder → server_id "0" (inherit from parent).
     let server_id = match &folder.base_url {
-        Some(url) if url.contains("baseUrl") || url.contains("server_1") => "1",
+        Some(url) => {
+            let t = url.trim();
+            if t.starts_with("{{") && t.ends_with("}}") && t.len() > 4 {
+                "1"
+            } else {
+                "0"
+            }
+        }
         _ => "0",
     };
     out.push(json!({
@@ -496,29 +541,27 @@ pub fn project_to_openapi(project: &Project) -> serde_json::Result<String> {
 fn build_openapi_doc(project: &Project) -> serde_json::Value {
     use serde_json::{Map, Value};
 
-    // -- servers from first environment's baseUrl-ish variable --
+    // -- servers from the active environment's server URL --
+    // A "server" is any env var holding an http(s) URL (covers both legacy
+    // `baseUrl` variables and imported servers keyed by display name).
     let mut servers = Vec::new();
     if let Some(env) = project
         .active_environment
         .as_ref()
         .and_then(|id| project.environments.iter().find(|e| &e.id == id))
     {
-        for v in &env.variables {
-            if v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url") {
-                if !v.value.trim().is_empty() {
-                    servers.push(json!({ "url": v.value, "description": env.name }));
-                }
+        if let Some(url) = env_server_url(env) {
+            if !url.trim().is_empty() {
+                servers.push(json!({ "url": url, "description": env.name }));
             }
         }
     }
     if servers.is_empty() {
-        // Fallback: scan any env for a baseUrl variable.
+        // Fallback: scan all environments.
         for env in &project.environments {
-            for v in &env.variables {
-                if (v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url"))
-                    && !v.value.trim().is_empty()
-                {
-                    servers.push(json!({ "url": v.value, "description": env.name }));
+            if let Some(url) = env_server_url(env) {
+                if !url.trim().is_empty() {
+                    servers.push(json!({ "url": url, "description": env.name }));
                 }
             }
         }
@@ -1079,7 +1122,7 @@ pub fn project_to_swagger(project: &Project) -> serde_json::Result<String> {
 fn build_swagger_doc(project: &Project) -> serde_json::Value {
     use serde_json::{Map, Value};
 
-    // -- servers: extract host/basePath/schemes from baseUrl --
+    // -- servers: extract host/basePath/schemes from the server URL --
     let mut host = String::new();
     let mut base_path = "/".to_string();
     let mut schemes = vec!["https".to_string()];
@@ -1089,19 +1132,15 @@ fn build_swagger_doc(project: &Project) -> serde_json::Value {
         .as_ref()
         .and_then(|id| project.environments.iter().find(|e| &e.id == id))
     {
-        for v in &env.variables {
-            if v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url") {
-                parse_swagger_url(&v.value, &mut host, &mut base_path, &mut schemes);
-            }
+        if let Some(url) = env_server_url(env) {
+            parse_swagger_url(&url, &mut host, &mut base_path, &mut schemes);
         }
     }
     if host.is_empty() {
         for env in &project.environments {
-            for v in &env.variables {
-                if (v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url"))
-                    && !v.value.trim().is_empty()
-                {
-                    parse_swagger_url(&v.value, &mut host, &mut base_path, &mut schemes);
+            if let Some(url) = env_server_url(env) {
+                if !url.trim().is_empty() {
+                    parse_swagger_url(&url, &mut host, &mut base_path, &mut schemes);
                 }
             }
         }
@@ -1407,10 +1446,18 @@ mod tests {
         assert_eq!(reimported.name, "测试项目");
         assert_eq!(reimported.description, "项目描述");
 
-        // Environments preserved.
+        // Environments preserved. The exported `baseUrl` server URL is moved
+        // into `global.servers` / `server_list` on export, so on re-import it
+        // comes back keyed by the server's display name ("默认服务"), not the
+        // legacy "baseUrl" variable name.
         assert_eq!(reimported.environments.len(), 1);
         assert_eq!(reimported.environments[0].name, "测试环境");
-        assert_eq!(reimported.environments[0].variables[0].key, "baseUrl");
+        let server_var = reimported.environments[0]
+            .variables
+            .iter()
+            .find(|v| v.key == "默认服务")
+            .expect("server var should be keyed by display name 默认服务");
+        assert_eq!(server_var.value, "https://api.test");
 
         // Global header preserved.
         assert_eq!(reimported.global_headers.len(), 1);

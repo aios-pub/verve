@@ -526,6 +526,75 @@ struct PostmanAuthBasic {
     password: Option<String>,
 }
 
+/// Build a `server_id → variable name` map used for both environment
+/// variables and folder `base_url` placeholders.
+///
+/// The variable name is the server's **display name** (e.g. `user-center`,
+/// `默认服务`), never its opaque `server_id`. Apipost may declare a server in
+/// `global.servers` (id+name) and/or repeat it inside each environment's
+/// `server_list` (id+name+uri); we fold both sources together so a name
+/// carried only on the per-env entry is still picked up.
+///
+/// `server_id "0"` means "inherit from parent" in Apipost and is skipped.
+/// Names are de-duplicated: if two distinct server ids share the same name,
+/// later occurrences get a numeric suffix (`name`, `name_2`, …) so the
+/// resulting variable keys stay unique. As a last resort (a server has no
+/// name anywhere) we fall back to `server_<id>`.
+fn build_server_var_names(
+    global_servers: &[PostmanServerDef],
+    envs: &[PostmanEnv],
+) -> std::collections::BTreeMap<String, String> {
+    let mut map: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Order matters for stable suffixing: global definitions first (they
+    // represent the canonical name), then per-env entries that may fill in
+    // names the global list omitted.
+    let mut entries: Vec<(&str, &str)> = Vec::new();
+    for srv in global_servers {
+        if let (Some(sid), Some(name)) = (&srv.server_id, &srv.name) {
+            if sid != "0" && !sid.is_empty() && !name.trim().is_empty() {
+                entries.push((sid.as_str(), name.as_str()));
+            }
+        }
+    }
+    for env in envs {
+        for srv in &env.server_list {
+            if let (Some(sid), Some(name)) = (&srv.server_id, &srv.name) {
+                if sid != "0" && !sid.is_empty() && !name.trim().is_empty() {
+                    entries.push((sid.as_str(), name.as_str()));
+                }
+            }
+        }
+    }
+
+    for (sid, name) in entries {
+        if map.contains_key(sid) {
+            continue; // first name wins; later duplicates ignored
+        }
+        let key = unique_var_key(name, &mut used);
+        map.insert(sid.to_string(), key);
+    }
+    map
+}
+
+/// Return `name` if unused, else `name`, `name_2`, `name_3`, … until free.
+/// Records the chosen key in `used`.
+fn unique_var_key(name: &str, used: &mut std::collections::HashSet<String>) -> String {
+    let base = name.trim();
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{}_{}", base, n);
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// Convert an postman export JSON string into a Verve project. Maps the
 /// project name, description, environments, global params, and the full
 /// folder/request tree with body/headers/query/auth.
@@ -539,20 +608,16 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
     let mut project = Project::new(name);
     project.description = doc.intro.unwrap_or_default();
 
-    // Build a map of server_id → variable name from global server definitions.
-    // Server with id "1" is the default; map it to "baseUrl" for convenience.
-    let mut server_var_names: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
-    for srv in &doc.global.servers {
-        if let Some(sid) = &srv.server_id {
-            let var_name = if sid == "1" {
-                "baseUrl".to_string()
-            } else {
-                format!("server_{}", sid)
-            };
-            server_var_names.insert(sid.clone(), var_name);
-        }
-    }
+    // Build a map of server_id → variable name from server definitions.
+    //
+    // The user-facing variable key is the server's display `name` (e.g.
+    // "user-center", "默认服务"). The internal `server_id` is an opaque
+    // identifier imported from Apipost and must never leak into the UI, so
+    // we deliberately avoid deriving the key from it. Servers are discovered
+    // from two sources: `global.servers` (id+name) and each environment's
+    // `server_list` (id+name+uri) — the per-env list often carries names
+    // that the global list omits, so we fold both in.
+    let server_var_names = build_server_var_names(&doc.global.servers, &doc.global.envs);
 
     // Environments — include both env_var_list entries and server URIs as variables.
     project.environments = doc
@@ -566,17 +631,19 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
                 .iter()
                 .map(|(k, v)| KeyValue::new(k.clone(), v.as_str().unwrap_or("").to_string()))
                 .collect();
-            // Add server URIs as variables. We add every server from the
-            // server_list regardless of whether its URI is empty, so that
-            // `{{server_<id>}}` placeholders in URLs always resolve (to an
-            // empty string when no URI is configured) instead of leaking the
-            // raw placeholder text into the URL field.
+            // Add server URIs as variables keyed by the server's display name.
+            // We add every server from the server_list regardless of whether
+            // its URI is empty, so that `{{serverName}}` placeholders in URLs
+            // always resolve (to an empty string when no URI is configured)
+            // instead of leaking the raw placeholder text into the URL field.
             for srv in &env.server_list {
                 if let Some(sid) = &srv.server_id {
                     let uri = srv.uri.clone().unwrap_or_default();
-                    let var_name = server_var_names
-                        .get(sid)
-                        .cloned()
+                    // Should always be present (server_list names feed the
+                    // map), but fall back to the name on this very entry just
+                    // in case the global list missed it.
+                    let var_name = server_var_names.get(sid).cloned()
+                        .or_else(|| srv.name.clone())
                         .unwrap_or_else(|| format!("server_{}", sid));
                     e.variables.push(KeyValue::new(var_name, uri));
                 }
@@ -667,7 +734,8 @@ fn build_postman_folder(
 
     // Set folder base_url from server_id:
     // - server_id "0" or None → inherit from parent (leave as None)
-    // - otherwise → use {{server_<id>}} or {{baseUrl}} for default server
+    // - otherwise → use {{<server name>}} (the server's display name, never
+    //   its opaque id)
     if let Some(sid) = &folder.server_id {
         if sid != "0" {
             if let Some(var_name) = server_var_names.get(sid) {
@@ -1085,36 +1153,37 @@ mod tests {
         // Project metadata.
         assert_eq!(project.name, "李靖个人项目");
 
-        // 3 environments, each with server URIs as variables.
+        // 3 environments, each with the default server's URI stored under the
+        // server's display name "默认服务" (not the opaque id, not "baseUrl").
         assert_eq!(project.environments.len(), 3);
 
-        // 默认环境: empty URI → baseUrl var exists but is empty (placeholder resolves to "")
+        // 默认环境: empty URI → "默认服务" var exists but is empty (placeholder resolves to "")
         assert_eq!(project.environments[0].name, "默认环境");
         let default_base = project.environments[0]
             .variables
             .iter()
-            .find(|v| v.key == "baseUrl")
+            .find(|v| v.key == "默认服务")
             .unwrap();
         assert_eq!(default_base.value, "");
 
-        // Mock环境: has baseUrl = mock server URI
+        // Mock环境: has "默认服务" = mock server URI
         assert_eq!(project.environments[1].name, "Mock环境");
         let mock_base = project.environments[1]
             .variables
             .iter()
-            .find(|v| v.key == "baseUrl")
+            .find(|v| v.key == "默认服务")
             .unwrap();
         assert_eq!(
             mock_base.value,
             "https://mock.apipost.net/mock/35ff847188e5000"
         );
 
-        // 本地环境: baseUrl = localhost:3002
+        // 本地环境: "默认服务" = localhost:3002
         assert_eq!(project.environments[2].name, "本地环境");
         let local_base = project.environments[2]
             .variables
             .iter()
-            .find(|v| v.key == "baseUrl")
+            .find(|v| v.key == "默认服务")
             .unwrap();
         assert_eq!(local_base.value, "localhost:3002");
 
@@ -1126,13 +1195,13 @@ mod tests {
             .unwrap();
         assert_eq!(agentos.base_url, None);
 
-        // Folder 系统功能测试 has server_id "1" → {{baseUrl}}
+        // Folder 系统功能测试 has server_id "1" → {{默认服务}}
         let sys_folder = project
             .folders
             .iter()
             .find(|f| f.name == "系统功能测试")
             .unwrap();
-        assert_eq!(sys_folder.base_url, Some("{{baseUrl}}".to_string()));
+        assert_eq!(sys_folder.base_url, Some("{{默认服务}}".to_string()));
 
         // Child API URL remains relative (will be prefixed at send time).
         assert_eq!(sys_folder.requests[0].url, "/api/auth/login");
@@ -1142,8 +1211,9 @@ mod tests {
     fn postman_import_multi_servers_empty_uri() {
         // Regression test: servers beyond the default (id != "1") that have
         // empty URIs in some environments must still get an env var so that
-        // {{server_<id>}} placeholders in URLs resolve (to "") instead of
-        // leaking raw placeholder text.
+        // {{serverName}} placeholders in URLs resolve (to "") instead of
+        // leaking raw placeholder text. The variable key is the server's
+        // display name (e.g. "user-center"), never its opaque id.
         let json = r#"{
             "project_id": "1fe64e",
             "name": "研发中心",
@@ -1189,38 +1259,38 @@ mod tests {
 
         let project = postman(json).unwrap();
 
-        // 默认环境: both baseUrl and server_7c9fc exist with empty values.
+        // 默认环境: both 默认服务 and user-center exist with empty values.
         let default_env = &project.environments[0];
         assert_eq!(default_env.name, "默认环境");
         let base = default_env
             .variables
             .iter()
-            .find(|v| v.key == "baseUrl")
+            .find(|v| v.key == "默认服务")
             .unwrap();
         assert_eq!(base.value, "");
         let srv = default_env
             .variables
             .iter()
-            .find(|v| v.key == "server_7c9fc")
+            .find(|v| v.key == "user-center")
             .unwrap();
         assert_eq!(srv.value, "");
 
-        // 压测环境: server_7c9fc resolves to the stress-test URI.
+        // 压测环境: user-center resolves to the stress-test URI.
         let stress_env = &project.environments[1];
         let srv = stress_env
             .variables
             .iter()
-            .find(|v| v.key == "server_7c9fc")
+            .find(|v| v.key == "user-center")
             .unwrap();
         assert_eq!(srv.value, "http://account-yace.xk12.cn");
 
-        // Folder references {{server_7c9fc}}.
+        // Folder references {{user-center}} (display name, not the id 7c9fc).
         let folder = project
             .folders
             .iter()
             .find(|f| f.name == "用户中心")
             .unwrap();
-        assert_eq!(folder.base_url, Some("{{server_7c9fc}}".to_string()));
+        assert_eq!(folder.base_url, Some("{{user-center}}".to_string()));
         assert_eq!(folder.requests[0].url, "/api/user/v3/common/executeSql");
     }
 }

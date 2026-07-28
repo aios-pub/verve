@@ -24,7 +24,7 @@ use crate::k8s::clusters::{
 use crate::k8s::kubectl::{
     ExecSession, LogStream, Pod, exec_pod, list_namespaces, list_pods, port_forward, stream_logs,
 };
-use crate::k8s::{KubeConfig, kubeconfig_path, load_merged};
+use crate::k8s::{KubeConfig, kubeconfig_path, reload_merged_kubeconfig};
 use crate::ssh::terminal::TerminalView;
 use crate::ui::k8s_cluster_dialog;
 use gpui_component::text::TextView;
@@ -135,7 +135,7 @@ impl K8sPanel {
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("按名称搜索 Pod..."));
         Self {
-            cfg: load_merged(),
+            cfg: reload_merged_kubeconfig(),
             error: None,
             active_view: View::Contexts,
             sessions: Vec::new(),
@@ -194,8 +194,18 @@ impl K8sPanel {
         .detach();
     }
 
+    /// Reload the merged kubeconfig into `self.cfg`, clearing any error.
+    ///
+    /// IMPORTANT: we regenerate the Verve-managed kubeconfig YAML from the
+    /// manual-cluster index (`kube_clusters.json`) before reading. The index is
+    /// the source of truth for Verve-added clusters, but the YAML
+    /// (`kube_config.yaml`) can drift out of sync if a cluster was renamed or
+    /// removed outside of the normal mutation path, or if the YAML was edited by
+    /// hand. Without regenerating, stale entries linger in `kube_config.yaml`
+    /// and `load_merged()` keeps returning them — which makes the "刷新" button
+    /// look like a no-op and hides edit/delete buttons (they match on name).
     fn refresh_config(&mut self, cx: &mut Context<Self>) {
-        self.cfg = load_merged();
+        self.cfg = reload_merged_kubeconfig();
         self.error = None;
         cx.notify();
     }
@@ -235,7 +245,7 @@ impl K8sPanel {
     /// Otherwise leave the panel on the Contexts view so they can add one.
     pub fn activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         // Always refresh config in case clusters were added externally.
-        self.cfg = load_merged();
+        self.cfg = reload_merged_kubeconfig();
         if self.current_context_name().is_some() && !self.cfg.contexts.is_empty() {
             self.set_view(View::Pods, cx);
             // Only trigger a single load to avoid racing two concurrent SSH

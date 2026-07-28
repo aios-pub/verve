@@ -2211,6 +2211,7 @@ impl Render for VerveApp {
             .text_color(theme.foreground)
             .on_action(cx.listener(Self::on_open_markdown_file))
             .on_action(cx.listener(Self::on_open_markdown_file_new_tab))
+            .on_action(cx.listener(Self::on_save_workspace))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_close_file))
             .child(self.render_title_bar(cx))
@@ -4610,6 +4611,25 @@ impl VerveApp {
         cx.notify();
     }
 
+    /// cmd-s — save. Routes to the active editor: Markdown → save the active
+    /// document tab; Notes → flush the current note immediately (bypassing the
+    /// debounce). In other views this is a no-op (the editor owns file saving;
+    /// there is no "workspace" to persist here). The WYSIWYG editor's own
+    /// SaveDocument action is intentionally unregistered in the embedded build
+    /// (see wysiwyg/components/actions.rs), so verve owns this flow.
+    fn on_save_workspace(&mut self, _: &SaveWorkspace, w: &mut Window, cx: &mut Context<Self>) {
+        match self.active_view {
+            SideView::MarkdownEditor => {
+                let _ = self.markdown.update(cx, |p, cx| p.save(w, cx));
+            }
+            SideView::Notes => {
+                let _ = self.notes.update(cx, |p, cx| p.save_current(cx));
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     /// cmd-n — new file. Routes to the active editor: Markdown → new document
     /// tab; Notes → new note. In other views it switches to Markdown and opens
     /// a fresh document.
@@ -5021,6 +5041,18 @@ impl VerveApp {
                     .label(rust_i18n::t!("json.format_btn").to_string())
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = json.update(cx, |panel, cx| panel.format_from_title(cx));
+                    }))
+            })
+            .child({
+                let json = self.json.clone();
+                let active = json.read(cx).is_compact_active();
+                Button::new("json-title-compact")
+                    .small()
+                    .ghost()
+                    .label(rust_i18n::t!("json.compact_btn").to_string())
+                    .when(active, |b| b.selected(true))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let _ = json.update(cx, |panel, cx| panel.toggle_compact(cx));
                     }))
             })
             .child({

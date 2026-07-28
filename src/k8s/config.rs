@@ -170,6 +170,26 @@ pub fn load_merged() -> KubeConfig {
     merged
 }
 
+/// Regenerate the Verve-managed kubeconfig from the manual-cluster index, then
+/// return the freshly merged kubeconfig.
+///
+/// This is the read path the UI should use when it wants to reflect the current
+/// state of the world. The manual-cluster index (`kube_clusters.json`) is the
+/// source of truth for Verve-added clusters; the YAML (`kube_config.yaml`) is a
+/// derived artifact that can drift (e.g. after a rename/delete outside the
+/// normal mutation path, or a hand-edit). Regenerating before reading keeps
+/// `load_merged` from returning stale entries — which otherwise makes the
+/// "刷新" button look like a no-op and hides edit/delete buttons (they match
+/// contexts to clusters by name).
+pub fn reload_merged_kubeconfig() -> KubeConfig {
+    // Regenerate the YAML from the authoritative index first. Best-effort: if
+    // the index is empty/missing we still fall through to load_merged() so the
+    // system kubeconfig (~/.kube/config) is still shown.
+    let clusters = crate::k8s::clusters::load_manual_clusters();
+    crate::k8s::clusters::write_verve_kubeconfig(&clusters);
+    load_merged()
+}
+
 impl KubeConfig {
     /// Look up the currently-active context (NamedContext), if any.
     pub fn active_context(&self) -> Option<&NamedContext> {
@@ -255,5 +275,89 @@ users:
             cfg.user_for("dev-cluster").unwrap().user.token.as_deref(),
             Some("abcdef")
         );
+    }
+
+    /// Regression test for the k8s "刷新无效 / context 无法编辑删除" bug.
+    ///
+    /// The Verve-managed kubeconfig (`kube_config.yaml`) is a derived artifact
+    /// that can drift out of sync with the authoritative manual-cluster index
+    /// (`kube_clusters.json`). When it does, a plain `load_merged()` keeps
+    /// returning the stale entries, so the "刷新" button appears to do nothing
+    /// and edit/delete buttons (which match contexts to clusters by name)
+    /// disappear. `reload_merged_kubeconfig` must regenerate the YAML from the
+    /// index before reading so the UI reflects the real state.
+    #[test]
+    fn reload_merged_kubeconfig_repairs_drifted_yaml() {
+        use crate::state::persistence::set_thread_data_dir;
+
+        // Point the data dir (verve kubeconfig + cluster index) at a throwaway
+        // directory so nothing real is touched. We intentionally do NOT touch
+        // HOME: the system kubeconfig (~/.kube/config) may or may not exist, but
+        // the assertions below only concern Verve-managed (stale vs. real)
+        // entries, which are independent of whatever the system file contains.
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-k8s-merge-test-{}",
+            crate::state::models::new_id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let _guard = set_thread_data_dir(tmp.clone());
+
+        // Seed an authoritative manual cluster named "my-cluster".
+        let cluster =
+            crate::k8s::clusters::ManualCluster::new("my-cluster", "https://1.2.3.4:6443");
+        crate::k8s::clusters::save_manual_clusters(&[cluster.clone()]);
+        crate::k8s::clusters::write_verve_kubeconfig(&[cluster]);
+
+        // Simulate drift: hand-write a STALE kube_config.yaml whose context
+        // names no longer match any cluster in the index (e.g. left over from a
+        // rename). This is exactly the on-disk state that caused the bug.
+        let stale = r#"
+apiVersion: v1
+kind: Config
+current-context: old-renamed-cluster
+clusters:
+- cluster:
+    server: https://9.9.9.9:6443
+  name: old-renamed-cluster-cluster
+contexts:
+- context:
+    cluster: old-renamed-cluster-cluster
+    user: old-renamed-cluster-user
+  name: old-renamed-cluster
+users:
+- name: old-renamed-cluster-user
+  user:
+    token: stale
+"#;
+        let verve_path = crate::k8s::clusters::verve_kubeconfig_path();
+        std::fs::write(&verve_path, stale).unwrap();
+
+        // load_merged() alone returns the stale context (the bug): the stale
+        // entry is present and the real cluster is absent.
+        let buggy = load_merged();
+        let buggy_names: Vec<&str> = buggy.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            buggy_names.contains(&"old-renamed-cluster"),
+            "precondition: stale entry must be visible via load_merged before the fix"
+        );
+        assert!(
+            !buggy_names.contains(&"my-cluster"),
+            "precondition: real cluster missing from drifted YAML"
+        );
+
+        // reload_merged_kubeconfig() regenerates the YAML then reads: the stale
+        // entry is gone and the real cluster is present.
+        let fixed = reload_merged_kubeconfig();
+        let fixed_names: Vec<&str> = fixed.contexts.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            fixed_names.contains(&"my-cluster"),
+            "after reload the real cluster must be visible (so edit/delete buttons render)"
+        );
+        assert!(
+            !fixed_names.contains(&"old-renamed-cluster"),
+            "after reload stale entries must be gone"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -28,6 +28,7 @@ pub mod mock;
 pub mod notes;
 pub mod notes_pdf;
 pub mod proxy;
+pub mod relocate;
 pub mod scripting;
 pub mod share;
 pub mod ssh;

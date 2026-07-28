@@ -12046,6 +12046,7 @@ dependencies = [
  "clap",
  "cssparser",
  "env_logger",
+ "fs_extra",
  "futures",
  "futures-util",
  "gix",
@@ -12086,6 +12087,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "smol",
  "sys-locale",
  "tokio",
@@ -12113,6 +12115,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "uuid",
+ "walkdir",
  "zeroize",
  "zmodem2",
 ]

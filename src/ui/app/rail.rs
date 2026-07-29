@@ -180,6 +180,9 @@ impl VerveApp {
                             SideView::K8s => {
                                 this.k8s.update(cx, |k, cx| k.activate(window, cx));
                             }
+                            SideView::Relocate => {
+                                this.relocate.update(cx, |p, cx| p.activate(cx));
+                            }
                             _ => {}
                         }
                         cx.notify();

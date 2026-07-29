@@ -35,16 +35,17 @@ pub struct RelocatePanel {
     pub engine: Entity<RelocateEngine>,
     _subs: Vec<Subscription>,
     focus_handle: FocusHandle,
+    /// Whether the initial home-directory scan has run yet. The scan walks
+    /// TCC-protected folders (`~/Music`, `~/Movies`, `~/Pictures`) which would
+    /// trigger Apple Music / Media Library / Photos permission prompts; we
+    /// therefore defer it until the user actually opens this view (see
+    /// [`Self::activate`]) instead of running it at app startup.
+    scan_started: bool,
 }
 
 impl RelocatePanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let engine = cx.new(|cx| {
-            let mut e = RelocateEngine::new(cx);
-            // Kick off the initial scan so the panel shows something right away.
-            e.scan_async(cx);
-            e
-        });
+        let engine = cx.new(|cx| RelocateEngine::new(cx));
         // Re-render on every engine event.
         let sub = cx.subscribe(&engine, |_this, _src, _ev: &RelocateEvent, cx| {
             cx.notify();
@@ -54,7 +55,20 @@ impl RelocatePanel {
             engine,
             _subs: vec![sub],
             focus_handle: cx.focus_handle(),
+            scan_started: false,
         }
+    }
+
+    /// Lazy-activate: kick off the first home-directory scan the first time the
+    /// user opens the relocate view. Called from the rail click handler so the
+    /// scan — and the TCC permission prompts it can trigger — only happen when
+    /// the user actually wants to use disk migration, never at app launch.
+    pub fn activate(&mut self, cx: &mut Context<Self>) {
+        if self.scan_started {
+            return;
+        }
+        self.scan_started = true;
+        self.engine.update(cx, |e, cx| e.scan_async(cx));
     }
 
     // ---- actions --------------------------------------------------------

@@ -215,7 +215,18 @@ pub(crate) fn copy_dir_with_progress(
 
     let overwrite = policy == ConflictPolicy::Merge;
     let mut copied: u64 = 0;
-    let mut buf = vec![0u8; 64 * 1024];
+    // A 1 MB buffer keeps read/write syscall counts low for large files (the
+    // old 64 KB buffer issued ~16k syscalls per GB). On SSD→SSD this is close
+    // to a plain `cp` in throughput.
+    let mut buf = vec![0u8; 1024 * 1024];
+    // Progress sampling: only emit a sample when ≥100 ms have elapsed OR ≥4 MB
+    // have been copied since the last one, so the per-chunk callback (which
+    // crosses a channel + emits a GPUI event) doesn't dominate copy time.
+    // For a 1 GB file this is ~250 callbacks instead of ~16,000.
+    let mut last_progress_bytes: u64 = 0;
+    let mut last_progress_time = std::time::Instant::now();
+    let progress_min_interval = std::time::Duration::from_millis(100);
+    const PROGRESS_MIN_BYTES: u64 = 4 * 1024 * 1024;
 
     // Walk the source tree, recreating the directory layout under dest and
     // copying each file chunk-by-chunk.
@@ -262,11 +273,19 @@ pub(crate) fn copy_dir_with_progress(
         if target.exists() && !overwrite {
             // Still count the file as "done" for progress purposes.
             copied = copied.saturating_add(file_size);
-            on_progress(&CopyProgress {
-                bytes_done: copied,
-                bytes_total,
-                current_file: file_name,
-            });
+            // Sample: skiped files are cheap, but avoid per-file callbacks for
+            // trees with many small files — only report if enough has accrued.
+            if copied - last_progress_bytes >= PROGRESS_MIN_BYTES
+                || last_progress_time.elapsed() >= progress_min_interval
+            {
+                last_progress_bytes = copied;
+                last_progress_time = std::time::Instant::now();
+                on_progress(&CopyProgress {
+                    bytes_done: copied,
+                    bytes_total,
+                    current_file: file_name.clone(),
+                });
+            }
             continue;
         }
 
@@ -299,14 +318,37 @@ pub(crate) fn copy_dir_with_progress(
                 return Err(format!("写入文件失败 {}: {}", target.display(), e));
             }
             copied = copied.saturating_add(n as u64);
+            // Sample progress to avoid per-chunk callback overhead.
+            if copied - last_progress_bytes >= PROGRESS_MIN_BYTES
+                || last_progress_time.elapsed() >= progress_min_interval
+            {
+                last_progress_bytes = copied;
+                last_progress_time = std::time::Instant::now();
+                on_progress(&CopyProgress {
+                    bytes_done: copied,
+                    bytes_total,
+                    current_file: file_name.clone(),
+                });
+            }
+        }
+        // Flush + drop to ensure data is on disk before we set permissions /
+        // move on, then preserve the source file's permission bits.
+        if let Err(e) = writer.flush() {
+            return Err(format!("写入刷新失败 {}: {}", target.display(), e));
+        }
+        drop(writer);
+        let _ = std::fs::set_permissions(&target, meta.permissions());
+        // Always report the final byte count for this file so progress never
+        // lags behind the actual copied amount between samples.
+        if copied != last_progress_bytes {
+            last_progress_bytes = copied;
+            last_progress_time = std::time::Instant::now();
             on_progress(&CopyProgress {
                 bytes_done: copied,
                 bytes_total,
                 current_file: file_name.clone(),
             });
         }
-        // Preserve file permissions (fs_extra does this too).
-        let _ = std::fs::set_permissions(&target, meta.permissions());
         let _ = file_size;
     }
 
@@ -696,31 +738,27 @@ mod tests {
         // before the callback flips the cancel flag.
         std::fs::create_dir_all(source.join("nested")).unwrap();
         std::fs::create_dir_all(&target_root).unwrap();
-        std::fs::write(source.join("a.txt"), vec![b'A'; 256 * 1024]).unwrap();
-        std::fs::write(source.join("b.txt"), vec![b'B'; 256 * 1024]).unwrap();
-        std::fs::write(source.join("nested").join("c.txt"), vec![b'C'; 256 * 1024]).unwrap();
+        // Large files (4 MB each) so the copy spans many 1 MB chunks and several
+        // progress samples before the callback flips the cancel flag.
+        std::fs::write(source.join("a.txt"), vec![b'A'; 4 * 1024 * 1024]).unwrap();
+        std::fs::write(source.join("b.txt"), vec![b'B'; 4 * 1024 * 1024]).unwrap();
+        std::fs::write(source.join("nested").join("c.txt"), vec![b'C'; 4 * 1024 * 1024]).unwrap();
 
-        // Trigger cancellation on the first progress sample from a second
-        // thread; the copy loop checks the flag between chunks.
+        // Flip the cancel flag on the first progress sample. With 12 MB of data
+        // and 1 MB chunks, the first sample lands well before the copy finishes,
+        // so the next chunk-boundary check aborts the copy mid-stream.
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel_cb = cancel.clone();
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let calls_cb = calls.clone();
         let outcome = migrate_one(
             &source,
             &target_root,
             "test-group",
-            768 * 1024,
+            12 * 1024 * 1024,
             ConflictPolicy::Merge,
             false,
             cancel.clone(),
             move |_cp| {
-                let n = calls_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                // Flip cancel after a handful of chunks so we actually abort
-                // mid-copy rather than before it starts.
-                if n >= 2 {
-                    cancel_cb.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
+                cancel_cb.store(true, std::sync::atomic::Ordering::Relaxed);
             },
         );
 
@@ -737,7 +775,7 @@ mod tests {
             meta.is_dir() && !meta.file_type().is_symlink(),
             "source must remain a real directory after cancellation"
         );
-        assert_eq!(std::fs::read(source.join("a.txt")).unwrap().len(), 256 * 1024);
+        assert_eq!(std::fs::read(source.join("a.txt")).unwrap().len(), 4 * 1024 * 1024);
 
         // 2. The partial external copy was cleaned up.
         let dest = external_target(&target_root, &source);
@@ -747,7 +785,6 @@ mod tests {
             dest.display()
         );
 
-        let _ = calls;
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

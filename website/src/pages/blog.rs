@@ -17,9 +17,9 @@ pub fn Blog() -> impl IntoView {
     let i18n = use_i18n();
 
     view! {
-        <section class="border-b border-white/5 bg-grid">
-            <div class="mx-auto max-w-7xl px-4 py-16 text-center sm:px-6 lg:px-8">
-                <h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl">
+        <section class="border-b border-ink-700 bg-grid">
+            <div class="mx-auto max-w-7xl px-4 pb-14 pt-10 text-center sm:px-6 lg:px-8">
+                <h1 class="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
                     {move || t!(i18n, blog.title)}
                 </h1>
                 <p class="mt-4 text-ink-400">{move || t!(i18n, blog.subtitle)}</p>

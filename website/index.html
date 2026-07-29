@@ -2,8 +2,23 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!-- Apply the saved/system theme BEFORE any CSS paints to avoid a flash.
+         Priority: localStorage "leptos-use-color-scheme" > system pref > light. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("leptos-use-color-scheme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark =
+            stored === "dark" ||
+            ((stored === null || stored === "auto") && prefersDark);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0a0c10" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#07080c" media="(prefers-color-scheme: dark)" />
     <!-- static assets, resolved relative to the public-url base -->
     <link data-trunk rel="icon" href="public/icons/verve.png" />
     <link data-trunk rel="copy-file" href="public/tailwind.css" />

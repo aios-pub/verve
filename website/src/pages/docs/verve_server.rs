@@ -11,8 +11,8 @@ const VERVE_SERVER_MD: &str = include_str!("../../../../docs/verve-server.md");
 #[component]
 pub fn VerveServer() -> impl IntoView {
     view! {
-        <section class="border-b border-white/5 bg-grid">
-            <div class="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+        <section class="border-b border-ink-700 bg-grid">
+            <div class="mx-auto max-w-7xl px-4 pb-12 pt-10 sm:px-6 lg:px-8">
                 <nav class="text-sm text-ink-500">
                     <a href="/verve/docs" class="hover:text-bolt-300 transition">"Docs"</a>
                     " / "

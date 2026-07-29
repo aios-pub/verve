@@ -1,30 +1,78 @@
 //! Community vs Pro comparison table.
 
 use leptos::prelude::*;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
+
+/// Which i18n key a comparison row uses for its label.
+#[derive(Clone, Copy)]
+enum RowKey {
+    Api,
+    Capture,
+    Mock,
+    Git,
+    Json,
+    Hosts,
+    DocShare,
+    Ssh,
+    Zmodem,
+    Docker,
+    K8s,
+    Stress,
+    Autotest,
+    Notes,
+    MdEditor,
+    Server,
+    Relocate,
+}
 
 #[component]
 pub fn ComparisonTable() -> impl IntoView {
     let i18n = use_i18n();
 
-    // (label key, community, pro)
+    // (row key, community, pro)
     let rows = vec![
-        ("API & Testing", true, true),
-        ("HTTP Capture Proxy", true, true),
-        ("Local Mock Server", true, true),
-        ("Git Cross-Machine Sync", true, true),
-        ("JSON Formatter", true, true),
-        ("Hosts Manager", true, true),
-        ("Document Sharing (local)", true, true),
-        ("SSH Terminal + SFTP", false, true),
-        ("Zmodem / Port Forwarding", false, true),
-        ("Docker triage", false, true),
-        ("Kubernetes triage", false, true),
-        ("Stress Testing", false, true),
-        ("Automated Testing", false, true),
-        ("Markdown Notes + PDF", false, true),
-        ("Self-hosted verve-server", false, true),
+        (RowKey::Api, true, true),
+        (RowKey::Capture, true, true),
+        (RowKey::Mock, true, true),
+        (RowKey::Git, true, true),
+        (RowKey::Json, true, true),
+        (RowKey::Hosts, true, true),
+        (RowKey::DocShare, true, true),
+        (RowKey::Ssh, false, true),
+        (RowKey::Zmodem, false, true),
+        (RowKey::Docker, false, true),
+        (RowKey::K8s, false, true),
+        (RowKey::Stress, false, true),
+        (RowKey::Autotest, false, true),
+        (RowKey::Notes, false, true),
+        (RowKey::MdEditor, false, true),
+        (RowKey::Server, false, true),
+        (RowKey::Relocate, false, true),
     ];
+
+    // Render the label reactively (a String) so it follows the current locale.
+    let label = move |key: RowKey| -> String {
+        match key {
+            RowKey::Api => t_string!(i18n, compare.r_api),
+            RowKey::Capture => t_string!(i18n, compare.r_capture),
+            RowKey::Mock => t_string!(i18n, compare.r_mock),
+            RowKey::Git => t_string!(i18n, compare.r_git),
+            RowKey::Json => t_string!(i18n, compare.r_json),
+            RowKey::Hosts => t_string!(i18n, compare.r_hosts),
+            RowKey::DocShare => t_string!(i18n, compare.r_doc_share),
+            RowKey::Ssh => t_string!(i18n, compare.r_ssh),
+            RowKey::Zmodem => t_string!(i18n, compare.r_zmodem),
+            RowKey::Docker => t_string!(i18n, compare.r_docker),
+            RowKey::K8s => t_string!(i18n, compare.r_k8s),
+            RowKey::Stress => t_string!(i18n, compare.r_stress),
+            RowKey::Autotest => t_string!(i18n, compare.r_autotest),
+            RowKey::Notes => t_string!(i18n, compare.r_notes),
+            RowKey::MdEditor => t_string!(i18n, compare.r_mdeditor),
+            RowKey::Server => t_string!(i18n, compare.r_server),
+            RowKey::Relocate => t_string!(i18n, compare.r_relocate),
+        }
+        .to_string()
+    };
 
     view! {
         <div class="card overflow-hidden p-0">
@@ -49,10 +97,12 @@ pub fn ComparisonTable() -> impl IntoView {
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.into_iter().map(|(label, community, pro)| {
+                    {rows.into_iter().map(|(key, community, pro)| {
                         view! {
-                            <tr class="border-t border-white/[0.06] transition hover:bg-white/[0.02]">
-                                <td class="px-5 py-3 text-ink-300">{label}</td>
+                            <tr class="border-t border-ink-700 transition hover:bg-ink-800/40">
+                                <td class="px-5 py-3 text-ink-300">
+                                    {move || label(key)}
+                                </td>
                                 <td class="px-5 py-3 text-center">{check(community)}</td>
                                 <td class="px-5 py-3 text-center">{check(pro)}</td>
                             </tr>
@@ -71,3 +121,4 @@ fn check(present: bool) -> impl IntoView {
         view! { <span class="text-ink-600">"—"</span> }
     }
 }
+

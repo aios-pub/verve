@@ -20,14 +20,14 @@ use leptos::prelude::*;
 use leptos_meta::*;
 use leptos_router::{
     components::{Route, Router, Routes},
-    StaticSegment,
+    path, StaticSegment,
 };
 
 // Bring the generated i18n items into scope.
 use crate::i18n::{use_i18n, I18nContextProvider, Locale};
 
 use pages::{Blog, Download, Features, Home, Pricing};
-use pages::docs::{DocsIndex, VerveServer};
+use pages::docs::{CloudDocs, DocsIndex, VerveServer};
 
 /// Stylesheet link, prefixed with the GitHub Pages base path.
 fn stylesheet() -> String {
@@ -48,7 +48,6 @@ pub fn App() -> impl IntoView {
     view! {
         <Stylesheet id="tailwind" href=stylesheet() />
         <Link rel="icon" href=favicon() />
-        <Meta name="theme-color" content="#0a0c10" />
         <Title text="Verve — 原生 GPU 加速研发工作台" />
         <Meta
             name="description"
@@ -66,7 +65,8 @@ pub fn App() -> impl IntoView {
                         <Route path=StaticSegment("pricing") view=Pricing />
                         <Route path=StaticSegment("blog") view=Blog />
                         <Route path=StaticSegment("docs") view=DocsIndex />
-                        <Route path=StaticSegment("docs/verve-server") view=VerveServer />
+                        <Route path=path!("docs/verve-server") view=VerveServer />
+                        <Route path=path!("docs/cloud") view=CloudDocs />
                     </Routes>
                 </components::Shell>
             </Router>

@@ -1,34 +1,91 @@
 @import "tailwindcss";
 
 /* ===========================================================================
-   Verve website — Tailwind v4 theme
-   Polished dark-first palette aligned with the GPUI desktop app aesthetic.
+   Verve website — Tailwind v4 theme (light default + .dark)
+   The `ink-*` color tokens are adaptive: they read CSS vars that flip between
+   light (:root) and dark (.dark). All existing `bg-ink-*` / `text-ink-*`
+   classes therefore switch automatically — no component edits needed.
+   `use_color_mode` (leptos-use) toggles `class="dark"` on <html>.
    =========================================================================== */
+
+/* --- Adaptive scale: light is the default, dark overrides under .dark ------- */
+:root {
+  /* Light theme — text goes dark, with strong contrast on white.
+     ink-100 = strongest (headings), up to ink-500 = muted. All body/secondary
+     text meets WCAG AA (≥4.5:1) on white. */
+  --ink-950: #ffffff;
+  --ink-900: #f7f8fb;
+  --ink-850: #eef1f6;
+  --ink-800: #e2e6ef;
+  --ink-700: #c8cfdd;
+  --ink-600: #a7b0c4;
+  --ink-500: #5c6781;   /* 5.5:1 on white — AA for normal text */
+  --ink-400: #3d465c;   /* 8.6:1 on white */
+  --ink-300: #2a3144;   /* 12:1 */
+  --ink-200: #1a2030;   /* 15:1 body */
+  --ink-100: #0c0f17;   /* 19:1 headings */
+  --font-smoothing: auto;
+  --grid-line: rgba(12, 15, 23, 0.07);
+  --aurora-opacity: 0.45;
+  /* Bolt accent: in light mode use the darker shades so accent text passes AA */
+  --bolt-200: #5e6411;
+  --bolt-300: #5e6411;
+  --bolt-400: #6e780f;
+  --bolt-500: #5e6411;
+  --bolt-600: #4d5209;
+}
+/* `.btn-bolt` uses a fixed vivid yellow regardless of theme (see below). */
+
+.dark {
+  /* Dark theme — surfaces dark, text bright. ink-100 = brightest (headings). */
+  --ink-950: #07080c;
+  --ink-900: #0c0e14;
+  --ink-850: #11141c;
+  --ink-800: #171b25;
+  --ink-700: #1f2433;
+  --ink-600: #2c3346;
+  --ink-500: #6b7798;
+  --ink-400: #aeb8d4;   /* brighter for legibility */
+  --ink-300: #cdd4e3;
+  --ink-200: #eef1f8;   /* body */
+  --ink-100: #fbfcfe;   /* headings */
+  --font-smoothing: antialiased;
+  --grid-line: rgba(255, 255, 255, 0.05);
+  --aurora-opacity: 1;
+  /* Bolt accent: in dark mode use the bright, glowing shades */
+  --bolt-200: #f8ffb4;
+  --bolt-300: #f2ff7d;
+  --bolt-400: #e8f93f;
+  --bolt-500: #d4e317;
+  --bolt-600: #abc40a;
+}
+
 @theme {
-  /* Brand accent — electric bolt yellow/green (matches the ⚡ logo vibe) */
+  /* Brand accent base scale (the vivid reference values). The actually-used
+     shades (200-600) are overridden per-theme above via the --bolt-* vars. */
   --color-bolt-50: #fefff3;
   --color-bolt-100: #fcffdb;
-  --color-bolt-200: #f8ffb4;
-  --color-bolt-300: #f2ff7d;
-  --color-bolt-400: #e8f93f;
-  --color-bolt-500: #d4e317;
-  --color-bolt-600: #abc40a;
+  --color-bolt-200: var(--bolt-200);
+  --color-bolt-300: var(--bolt-300);
+  --color-bolt-400: var(--bolt-400);
+  --color-bolt-500: var(--bolt-500);
+  --color-bolt-600: var(--bolt-600);
   --color-bolt-700: #86990c;
   --color-bolt-800: #6e780f;
   --color-bolt-900: #5e6411;
 
-  /* Neutral surface scale (cool slate) */
-  --color-ink-950: #07080c;
-  --color-ink-900: #0d0f15;
-  --color-ink-850: #12151d;
-  --color-ink-800: #181c26;
-  --color-ink-700: #212634;
-  --color-ink-600: #2f3648;
-  --color-ink-500: #475069;
-  --color-ink-400: #6a7491;
-  --color-ink-300: #99a2bd;
-  --color-ink-200: #c4ccdd;
-  --color-ink-100: #e6e9f1;
+  /* Neutral surface scale — references the adaptive vars above */
+  --color-ink-950: var(--ink-950);
+  --color-ink-900: var(--ink-900);
+  --color-ink-850: var(--ink-850);
+  --color-ink-800: var(--ink-800);
+  --color-ink-700: var(--ink-700);
+  --color-ink-600: var(--ink-600);
+  --color-ink-500: var(--ink-500);
+  --color-ink-400: var(--ink-400);
+  --color-ink-300: var(--ink-300);
+  --color-ink-200: var(--ink-200);
+  --color-ink-100: var(--ink-100);
 
   /* Pro edition accent */
   --color-pro-400: #a78bfa;
@@ -40,7 +97,6 @@
     Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Easier-on-the-eye max content width */
   --breakpoint-xl: 80rem;
 }
 
@@ -52,11 +108,13 @@ body {
   background-color: var(--color-ink-950);
   color: var(--color-ink-200);
   font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: var(--font-smoothing);
+  -moz-osx-font-smoothing: var(--font-smoothing);
   text-rendering: optimizeLegibility;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* Headings use the lighter, brighter ink for stronger hierarchy */
+/* Headings use the strongest ink for hierarchy */
 h1, h2, h3, h4 {
   color: var(--color-ink-100);
   letter-spacing: -0.02em;
@@ -64,26 +122,16 @@ h1, h2, h3, h4 {
 
 /* Subtle grid background used on hero / page-header sections */
 .bg-grid {
-  background-image: linear-gradient(
-      to right,
-      rgba(255, 255, 255, 0.035) 1px,
-      transparent 1px
-    ),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 64px 64px;
-  /* fade the grid toward the edges */
   -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
   mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 40%, transparent 100%);
 }
 
 /* Bolt gradient text */
 .gradient-text {
-  background: linear-gradient(
-    120deg,
-    var(--color-bolt-200),
-    var(--color-bolt-400) 60%,
-    var(--color-bolt-600)
-  );
+  background: linear-gradient(120deg, var(--color-bolt-200), var(--color-bolt-400) 60%, var(--color-bolt-600));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -91,18 +139,28 @@ h1, h2, h3, h4 {
 
 /* Soft glow used behind hero CTA / icons */
 .glow-bolt {
-  box-shadow: 0 0 0 1px rgba(212, 227, 23, 0.15),
-    0 8px 40px -12px rgba(212, 227, 23, 0.45);
+  box-shadow: 0 0 0 1px rgba(212, 227, 23, 0.15), 0 8px 40px -12px rgba(212, 227, 23, 0.45);
+}
+
+/* Text on the vivid yellow bolt buttons — always dark for contrast */
+.text-on-bolt {
+  color: #0c0f17;
+}
+
+/* Vivid yellow button — fixed bright bg + dark text in both themes */
+.btn-bolt {
+  background-color: #e8f93f;
+  color: #0c0f17;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+.btn-bolt:hover {
+  background-color: #f2ff7d;
 }
 
 /* Frosted card surface */
 .card {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.02),
-    rgba(255, 255, 255, 0)
-  );
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-ink-100) 3%, transparent), transparent);
+  border: 1px solid color-mix(in srgb, var(--color-ink-100) 8%, transparent);
   border-radius: 1rem;
   transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
@@ -111,7 +169,7 @@ h1, h2, h3, h4 {
   transform: translateY(-2px);
 }
 
-/* Thin custom scrollbar for the dark theme */
+/* Thin custom scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--color-ink-950); }
 ::-webkit-scrollbar-thumb {
@@ -121,7 +179,6 @@ h1, h2, h3, h4 {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-ink-600); }
 
-/* Selection */
 ::selection {
   background: rgba(212, 227, 23, 0.25);
   color: var(--color-bolt-50);
@@ -142,6 +199,7 @@ h1, h2, h3, h4 {
   border-radius: 9999px;
   filter: blur(80px);
   will-change: transform, opacity;
+  opacity: var(--aurora-opacity);
   animation: aurora-drift 18s ease-in-out infinite;
 }
 
@@ -151,18 +209,20 @@ h1, h2, h3, h4 {
   100% { background-position: 200% center; }
 }
 .shimmer-text {
-  background: linear-gradient(
-    100deg,
-    var(--color-bolt-300) 20%,
-    #ffffff 40%,
-    var(--color-bolt-300) 60%,
-    var(--color-bolt-500) 80%
-  );
+  background: linear-gradient(100deg, var(--color-bolt-300) 20%, #ffffff 40%, var(--color-bolt-300) 60%, var(--color-bolt-500) 80%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   animation: shimmer 6s linear infinite;
+}
+/* On light backgrounds the white shimmer stop disappears; swap to a darker highlight */
+:root .shimmer-text {
+  background: linear-gradient(100deg, var(--color-bolt-600) 20%, var(--color-bolt-900) 40%, var(--color-bolt-600) 60%, var(--color-bolt-700) 80%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* Slow grid drift for depth */
@@ -170,16 +230,9 @@ h1, h2, h3, h4 {
   0%   { background-position: 0 0; }
   100% { background-position: 64px 64px; }
 }
-.bg-grid-animated {
-  animation: grid-drift 24s linear infinite;
-}
+.bg-grid-animated { animation: grid-drift 24s linear infinite; }
 
-/* Scroll-reveal — two complementary mechanisms:
-   1. Scroll-driven animation (Chromium 115+): the element animates as it
-      enters the viewport purely via CSS, no JS needed.
-   2. JS IntersectionObserver (.is-visible): flips the class as a fallback /
-      enhancement for browsers without scroll-driven animations.
-   Default state is VISIBLE so nothing is ever stuck hidden if JS is absent. */
+/* Scroll-reveal — two complementary mechanisms */
 @keyframes reveal-in {
   from { opacity: 0; transform: translateY(28px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -194,7 +247,6 @@ h1, h2, h3, h4 {
   animation-timeline: view();
   animation-range: entry 8% cover 30%;
 }
-/* Fallback path (no scroll-driven animation support): hide until observed. */
 @supports not (animation-timeline: view()) {
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1); }
   .reveal.is-visible { opacity: 1; transform: translateY(0); }
@@ -209,9 +261,7 @@ h1, h2, h3, h4 {
   .reveal-stagger.is-visible > *:nth-child(n+7){ transition-delay: .35s; }
 }
 
-/* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .aurora-blob, .shimmer-text, .bg-grid-animated { animation: none !important; }
-  .reveal, .reveal-stagger > * { opacity: 1 !important; transform: none !important; }
+  .reveal, .reveal-stagger > * { opacity: 1 !important; transform: none !important; animation: none !important; }
 }
-

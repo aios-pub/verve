@@ -58,7 +58,7 @@ pub fn Hero() -> impl IntoView {
 
             <div
                 node_ref=el
-                class="relative mx-auto max-w-5xl px-4 pt-28 pb-24 sm:px-6 lg:px-8 lg:pt-36 lg:pb-32"
+                class="relative mx-auto max-w-5xl px-4 pt-12 pb-20 sm:px-6 lg:px-8 lg:pt-16 lg:pb-24"
             >
                 <div class="mx-auto max-w-3xl text-center">
                     // Badge
@@ -73,7 +73,7 @@ pub fn Hero() -> impl IntoView {
                     </div>
 
                     // Title — short, stays on a single line on desktop.
-                    <h1 class="mt-8 text-4xl font-extrabold tracking-tight sm:text-6xl lg:whitespace-nowrap lg:text-7xl">
+                    <h1 class="mt-8 text-4xl font-extrabold leading-tight tracking-tight sm:text-6xl lg:whitespace-nowrap lg:text-7xl">
                         {move || t!(i18n, hero.title)}
                     </h1>
                     <p class="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl lg:text-4xl">
@@ -89,7 +89,7 @@ pub fn Hero() -> impl IntoView {
                     <div class="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4">
                         <a
                             href=RELEASES_LATEST
-                            class="glow-bolt inline-flex w-full items-center justify-center gap-2 rounded-xl bg-bolt-400 px-7 py-3.5 text-base font-semibold text-ink-950 transition hover:bg-bolt-300 hover:scale-[1.03] sm:w-auto"
+                            class="glow-bolt btn-bolt inline-flex w-full items-center justify-center gap-2 rounded-xl px-7 py-3.5 text-base font-semibold hover:scale-[1.03] sm:w-auto"
                         >
                             {move || t!(i18n, hero.cta_download)}
                         </a>

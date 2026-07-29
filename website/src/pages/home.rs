@@ -59,12 +59,15 @@ pub fn Home() -> impl IntoView {
                 </Reveal>
                 <Reveal stagger=true>
                     <div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.api)      description=t_string!(i18n, pillars.api_d)      screenshot=Some("api.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.terminal)  description=t_string!(i18n, pillars.terminal_d)  screenshot=Some("ssh-terminal.png") pro=true />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.mock)      description=t_string!(i18n, pillars.mock_d)      screenshot=Some("mock.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.docs)      description=t_string!(i18n, pillars.docs_d)      screenshot=Some("doc.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.notes)     description=t_string!(i18n, pillars.notes_d)     screenshot=Some("note.png") pro=true />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.json)      description=t_string!(i18n, pillars.json_d)      screenshot=Some("json-format.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.api)       description=t_string!(i18n, pillars.api_d)       screenshot=Some("api.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.terminal)   description=t_string!(i18n, pillars.terminal_d)   screenshot=Some("ssh-terminal.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.testing)    description=t_string!(i18n, pillars.testing_d)    screenshot=Some("stress.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.mock)       description=t_string!(i18n, pillars.mock_d)       screenshot=Some("mock.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.docs)       description=t_string!(i18n, pillars.docs_d)       screenshot=Some("doc.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.notes)      description=t_string!(i18n, pillars.notes_d)      screenshot=Some("note.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.mdeditor)   description=t_string!(i18n, pillars.mdeditor_d)   screenshot=Some("pdf.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.hosts)      description=t_string!(i18n, pillars.hosts_d)      screenshot=Some("hosts.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.json)       description=t_string!(i18n, pillars.json_d)       screenshot=Some("json-format.png") />
                     </div>
                 </Reveal>
             </div>
@@ -119,7 +122,7 @@ fn SectionTitle(eyebrow: &'static str, children: Children) -> impl IntoView {
             <span class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.25em] text-bolt-400">
                 {eyebrow}
             </span>
-            <h2 class="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">{children()}</h2>
+            <h2 class="mt-3 text-3xl font-bold leading-snug tracking-tight sm:text-4xl">{children()}</h2>
         </div>
     }
 }

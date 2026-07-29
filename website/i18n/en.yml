@@ -13,11 +13,11 @@ nav:
 
 # ---- Hero ---------------------------------------------------------------
 hero:
-  badge: "Native • GPU-accelerated • Rust + GPUI"
-  title: "The native dev workbench"
-  title_accent: "one window is enough"
-  subtitle: "An offline-first workbench built with Rust + GPUI — API debugging, capture, server triage, load testing, mock, notes, hosts and JSON, together. GPU-rendered. No Electron."
-  cta_download: "Download"
+  badge: "Rust + GPUI · Native all-in-one · Not Electron"
+  title: "The all-in-one"
+  title_accent: "native developer workbench"
+  subtitle: "Verve fuses API debugging & capture, SSH terminal & SFTP, Docker & Kubernetes log streaming and shell exec, load & automated testing, mock, Markdown notes & standalone editor, PDF, and disk relocation into a single GPU-rendered native window — sub-second startup, under 100MB of RAM. No Electron bloat."
+  cta_download: "Download free"
   cta_features: "Explore features"
   platform_macos: "macOS"
   platform_linux: "Linux"
@@ -53,21 +53,39 @@ why:
 
 # ---- Capability pillars -------------------------------------------------
 pillars:
-  title: "Seven pillars, one window"
+  title: "Nine pillars, one window"
   api: "API & Testing"
   api_d: "Full HTTP debugging, gRPC-Web, TCP, SSE, WebSocket, Socket.IO, multi-environment variables, pre-request & test scripts."
   terminal: "Terminal & Triage"
   terminal_d: "SSH terminal, SFTP, Zmodem, port forwarding, Docker & Kubernetes log inspection and exec."
+  testing: "Stress & Automation"
+  testing_d: "Native stress-test engine with live p50/p90/p95/p99 charts; suite/case/step automated testing with assertions & extractors."
   mock: "Mock & Capture"
   mock_d: "HTTP capture proxy and a local mock server with Exact→Prefix→Regex matching."
   docs: "Docs & Git"
   docs_d: "Document sharing and Git-based cross-machine sync — each workspace is a branch."
   notes: "Notes"
-  notes_d: "Markdown block editor with live preview and PDF export."
+  notes_d: "Markdown block editor, notes tree (folders/pin/tags), live-preview canvas, export to PDF."
+  mdeditor: "Markdown Editor"
+  mdeditor_d: "Standalone .md file editor (multi-tab, Finder double-click / verve file.md), replaces MarkText; built-in PDF view & annotate."
   hosts: "Hosts"
   hosts_d: "Manage hosts profiles without touching system files."
   json: "JSON"
   json_d: "Collapsible JSON formatter, tree navigation, instant validation."
+
+# ---- Detailed feature copy (features page) -------------------------------
+features:
+  knowledge_title: "Knowledge & docs"
+  testing_title: "Testing & cloud"
+  relocate_title: "System tools"
+  server_triage_note: "Scoped to the daily triage workflow — inspect, tail logs, exec into running targets. Not a full cluster lifecycle manager."
+  ssh_d: "A real terminal for servers, with the protocols and safety you expect from a dedicated SSH client."
+  docker_d: "Containers and images at a glance — stream logs, drop into a shell, drive a remote daemon."
+  k8s_d: "Inspect pods and namespaces, tail logs, exec and port-forward — without leaving the app."
+  sftp_d: "Browse and transfer files over your authenticated SSH session, with Zmodem in the terminal."
+  md_d: "Write notes and edit Markdown files — a block editor, a notes tree, and PDF export in one place."
+  pdf_d: "View and annotate PDFs natively with Pdfium — replaces a standalone PDF editor."
+  relocate_d: "Free up internal-SSD space by moving large directories to an external NVMe drive via symlinks, fully reversible."
 
 # ---- Editions -----------------------------------------------------------
 editions:
@@ -85,6 +103,23 @@ compare:
   col_feature: "Capability"
   has: "✓"
   opensource: "Open source (AGPL-3.0)"
+  r_api: "API & Testing"
+  r_capture: "HTTP Capture Proxy"
+  r_mock: "Local Mock Server"
+  r_git: "Git Cross-Machine Sync"
+  r_json: "JSON Formatter"
+  r_hosts: "Hosts Manager"
+  r_doc_share: "Document Sharing (local)"
+  r_ssh: "SSH Terminal + SFTP"
+  r_zmodem: "Zmodem / Port Forwarding"
+  r_docker: "Docker triage"
+  r_k8s: "Kubernetes triage"
+  r_stress: "Stress Testing"
+  r_autotest: "Automated Testing"
+  r_notes: "Markdown notes (block editor + PDF export)"
+  r_mdeditor: "Standalone Markdown file editor"
+  r_server: "Self-hosted verve-server"
+  r_relocate: "Disk Relocation (system tool)"
 
 # ---- Download -----------------------------------------------------------
 download:
@@ -114,6 +149,39 @@ docs:
   title: "Documentation"
   getting_started: "Getting started"
   verve_server: "Self-host verve-server"
+  cloud: "Cloud docs & collaboration"
+
+# ---- Cloud docs (Pro) ----------------------------------------------------
+clouddocs:
+  crumb: "Cloud docs & collaboration"
+  title: "Cloud docs & collaboration"
+  intro: "Host your API docs in the cloud via a self-hosted verve-server and share them with your team and external developers through public or password-protected links — managed online without the desktop app."
+  s1_title: "Standalone server mode"
+  s1_desc: "verve-server is a standalone binary service — no desktop app, binds 0.0.0.0 with a file-backed store, self-hosted on your own server."
+  s1_b1: "Single binary, zero GUI deps, builds with just the Rust toolchain"
+  s1_b2: "One-command Docker deploy with persistent volume storage"
+  s1_b3: "Custom port, host, and data directory"
+  s1_b4: "All data stays local — fully under your control"
+  s2_title: "Cloud document sharing"
+  s2_desc: "Push a project from the desktop app to a remote verve-server to get a public /s/<id> link — front-end/client devs can browse without installing anything."
+  s2_b1: "Push a project to the remote server, get a public share link"
+  s2_b2: "Expiration + password access control"
+  s2_b3: "9 field-level display toggles to control what's visible"
+  s3_title: "Team collaboration"
+  s3_desc: "Host API docs in the cloud so teammates and external collaborators access one canonical link; CI pipelines can also upload the latest docs."
+  s3_b1: "Teamwork: members access a single canonical doc via link"
+  s3_b2: "External publishing: generate public/password-protected doc links"
+  s3_b3: "Continuous delivery: CI uploads the latest project JSON so docs stay in sync with code"
+  s4_title: "Admin Web UI"
+  s4_desc: "verve-server ships with a /admin Web UI — upload, create, browse and delete shares online without the desktop app, with multi-tenant support."
+  s4_b1: "Upload a project: paste a Verve-exported Project JSON"
+  s4_b2: "Create a share: pick project, title, public/password"
+  s4_b3: "Browse / delete share links, multi-tenant management"
+  note_label: "Note:"
+  note: "Document sharing produces a read-only snapshot of the project at upload time — real-time collaborative editing or live sync of shared docs is not supported. Git-based cross-machine workspace sync is available in both editions."
+  deploy_cta: "Need the full deployment steps (Docker / binary / config)?"
+  deploy_link: "View the verve-server deployment guide"
+  source: "View source on GitHub"
 
 # ---- Blog / changelog ---------------------------------------------------
 blog:

@@ -24,7 +24,7 @@ pub fn Nav() -> impl IntoView {
     };
 
     view! {
-        <header class="sticky top-0 z-50 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+        <header class="sticky top-0 z-50 border-b border-ink-700 bg-ink-950/95 backdrop-blur-xl">
             <nav class="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
                 // Brand
                 <A href=route("/") attr:class="flex items-center gap-2.5 font-bold tracking-tight transition hover:opacity-90">
@@ -53,6 +53,7 @@ pub fn Nav() -> impl IntoView {
 
                 // Actions
                 <div class="flex items-center gap-2">
+                    <super::ThemeToggle />
                     <button
                         on:click=toggle_lang
                         class="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-ink-200 transition hover:border-bolt-500/50 hover:text-bolt-200"
@@ -62,7 +63,7 @@ pub fn Nav() -> impl IntoView {
                     </button>
                     <a
                         href=RELEASES_LATEST
-                        class="rounded-lg bg-bolt-400 px-3.5 py-1.5 text-sm font-semibold text-ink-950 transition hover:bg-bolt-300"
+                        class="btn-bolt rounded-lg px-3.5 py-1.5 text-sm font-semibold"
                     >
                         {move || t!(i18n, nav.get_app)}
                     </a>

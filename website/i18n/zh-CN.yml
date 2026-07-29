@@ -13,11 +13,11 @@ nav:
 
 # ---- 首屏 ---------------------------------------------------------------
 hero:
-  badge: "原生 • GPU 加速 • Rust + GPUI"
-  title: "原生研发工作台"
-  title_accent: "一个窗口就够了"
-  subtitle: "基于 Rust + GPUI 构建的离线优先研发工作台——集成接口调试、抓包、服务器排查、压测、Mock、笔记、Hosts 与 JSON。GPU 渲染，告别 Electron 臃肿。"
-  cta_download: "下载"
+  badge: "Rust + GPUI · 原生一体化 · 非 Electron"
+  title: "开发者所需的"
+  title_accent: "一体化原生工作台"
+  subtitle: "Verve 把接口调试、抓包，SSH 终端与 SFTP、Docker 与 Kubernetes 日志查看及 shell exec，压测与自动化测试、Mock、Markdown 笔记与独立编辑器、PDF、磁盘迁移，融为一个由 GPU 渲染的原生窗口——秒级启动、内存不到 100MB，告别 Electron 臃肿。"
+  cta_download: "免费下载"
   cta_features: "查看功能"
   platform_macos: "macOS"
   platform_linux: "Linux"
@@ -53,21 +53,39 @@ why:
 
 # ---- 能力支柱 -----------------------------------------------------------
 pillars:
-  title: "七大支柱，一个窗口"
+  title: "九大支柱，一个窗口"
   api: "接口与测试"
   api_d: "完整 HTTP 调试、gRPC-Web、TCP、SSE、WebSocket、Socket.IO，多环境变量，前置脚本与测试脚本。"
   terminal: "终端与排查"
   terminal_d: "SSH 终端、SFTP、Zmodem、端口转发、Docker 与 Kubernetes 日志查看与 exec。"
+  testing: "压测与自动化"
+  testing_d: "原生压测引擎，实时 p50/p90/p95/p99 图表；suite/case/step 自动化测试套件与断言提取器。"
   mock: "Mock 与抓包"
   mock_d: "HTTP 抓包代理与本地 Mock 服务，支持 精确→前缀→正则 匹配。"
   docs: "文档与 Git"
   docs_d: "文档分享与基于 Git 的跨机器同步——每个工作区即一个分支。"
   notes: "笔记"
-  notes_d: "Markdown 块编辑器，实时预览与 PDF 导出。"
+  notes_d: "Markdown 块编辑器、笔记树（文件夹/置顶/标签）、实时预览画布，导出 PDF。"
+  mdeditor: "Markdown 编辑器"
+  mdeditor_d: "独立 .md 文件编辑器（多标签，Finder 双击 / verve file.md），替代 MarkText；内置 PDF 查看与批注。"
   hosts: "Hosts"
   hosts_d: "管理 Hosts 配置组，无需改动系统文件。"
   json: "JSON"
   json_d: "可折叠 JSON 格式化器，树形导航，即时校验。"
+
+# ---- 功能详情页文案（features 页）-----------------------------------------
+features:
+  knowledge_title: "知识工具"
+  testing_title: "测试与云端"
+  relocate_title: "系统工具"
+  server_triage_note: "聚焦日常排障工作流——查看、读日志、exec 进运行中的目标，不是完整的集群生命周期管理工具。"
+  ssh_d: "面向服务器的真实终端，具备专业 SSH 客户端应有的协议与安全能力。"
+  docker_d: "容器与镜像一目了然——流式查看日志、进入 shell、驱动远程 daemon。"
+  k8s_d: "查看 Pod 与命名空间、读日志、exec 与端口转发，无需离开应用。"
+  sftp_d: "基于已认证的 SSH 会话浏览与传输文件，终端内支持 Zmodem。"
+  md_d: "写笔记、编辑 Markdown 文件——块编辑器、笔记树与 PDF 导出，一站式。"
+  pdf_d: "基于 Pdfium 原生查看与批注 PDF，替代独立 PDF 编辑器。"
+  relocate_d: "通过符号链接把大目录迁移到外置 NVMe 硬盘，释放内置 SSD 空间，全程可回滚。"
 
 # ---- 版本 ---------------------------------------------------------------
 editions:
@@ -85,6 +103,23 @@ compare:
   col_feature: "能力"
   has: "✓"
   opensource: "开源（AGPL-3.0）"
+  r_api: "接口与测试"
+  r_capture: "HTTP 抓包代理"
+  r_mock: "本地 Mock 服务"
+  r_git: "Git 跨机器同步"
+  r_json: "JSON 格式化"
+  r_hosts: "Hosts 管理"
+  r_doc_share: "文档分享（本地）"
+  r_ssh: "SSH 终端 + SFTP"
+  r_zmodem: "Zmodem / 端口转发"
+  r_docker: "Docker 排障"
+  r_k8s: "Kubernetes 排障"
+  r_stress: "压力测试"
+  r_autotest: "自动化测试"
+  r_notes: "Markdown 笔记（块编辑器 + PDF 导出）"
+  r_mdeditor: "独立 Markdown 文件编辑器"
+  r_server: "自托管 verve-server"
+  r_relocate: "磁盘迁移（系统工具）"
 
 # ---- 下载 ---------------------------------------------------------------
 download:
@@ -114,6 +149,39 @@ docs:
   title: "文档"
   getting_started: "快速开始"
   verve_server: "自托管 verve-server"
+  cloud: "云端文档与协同"
+
+# ---- 云端文档（Pro）------------------------------------------------------
+clouddocs:
+  crumb: "云端文档与协同"
+  title: "云端文档与协同"
+  intro: "通过自托管的 verve-server，把 API 文档托管到云端，生成公开或密码保护的链接分享给团队与外部开发者——无需桌面 app 即可在线管理。"
+  s1_title: "独立 Server 模式"
+  s1_desc: "verve-server 是一个独立二进制服务，无需桌面 app，绑定 0.0.0.0，文件后端存储，可自托管在你自己的服务器上。"
+  s1_b1: "独立二进制，零 GUI 依赖，仅需 Rust 工具链编译"
+  s1_b2: "Docker 一键部署，数据持久化到卷"
+  s1_b3: "自定义端口、主机与数据目录"
+  s1_b4: "全数据本地留存，你可完全掌控"
+  s2_title: "云端文档分享"
+  s2_desc: "从桌面端把项目推送到远程 verve-server，获取公网 /s/<id> 链接，前端/客户端开发者无需安装即可浏览。"
+  s2_b1: "推送项目到远程 server，生成公网分享链接"
+  s2_b2: "支持有效期 + 密码访问控制"
+  s2_b3: "9 个字段级显示开关，按需控制可见内容"
+  s3_title: "团队协同"
+  s3_desc: "把 API 文档托管到云端，团队成员与外部协作方通过统一链接访问，CI 流水线也可自动上传最新文档。"
+  s3_b1: "团队协作：成员通过链接访问统一文档"
+  s3_b2: "对外发布：生成公开/密码保护的文档链接"
+  s3_b3: "持续交付：CI 流水线上传最新项目 JSON，文档始终与代码同步"
+  s4_title: "Admin Web 后台"
+  s4_desc: "verve-server 内置 /admin Web UI，无需桌面 app 即可在线上传、创建、浏览与删除分享，支持多租户。"
+  s4_b1: "上传项目：粘贴 Verve 导出的 Project JSON"
+  s4_b2: "创建分享：选择项目、标题、公开/密码"
+  s4_b3: "浏览 / 删除分享链接，多租户管理"
+  note_label: "说明："
+  note: "文档分享生成的是上传时刻项目的只读快照，不支持已分享文档的实时协同编辑或实时同步。基于 Git 的工作区跨机器同步在两个版本均支持。"
+  deploy_cta: "需要完整的部署步骤（Docker / 二进制 / 配置）？"
+  deploy_link: "查看 verve-server 部署指南"
+  source: "在 GitHub 查看源码"
 
 # ---- 更新日志 -----------------------------------------------------------
 blog:

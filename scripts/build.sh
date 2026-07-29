@@ -18,7 +18,25 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 PLATFORM="${1:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
-VERSION="0.1.0"
+
+# Derive the bundle version from Cargo.toml so the packaged app always matches
+# the crate version (Info.plist CFBundleShortVersionString, DMG/zip/deb names).
+# Reads the first `version = "..."` under `[package]`. Hard-coding it here was
+# the cause of the release app always showing 0.1.0 regardless of Cargo.toml.
+VERSION="$(awk '
+    /^\[package\]/      { in_pkg = 1; next }
+    /^\[/               { in_pkg = 0 }
+    in_pkg && /^version[[:space:]]*=/ {
+        sub(/^version[[:space:]]*=[[:space:]]*"/, "")
+        sub(/".*/, "")
+        print
+        exit
+    }
+' "$PROJECT_DIR/Cargo.toml")"
+if [ -z "$VERSION" ]; then
+    echo "❌ Could not read version from Cargo.toml"
+    exit 1
+fi
 
 echo "🔨 Building Verve v$VERSION for: $PLATFORM"
 echo "   Project: $PROJECT_DIR"

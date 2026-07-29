@@ -97,6 +97,9 @@ pub struct Editor {
     active_entity_id: Option<EntityId>,
     pending_scroll_active_block_into_view: bool,
     pending_scroll_recheck_after_layout: bool,
+    /// Bounded retry counter for the post-open body-measurement race (see
+    /// `apply_pending_scroll_into_view`). Reset whenever a document is opened.
+    scroll_layout_recheck_count: u32,
     pending_save: bool,
     pending_save_as: bool,
     pending_open_link: Option<PendingOpenLink>,
@@ -390,6 +393,7 @@ impl Editor {
             active_entity_id: pending_focus,
             pending_scroll_active_block_into_view: true,
             pending_scroll_recheck_after_layout: true,
+            scroll_layout_recheck_count: 0,
             pending_save: false,
             pending_save_as: false,
             pending_open_link: None,
@@ -548,6 +552,7 @@ impl Editor {
         self.active_entity_id = self.pending_focus;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_recheck_after_layout = true;
+        self.scroll_layout_recheck_count = 0;
         self.refresh_stable_document_snapshot(cx);
 
         // Focus the first block so typing lands in the right place. The actual

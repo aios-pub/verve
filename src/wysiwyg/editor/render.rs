@@ -579,12 +579,44 @@ impl Editor {
             return;
         }
 
-        if !has_bounds {
-            self.schedule_scroll_recheck(cx);
+        // `has_bounds` can be `true` via a layout-form estimate (no real text
+        // layout yet), so gate completion on the authoritative signal: the
+        // focused block having a captured `last_bounds` (i.e. its text element
+        // has actually been measured and painted). On the first frame(s) after
+        // opening a document the body's text layouts are still pending, and
+        // only the title is mounted — without this gate the single-shot retry
+        // would settle and the body would stay blank until an external repaint.
+        let focused_has_real_bounds = self
+            .focused_edit_target_entity_id(window, cx)
+            .and_then(|id| self.focusable_entity_by_id(id))
+            .map(|block| block.read(cx).last_bounds.is_some())
+            .unwrap_or(true);
+
+        if !has_bounds || !focused_has_real_bounds {
+            // Keep retrying until the body is measured. The first retries run at
+            // ~one frame (16 ms); later retries widen the interval so a layout
+            // that never completes cannot spin the CPU. Give up after a bounded
+            // number of attempts and settle on the current state — an external
+            // repaint (scroll, resize) will still correct it.
+            const MAX_RECHECKS: u32 = 60;
+            if self.scroll_layout_recheck_count >= MAX_RECHECKS {
+                self.pending_scroll_active_block_into_view = false;
+                self.scroll_layout_recheck_count = 0;
+                return;
+            }
+            self.scroll_layout_recheck_count += 1;
+            self.pending_scroll_recheck_after_layout = true;
+            let delay = if self.scroll_layout_recheck_count <= 8 {
+                Duration::from_millis(16)
+            } else {
+                Duration::from_millis(40)
+            };
+            self.schedule_scroll_recheck_with_delay(delay, cx);
             return;
         }
 
         self.pending_scroll_active_block_into_view = false;
+        self.scroll_layout_recheck_count = 0;
         self.scroll_recheck_task = None;
     }
 
@@ -647,10 +679,23 @@ impl Editor {
     /// when called from within `render`, so without this the retry would wait
     /// for the next external notify (e.g. the cursor blink, ~0.5s later).
     fn schedule_scroll_recheck(&mut self, cx: &mut Context<Self>) {
+        self.schedule_scroll_recheck_with_delay(Duration::from_millis(16), cx);
+    }
+
+    /// Like [`Self::schedule_scroll_recheck`] but with an explicit delay. Used by
+    /// [`Self::apply_pending_scroll_into_view`] to keep retrying until the just-
+    /// opened document body has actually been measured (a block's text layout is
+    /// computed asynchronously via `request_measured_layout`, so on the first
+    /// frame after `set_content`/`from_markdown`/file-open only the title has a
+    /// real height). The single-shot 16 ms retry can fire before that deferred
+    /// measurement commits — especially in a release build — leaving only the
+    /// first block mounted until an external repaint (scroll wheel) re-layouts.
+    /// Re-arming here until the focused block reports a real `last_bounds` closes
+    /// that race. The delay grows each iteration so a truly stuck layout cannot
+    /// spin the CPU.
+    fn schedule_scroll_recheck_with_delay(&mut self, delay: Duration, cx: &mut Context<Self>) {
         self.scroll_recheck_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(16))
-                .await;
+            cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |_this, cx| cx.notify());
         }));
     }

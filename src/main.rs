@@ -79,7 +79,9 @@ fn main() {
         gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         gpui_component::Theme::global_mut(cx).list.active_highlight = false;
 
-        if let Ok(http_client) = reqwest_client::ReqwestClient::user_agent("verve/0.1.0") {
+        if let Ok(http_client) =
+            reqwest_client::ReqwestClient::user_agent(concat!("verve/", env!("CARGO_PKG_VERSION")))
+        {
             cx.set_http_client(std::sync::Arc::new(http_client));
         }
 
@@ -188,6 +190,14 @@ fn launch_main_app(cx: &mut App) {
                 ..Default::default()
             },
             |window, cx| {
+                // The window close button (and the doc-level close) should hide
+                // the window rather than quit the app, so the process — and any
+                // in-memory state — stays alive until the user explicitly quits.
+                // Returning `false` cancels the close; `minimize_window` hides it.
+                window.on_window_should_close(cx, |window, _cx| {
+                    window.minimize_window();
+                    false
+                });
                 let view = cx.new(|cx| VerveApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
             },

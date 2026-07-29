@@ -119,6 +119,7 @@ impl Editor {
 
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_recheck_after_layout = true;
+        self.scroll_layout_recheck_count = 0;
         self.last_scroll_viewport_size = None;
         self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
         self.pending_focus = self.first_focusable_entity_id(cx);

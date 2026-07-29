@@ -169,6 +169,36 @@ struct SelectionPoint {
     col: usize,
 }
 
+/// Convert a terminal grid **column** index into a UTF-8 **byte** offset within
+/// a rendered row string.
+///
+/// Terminal rows are built one `char` per grid column (`text.push(cell.c)` per
+/// column), so a column index is a *char* index — NOT a byte index. CJK glyphs
+/// are 3 bytes and `·`/accented chars are 2 bytes, so slicing `row[col..]`
+/// directly lands inside a multi-byte char and panics
+/// ("byte index N is not a char boundary"). This maps the char index to a
+/// safe byte boundary, clamped to the string length.
+fn col_to_byte(s: &str, col: usize) -> usize {
+    s.char_indices()
+        .nth(col)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(s.len())
+}
+
+/// Slice a rendered row by terminal column (char) indices instead of byte
+/// indices, snapping both ends to valid char boundaries. The two indices need
+/// not be ordered; this returns the text between min and max.
+fn slice_by_cols(s: &str, start_col: usize, end_col: usize) -> &str {
+    let (a, b) = if start_col <= end_col {
+        (start_col, end_col)
+    } else {
+        (end_col, start_col)
+    };
+    let start_byte = col_to_byte(s, a);
+    let end_byte = col_to_byte(s, b).max(start_byte);
+    &s[start_byte..end_byte]
+}
+
 /// A GPUI entity wrapping an alacritty terminal model.
 pub struct TerminalView {
     pub term: Arc<std::sync::Mutex<Term<NullListener>>>,
@@ -291,19 +321,21 @@ impl TerminalView {
         }
         if start.row == end.row {
             let line = &lines[start.row];
-            let end_col = end.col.min(line.len());
-            let start_col = start.col.min(end_col);
-            return Some(line[start_col..end_col].to_string());
+            return Some(slice_by_cols(line, start.col, end.col).to_string());
         }
         let mut out = String::new();
-        out.push_str(&lines[start.row][start.col.min(lines[start.row].len())..]);
+        // The start row tail: from `start.col` to end-of-line. `col_to_byte`
+        // snaps the char (column) index to a valid byte boundary.
+        let start_byte = col_to_byte(&lines[start.row], start.col);
+        out.push_str(&lines[start.row][start_byte..]);
         for row in (start.row + 1)..end.row.min(lines.len()) {
             out.push('\n');
             out.push_str(lines[row].trim_end());
         }
         if end.row < lines.len() {
             out.push('\n');
-            out.push_str(&lines[end.row][..end.col.min(lines[end.row].len())]);
+            let end_byte = col_to_byte(&lines[end.row], end.col);
+            out.push_str(&lines[end.row][..end_byte]);
         }
         Some(out)
     }
@@ -651,19 +683,18 @@ impl Render for TerminalView {
                     return row_el.text_color(default_fg).child(text).into_any_element();
                 }
 
-                let len = text.len();
-                let from = if row_idx == start.row { start.col } else { 0 };
-                let to = if row_idx == end.row {
-                    end.col.min(len)
-                } else {
-                    len
-                };
-                let from = from.min(len);
-                let to = to.max(from);
+                // `start.col`/`end.col` are terminal grid COLUMNS, which map
+                // 1:1 to chars in `text` (built one char per column), NOT to
+                // bytes. Convert to byte offsets so slicing CJK/`·` rows does
+                // not panic mid-character.
+                let from_col = if row_idx == start.row { start.col } else { 0 };
+                let to_col = if row_idx == end.row { end.col } else { text.chars().count() };
+                let from_byte = col_to_byte(&text, from_col);
+                let to_byte = col_to_byte(&text, to_col).max(from_byte);
 
-                let before = text[..from].to_string();
-                let selected = text[from..to].to_string();
-                let after = text[to..].to_string();
+                let before = text[..from_byte].to_string();
+                let selected = text[from_byte..to_byte].to_string();
+                let after = text[to_byte..].to_string();
 
                 h_flex()
                     .h(px(lh))
@@ -842,4 +873,49 @@ fn char_cell_metrics(font_size: f32, line_height: f32) -> (f32, f32) {
     // Line height is the vertical advance per rendered row.
     let w = font_size * 0.58;
     (w, line_height)
+}
+
+#[cfg(test)]
+mod tests {
+    // Import only the two pure helpers under test — NOT `super::*`, which would
+    // pull in GPUI's macro-heavy prelude and blow the `#[test]` macro's
+    // recursion limit.
+    use super::{col_to_byte, slice_by_cols};
+
+    /// Reproduces the exact panic from the crash report: a row containing the
+    /// 2-byte `·` char where a selection column landed mid-character
+    /// ("end byte index 70 is not a char boundary; it is inside '·'").
+    /// Before the fix, slicing `text[69..70]` panicked because column 70 is a
+    /// char index that is not a valid byte boundary.
+    #[test]
+    fn col_to_byte_handles_multibyte_chars() {
+        // `·` is U+00B7 (2 bytes), CJK chars are 3 bytes.
+        let row = "ab·cd阅"; // chars: a(0) b(1) ·(2) c(3) d(4) 阅(5)
+                             // bytes: a=0 b=1 ·=2..4 c=4 d=5 阅=6..9
+        assert_eq!(col_to_byte(row, 0), 0); // 'a'
+        assert_eq!(col_to_byte(row, 2), 2); // '·' start byte
+        assert_eq!(col_to_byte(row, 3), 4); // 'c' (skips the 2nd byte of '·')
+        assert_eq!(col_to_byte(row, 5), 6); // '阅' start byte
+        // Out of range clamps to end (byte length 9), never panics.
+        assert_eq!(col_to_byte(row, 99), 9);
+    }
+
+    #[test]
+    fn slice_by_cols_does_not_panic_on_multibyte() {
+        // The panic case: a column index that falls inside a multi-byte char.
+        let row = " prd.pdf   Ⅳ. 阅 读 理 解 （ 2025·福建泉州期中）.pdf";
+        // Slicing at arbitrary column boundaries must never panic.
+        let _ = slice_by_cols(row, 0, row.chars().count());
+        let _ = slice_by_cols(row, 30, 50);
+        let _ = slice_by_cols(row, 40, 40); // empty selection
+        assert!(slice_by_cols(row, 0, 1).chars().count() <= 1);
+    }
+
+    #[test]
+    fn slice_by_cols_orders_endpoints() {
+        let row = "阅读测试"; // 4 chars, 12 bytes
+        assert_eq!(slice_by_cols(row, 1, 3), "读测");
+        // Reversed endpoints produce the same span.
+        assert_eq!(slice_by_cols(row, 3, 1), "读测");
+    }
 }

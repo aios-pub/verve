@@ -12046,7 +12046,6 @@ dependencies = [
  "clap",
  "cssparser",
  "env_logger",
- "fs_extra",
  "futures",
  "futures-util",
  "gix",

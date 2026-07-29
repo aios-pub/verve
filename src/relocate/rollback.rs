@@ -98,35 +98,26 @@ fn copy_back_with_progress(
     local: &Path,
     on_progress: &mut impl FnMut(&CopyProgress),
 ) -> Result<u64, String> {
-    if let Some(parent) = local.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建本地父目录失败 {}: {}", parent.display(), e))?;
-    }
-    let mut options = fs_extra::dir::CopyOptions::new();
-    // If the local path already exists (e.g. partial earlier restore), merge.
-    options.content_only = local.exists();
-    options.overwrite = true;
-
-    let copy_target: PathBuf = if local.exists() {
-        local.to_path_buf()
-    } else {
-        local
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| local.to_path_buf())
-    };
-
-    let result = fs_extra::dir::copy_with_progress(external, &copy_target, &options, |tp| {
-        let cp = CopyProgress {
-            bytes_done: tp.copied_bytes,
-            bytes_total: tp.total_bytes,
-            current_file: tp.file_name.clone(),
-        };
-        on_progress(&cp);
-        fs_extra::dir::TransitProcessResult::ContinueOrAbort
-    });
-
-    result.map_err(|e| format!("复制回本机失败: {}", e))
+    // Reuse the cancel-aware copy from migrate.rs. Rollback is never cancelled
+    // mid-copy (the cancel token below stays false), but we get progress +
+    // permission preservation for free. Merge policy overwrites any stale local
+    // files from a partial earlier restore.
+    let never_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    super::migrate::copy_dir_with_progress(
+        external,
+        local,
+        super::migrate::ConflictPolicy::Merge,
+        |cp| on_progress(cp),
+        0, // total unknown for rollback; progress still reports bytes_done
+        &never_cancel,
+    )
+    .map_err(|e| {
+        if e == super::migrate::CANCELLED_ERR {
+            "复制回本机被中断".to_string()
+        } else {
+            format!("复制回本机失败: {}", e)
+        }
+    })
 }
 
 /// Run the rollback flow for one task (PRD §10.2). `on_progress` is fed from

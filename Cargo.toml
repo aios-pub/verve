@@ -96,10 +96,9 @@ anyhow = "1"
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
-# Recursive directory walker for the relocate module's directory-size scan.
+# Recursive directory walker for the relocate module's directory-size scan +
+# cancel-aware recursive copy.
 walkdir = "2.5"
-# Resumable directory copy (with progress callbacks) for the relocate module.
-fs_extra = "1.3"
 # Optional SHA-256 integrity verification for migrated directories.
 sha2 = "0.10"
 # QR code generation for the document-sharing "二维码" share method (pure Rust).

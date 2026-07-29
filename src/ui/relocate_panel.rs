@@ -614,7 +614,7 @@ impl RelocatePanel {
         // Queue controls (only while running / paused).
         let controls = match state {
             EngineState::Migrating | EngineState::Paused => Some(
-                h_flex().gap_2().children([
+                h_flex().gap_2().items_center().children([
                     if state == EngineState::Migrating {
                         Button::new("rel-pause")
                             .ghost()
@@ -633,7 +633,8 @@ impl RelocatePanel {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.engine.update(cx, |e, cx| e.resume(cx))
                             }))
-                    },
+                    }
+                    .into_any_element(),
                     Button::new("rel-skip")
                         .ghost()
                         .small()
@@ -641,7 +642,20 @@ impl RelocatePanel {
                         .label("跳过当前")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.engine.update(cx, |e, cx| e.skip_current(cx))
-                        })),
+                        }))
+                        .into_any_element(),
+                    // 撤销迁移：停止当前复制并回退本次会话已迁移的目录，
+                    // 把文件还原回本机。原目录在复制阶段被取消时保持完好。
+                    Button::new("rel-cancel-rollback")
+                        .danger()
+                        .small()
+                        .icon(IconName::Undo2)
+                        .label("撤销迁移")
+                        .tooltip("停止迁移并把本次已迁移的文件还原回本机")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.engine.update(cx, |e, cx| e.cancel_and_rollback(cx))
+                        }))
+                        .into_any_element(),
                 ]),
             ),
             _ => None,

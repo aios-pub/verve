@@ -62,6 +62,10 @@ pub enum MigrateOutcome {
     /// A precondition failed before any destructive action (occupancy, space,
     /// blacklist, target-not-dir). No data was modified.
     PreconditionFailed { reason: String },
+    /// The user cancelled mid-copy. The original local directory is intact
+    /// (the destructive delete/symlink steps run only after a successful copy);
+    /// the partial external copy has been removed.
+    Cancelled,
     /// Something went wrong mid-copy/verify; partial external data may exist.
     Failed { reason: String },
 }
@@ -161,23 +165,31 @@ pub fn external_target(target_root: &Path, source: &Path) -> PathBuf {
     target_root.join(rel)
 }
 
-/// Copy a directory tree into `dest`, reporting progress via the callback and
-/// applying `policy` for a pre-existing `dest`.
+/// Sentinel error string used when the user cancels mid-copy. The caller can
+/// match on this prefix to distinguish cancellation from a real failure.
+pub(crate) const CANCELLED_ERR: &str = "__relocate_cancelled__";
+
+/// Copy a directory tree into `dest`, reporting per-chunk progress via the
+/// callback and applying `policy` for a pre-existing `dest`.
 ///
-/// Uses `fs_extra::dir::copy_with_progress`. fs_extra's behaviour:
-/// - `content_only=false` (fresh dest): copies `source` *as* `dest/basename`.
-///   We therefore copy into `dest`'s parent with the parent pre-created so the
-///   result lands exactly at `dest`.
-/// - `content_only=true` (merge into existing dest): copies source's contents
-///   directly into `dest`, leaving dest in place.
-fn copy_dir_with_progress(
+/// Unlike `fs_extra::dir::copy_with_progress`, this is a hand-written recursive
+/// copy that **checks `cancel` between every buffer chunk and every file**, so
+/// the caller can interrupt an in-flight copy (fs_extra's chunk callback
+/// returns `()` and cannot abort). File permissions are preserved to match
+/// fs_extra's behaviour.
+///
+/// `bytes_total` is the pre-scanned source size, used to report total bytes in
+/// `CopyProgress` (so progress fractions are stable even before the first
+/// chunk).
+pub(crate) fn copy_dir_with_progress(
     source: &Path,
     dest: &Path,
     policy: ConflictPolicy,
     mut on_progress: impl FnMut(&CopyProgress),
     bytes_total: u64,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<u64, String> {
-    let _ = bytes_total;
+    use std::io::{Read, Write};
 
     // Conflict handling (dest already exists).
     if dest.exists() {
@@ -192,45 +204,113 @@ fn copy_dir_with_progress(
                     .map_err(|e| format!("备份重命名失败: {}", e))?;
             }
             ConflictPolicy::Merge => {
-                // Leave dest in place; copy_with_progress merges into it.
+                // Leave dest in place; we copy into it, skipping existing files.
             }
         }
-    }
-
-    let dest_exists_now = dest.exists();
-    let mut options = fs_extra::dir::CopyOptions::new();
-    options.content_only = dest_exists_now;
-    options.overwrite = policy == ConflictPolicy::Merge;
-
-    // For a fresh copy, fs_extra appends `basename` to `dest`, so we point it
-    // at the parent to land at `dest` exactly.
-    let copy_target: PathBuf = if dest_exists_now {
-        dest.to_path_buf()
     } else {
-        // Ensure parent exists, then let fs_extra create dest/basename == dest.
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目标父目录失败 {}: {}", parent.display(), e))?;
-        }
-        dest.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| dest.to_path_buf())
-    };
-
-    let result = fs_extra::dir::copy_with_progress(source, &copy_target, &options, |tp| {
-        let cp = CopyProgress {
-            bytes_done: tp.copied_bytes,
-            bytes_total: tp.total_bytes,
-            current_file: tp.file_name.clone(),
-        };
-        on_progress(&cp);
-        fs_extra::dir::TransitProcessResult::ContinueOrAbort
-    });
-
-    match result {
-        Ok(bytes) => Ok(bytes),
-        Err(e) => Err(format!("复制失败: {}", e)),
+        // Fresh copy: create dest itself.
+        std::fs::create_dir_all(dest)
+            .map_err(|e| format!("创建目标目录失败 {}: {}", dest.display(), e))?;
     }
+
+    let overwrite = policy == ConflictPolicy::Merge;
+    let mut copied: u64 = 0;
+    let mut buf = vec![0u8; 64 * 1024];
+
+    // Walk the source tree, recreating the directory layout under dest and
+    // copying each file chunk-by-chunk.
+    for entry in walkdir::WalkDir::new(source)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        // Honour cancellation between entries.
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(CANCELLED_ERR.to_string());
+        }
+        let rel = match entry.path().strip_prefix(source) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let target = dest.join(rel);
+        let ft = entry.file_type();
+        if ft.is_dir() {
+            std::fs::create_dir_all(&target)
+                .map_err(|e| format!("创建目录失败 {}: {}", target.display(), e))?;
+            // Preserve directory permissions where possible.
+            if let Ok(meta) = entry.metadata() {
+                let _ = std::fs::set_permissions(&target, meta.permissions());
+            }
+            continue;
+        }
+        if !ft.is_file() {
+            // Symlinks / special files: skip (mirrors fs_extra's file-only copy).
+            continue;
+        }
+
+        let file_name = entry
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => return Err(format!("读取文件元数据失败 {}: {}", entry.path().display(), e)),
+        };
+        let file_size = meta.len();
+
+        // Merge policy: skip files that already exist at the target.
+        if target.exists() && !overwrite {
+            // Still count the file as "done" for progress purposes.
+            copied = copied.saturating_add(file_size);
+            on_progress(&CopyProgress {
+                bytes_done: copied,
+                bytes_total,
+                current_file: file_name,
+            });
+            continue;
+        }
+
+        // Open + copy chunk-by-chunk, checking cancel after each chunk.
+        let mut reader = match std::fs::File::open(entry.path()) {
+            Ok(f) => f,
+            Err(e) => return Err(format!("打开源文件失败 {}: {}", entry.path().display(), e)),
+        };
+        let mut writer = match std::fs::File::create(&target) {
+            Ok(f) => f,
+            Err(e) => return Err(format!("创建目标文件失败 {}: {}", target.display(), e)),
+        };
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(CANCELLED_ERR.to_string());
+            }
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    return Err(format!(
+                        "读取文件失败 {}: {}",
+                        entry.path().display(),
+                        e
+                    ))
+                }
+            };
+            if let Err(e) = writer.write_all(&buf[..n]) {
+                return Err(format!("写入文件失败 {}: {}", target.display(), e));
+            }
+            copied = copied.saturating_add(n as u64);
+            on_progress(&CopyProgress {
+                bytes_done: copied,
+                bytes_total,
+                current_file: file_name.clone(),
+            });
+        }
+        // Preserve file permissions (fs_extra does this too).
+        let _ = std::fs::set_permissions(&target, meta.permissions());
+        let _ = file_size;
+    }
+
+    Ok(copied)
 }
 
 /// Compute a SHA-256 digest of every file under `dir` (relative-path sorted)
@@ -273,6 +353,7 @@ pub fn migrate_one(
     size_bytes: u64,
     conflict: ConflictPolicy,
     verify: bool,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     on_progress: impl FnMut(&CopyProgress),
 ) -> MigrateOutcome {
     let mut on_progress = on_progress;
@@ -316,11 +397,26 @@ pub fn migrate_one(
 
     let dest = external_target(target_root, source);
 
-    // 3+4. Copy with conflict policy + progress (PRD §8.2.2/3).
-    let copied = match copy_dir_with_progress(source, &dest, conflict, |cp| on_progress(cp), size_bytes)
-    {
+    // 3+4. Copy with conflict policy + progress (PRD §8.2.2/3). Cancel-aware:
+    //      the copy checks `cancel` between chunks; on cancel the original
+    //      directory is still intact (the destructive steps run only after a
+    //      successful copy), so we just remove the partial external copy.
+    let copied = match copy_dir_with_progress(
+        source,
+        &dest,
+        conflict,
+        |cp| on_progress(cp),
+        size_bytes,
+        &cancel,
+    ) {
         Ok(n) => n,
         Err(reason) => {
+            // User cancelled mid-copy: clean up the partial external copy and
+            // report cancellation. The original local directory is untouched.
+            if reason == CANCELLED_ERR {
+                let _ = std::fs::remove_dir_all(&dest);
+                return MigrateOutcome::Cancelled;
+            }
             // Distinguish "user chose skip" from a real failure.
             if reason.starts_with("用户选择跳过") {
                 return MigrateOutcome::Skipped { reason };
@@ -497,6 +593,7 @@ mod tests {
             size,
             ConflictPolicy::Merge,
             false, // skip verify to keep the test fast; symlink logic is the focus
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             |_| {},
         );
 
@@ -568,6 +665,89 @@ mod tests {
             "record target_external_path should be under the external root"
         );
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Cancelling mid-copy returns `MigrateOutcome::Cancelled`, leaves the
+    /// original local directory fully intact, and removes the partial external
+    /// copy. The cancellation is triggered from the progress callback (the
+    /// realistic path: the engine flips its cancel flag while the copy runs).
+    #[test]
+    #[cfg(unix)]
+    fn migrate_cancelled_mid_copy_leaves_original_intact() {
+        let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(h) if !h.as_os_str().is_empty() => h,
+            _ => {
+                eprintln!("skip: HOME not set");
+                return;
+            }
+        };
+        let tmp = home.join(format!(
+            ".verve-migrate-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = tmp.join("home").join(".proj");
+        let target_root = tmp.join("external");
+        // Make the source non-trivial so the copy spans multiple chunks/files
+        // before the callback flips the cancel flag.
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::create_dir_all(&target_root).unwrap();
+        std::fs::write(source.join("a.txt"), vec![b'A'; 256 * 1024]).unwrap();
+        std::fs::write(source.join("b.txt"), vec![b'B'; 256 * 1024]).unwrap();
+        std::fs::write(source.join("nested").join("c.txt"), vec![b'C'; 256 * 1024]).unwrap();
+
+        // Trigger cancellation on the first progress sample from a second
+        // thread; the copy loop checks the flag between chunks.
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_cb = cancel.clone();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_cb = calls.clone();
+        let outcome = migrate_one(
+            &source,
+            &target_root,
+            "test-group",
+            768 * 1024,
+            ConflictPolicy::Merge,
+            false,
+            cancel.clone(),
+            move |_cp| {
+                let n = calls_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Flip cancel after a handful of chunks so we actually abort
+                // mid-copy rather than before it starts.
+                if n >= 2 {
+                    cancel_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        );
+
+        assert!(
+            matches!(outcome, MigrateOutcome::Cancelled),
+            "expected Cancelled, got {:?}",
+            outcome
+        );
+
+        // 1. Original local directory is intact (not deleted, not a symlink)
+        //    and its files are still readable.
+        let meta = std::fs::symlink_metadata(&source).expect("source missing");
+        assert!(
+            meta.is_dir() && !meta.file_type().is_symlink(),
+            "source must remain a real directory after cancellation"
+        );
+        assert_eq!(std::fs::read(source.join("a.txt")).unwrap().len(), 256 * 1024);
+
+        // 2. The partial external copy was cleaned up.
+        let dest = external_target(&target_root, &source);
+        assert!(
+            !dest.exists(),
+            "partial external copy should be removed after cancellation, but {} exists",
+            dest.display()
+        );
+
+        let _ = calls;
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

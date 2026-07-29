@@ -142,6 +142,12 @@ pub struct RelocateEngine {
     skip_requested: bool,
     /// Whether the queue is paused.
     paused: bool,
+    /// Cancel flag for the in-flight copy. Setting it aborts the current
+    /// `migrate_one` copy at the next chunk boundary.
+    current_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Task ids migrated during the *current* queue run (used by
+    /// `cancel_and_rollback` to undo exactly this session's work).
+    session_migrated_ids: Vec<String>,
     /// The background driver task; dropped (cancelled) on reset.
     driver: Option<Task<()>>,
     /// Rolling speed sample (bytes, timestamp).
@@ -169,6 +175,8 @@ impl RelocateEngine {
             queue: Vec::new(),
             skip_requested: false,
             paused: false,
+            current_cancel: None,
+            session_migrated_ids: Vec::new(),
             driver: None,
             speed_sample: None,
             _scan_task: None,
@@ -437,6 +445,8 @@ impl RelocateEngine {
         };
         self.paused = false;
         self.skip_requested = false;
+        self.session_migrated_ids.clear();
+        self.current_cancel = None;
         self.state = EngineState::Migrating;
         self.log(
             LogLevel::Info,
@@ -473,6 +483,114 @@ impl RelocateEngine {
             self.log(LogLevel::Warn, "跳过当前目录…");
             cx.notify();
         }
+    }
+
+    /// Cancel the in-flight migration and roll back every task migrated
+    /// **during the current queue run** (tracked in `session_migrated_ids`).
+    ///
+    /// - Sets `current_cancel` so the running copy aborts at the next chunk
+    ///   boundary (the partial external copy is cleaned by `migrate_one`).
+    /// - Drops the driver (stops the rest of the queue).
+    /// - For each session-migrated task, runs `rollback_one` to copy the
+    ///   external data back to the original local path and remove the symlink.
+    ///
+    /// The original local directories are restored; no user data is lost.
+    pub fn cancel_and_rollback(&mut self, cx: &mut Context<Self>) {
+        if self.state != EngineState::Migrating && self.state != EngineState::Paused {
+            return;
+        }
+        // 1. Signal the in-flight copy to abort.
+        if let Some(cancel) = self.current_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // 2. Stop the queue + clear state.
+        self.driver = None; // dropping the Task cancels the driver loop
+        self.queue.clear();
+        self.paused = false;
+        self.skip_requested = false;
+
+        let ids = std::mem::take(&mut self.session_migrated_ids);
+        let count = ids.len();
+        if count == 0 {
+            self.state = EngineState::Idle;
+            self.progress = Progress::default();
+            self.log(LogLevel::Info, "已停止迁移（本次无已完成的项需要回退）。");
+            cx.emit(RelocateEvent::StateChanged);
+            cx.emit(RelocateEvent::TasksChanged);
+            return;
+        }
+        self.state = EngineState::RollingBack;
+        self.progress = Progress {
+            total_items: count,
+            ..Default::default()
+        };
+        self.log(
+            LogLevel::Warn,
+            &format!("正在撤销迁移：停止剩余任务，回退 {} 项已迁移目录…", count),
+        );
+        cx.emit(RelocateEvent::StateChanged);
+
+        // 3. Roll back each session-migrated task serially on a background
+        //    thread, feeding progress back per item.
+        let weak = cx.weak_entity();
+        let records: Vec<TaskRecord> = self
+            .tasks
+            .iter()
+            .filter(|t| ids.contains(&t.task_id) && t.status == TaskStatus::Migrated)
+            .cloned()
+            .collect();
+        cx.spawn(async move |_this, cx| {
+            let mut done = 0usize;
+            let total = records.len();
+            for rec in records {
+                let r = Arc::new(rec);
+                let r_for_update = r.clone();
+                let outcome = smol::unblock(move || rollback::rollback_one(&r, |_| {})).await;
+                let _ = weak.update(cx, |this, cx| {
+                    this.progress.current_index = done;
+                    this.progress.current_source = r_for_update.source_path.clone();
+                    match outcome {
+                        RollbackOutcome::Done { bytes_restored, .. } => {
+                            persistence::update_status(&r_for_update.task_id, TaskStatus::RolledBack, None);
+                            this.refresh_tasks();
+                            this.log(
+                                LogLevel::Info,
+                                &format!(
+                                    "↩️ 已回退：{}（{}）",
+                                    r_for_update.source_path,
+                                    super::types::human_bytes(bytes_restored)
+                                ),
+                            );
+                        }
+                        RollbackOutcome::ExternalUnavailable { reason }
+                        | RollbackOutcome::Failed { reason } => {
+                            persistence::update_status(&r_for_update.task_id, TaskStatus::Failed, Some(&reason));
+                            this.refresh_tasks();
+                            this.log(LogLevel::Error, &format!("回退失败 {}: {}", r_for_update.source_path, reason));
+                        }
+                    }
+                    done += 1;
+                    this.progress.current_index = done;
+                    cx.emit(RelocateEvent::Progress);
+                    cx.emit(RelocateEvent::TasksChanged);
+                });
+            }
+            let _ = weak.update(cx, |this, cx| {
+                this.state = EngineState::Idle;
+                this.current_cancel = None;
+                this.progress = Progress::default();
+                this.log(
+                    LogLevel::Info,
+                    &format!("撤销迁移完成（已回退 {} 项）。", done),
+                );
+                let _ = total;
+                cx.emit(RelocateEvent::StateChanged);
+                cx.emit(RelocateEvent::TasksChanged);
+                // Re-scan so the rolled-back (now real) dirs reappear for selection.
+                this.scan_async(cx);
+            });
+        })
+        .detach();
     }
 
     // ---- rollback queue -------------------------------------------------
@@ -587,7 +705,12 @@ impl RelocateEngine {
     // ---- driver ---------------------------------------------------------
 
     /// Spawn the serial queue driver. It processes `self.queue` one item at a
-    /// time, honouring pause/skip, emitting progress, and persisting results.
+    /// time, honouring pause/skip/cancel, emitting **live** per-chunk progress,
+    /// and persisting results.
+    ///
+    /// Progress is live because the copy runs on a background task while the
+    /// driver concurrently drains the progress channel and forwards each sample
+    /// to the engine (so the UI sees byte-level movement + speed in real time).
     fn spawn_driver(&mut self, cx: &mut Context<Self>) {
         // Capture the queue snapshot (the current item is index 0).
         let initial_queue: Vec<QueueItem> = std::mem::take(&mut self.queue);
@@ -610,6 +733,15 @@ impl RelocateEngine {
             });
 
             while !remaining.is_empty() {
+                // If the engine was cancelled/rolled back out-of-band (driver
+                // task dropped via cancel_and_rollback), bail immediately.
+                let cancelled = weak
+                    .read_with(cx, |this, _cx| this.current_cancel.is_none() && this.state != EngineState::Migrating)
+                    .unwrap_or(false);
+                if cancelled {
+                    return;
+                }
+
                 // Honour pause: poll until resumed.
                 loop {
                     let paused = weak
@@ -628,12 +760,16 @@ impl RelocateEngine {
                 }
 
                 let item = remaining.remove(0);
+                // Create a fresh cancel token for this item and stash it on the
+                // engine so cancel_and_rollback can signal abort.
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let _ = weak.update(cx, |this, cx| {
                     this.progress.current_index = idx;
                     this.progress.current_source = item.source.to_string_lossy().into_owned();
                     this.progress.current_bytes_done = 0;
                     this.progress.current_bytes_total = item.size_bytes;
                     this.speed_sample = None;
+                    this.current_cancel = Some(cancel.clone());
                     cx.emit(RelocateEvent::Progress);
                 });
 
@@ -641,40 +777,61 @@ impl RelocateEngine {
                 let group = item.group_name.clone();
                 let size = item.size_bytes;
                 let root = target_root.clone().unwrap_or_default();
-                let weak_for_copy = weak.clone();
 
-                // Run the blocking migration on a background thread, piping
-                // progress back through a channel.
-                let (ptx, prx) = smol::channel::bounded::<CopyProgress>(64);
-                let outcome = smol::unblock(move || {
-                    migrate::migrate_one(&src, &root, &group, size, conflict, verify, |cp| {
-                        // Best-effort non-blocking send.
-                        let _ = ptx.try_send(cp.clone());
-                    })
-                })
-                .await;
-
-                // Drain progress concurrently with the blocking op above is not
-                // possible in this simple structure; instead we fold the final
-                // progress from the outcome. To still show live progress, we
-                // spawn a tiny task that drains prx while migrate runs. For
-                // simplicity and correctness we drain here after completion.
-                while let Ok(cp) = prx.try_recv() {
-                    let _ = weak_for_copy.update(cx, |this, cx| {
-                        this.apply_copy_progress(&cp);
-                        cx.emit(RelocateEvent::Progress);
+                // Run the blocking migration on a background executor task,
+                // piping progress through a channel. We then race the copy
+                // completion against the progress channel so the UI gets live
+                // updates while the copy runs.
+                let (ptx, prx) = smol::channel::bounded::<CopyProgress>(128);
+                let cancel_for_copy = cancel.clone();
+                let copy_task: Task<MigrateOutcome> =
+                    cx.background_executor().spawn(async move {
+                        let ptx = ptx;
+                        let cancel = cancel_for_copy;
+                        // smol::unblock runs the blocking copy off the async
+                        // runtime; the closure sends progress to ptx as it goes.
+                        smol::unblock(move || {
+                            migrate::migrate_one(
+                                &src, &root, &group, size, conflict, verify, cancel, |cp| {
+                                    // Best-effort non-blocking send; if the channel
+                                    // is full the UI simply skips a sample.
+                                    let _ = ptx.try_send(cp.clone());
+                                },
+                            )
+                        })
+                        .await
                     });
-                }
-                let _ = weak_for_copy; // silence
+
+                // Concurrently drain the progress channel until the copy finishes.
+                let outcome = loop {
+                    // Poll the channel with a tiny timeout so we also pick up
+                    // the copy_task completion promptly.
+                    let recv = prx.recv().await;
+                    match recv {
+                        Ok(cp) => {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.apply_copy_progress(&cp);
+                                cx.emit(RelocateEvent::Progress);
+                            });
+                        }
+                        Err(_) => {
+                            // Channel closed (sender dropped) → copy is done.
+                            break copy_task.await;
+                        }
+                    }
+                };
 
                 let _ = weak.update(cx, |this, cx| {
                     let skip = std::mem::replace(&mut this.skip_requested, false);
+                    this.current_cancel = None;
                     match outcome {
                         MigrateOutcome::Done {
                             record,
                             final_progress,
                         } => {
                             persistence::append(&record);
+                            // Track the id so cancel_and_rollback can undo it.
+                            this.session_migrated_ids.push(record.task_id.clone());
                             this.tasks.push(record);
                             // Clear selection for the migrated path.
                             this.selected
@@ -700,6 +857,16 @@ impl RelocateEngine {
                                 &format!("（已跳过 {}）", item.source.display()),
                             );
                         }
+                        MigrateOutcome::Cancelled => {
+                            this.log(
+                                LogLevel::Warn,
+                                &format!("🚫 已取消迁移：{}", item.source.display()),
+                            );
+                            // A cancel aborts the whole queue — stop here.
+                            idx += 1;
+                            cx.emit(RelocateEvent::Progress);
+                            return; // driver ends; rollback (if any) is driven by cancel_and_rollback
+                        }
                         MigrateOutcome::Failed { reason } => {
                             this.log(
                                 LogLevel::Error,
@@ -719,6 +886,7 @@ impl RelocateEngine {
             let _ = weak.update(cx, |this, cx| {
                 this.state = EngineState::Idle;
                 this.driver = None;
+                this.current_cancel = None;
                 this.progress = Progress::default();
                 this.log(LogLevel::Info, "迁移队列结束。");
                 cx.emit(RelocateEvent::StateChanged);
@@ -809,6 +977,8 @@ mod tests {
             queue: Vec::new(),
             skip_requested: false,
             paused: false,
+            current_cancel: None,
+            session_migrated_ids: Vec::new(),
             driver: None,
             speed_sample: None,
             _scan_task: None,
@@ -885,6 +1055,8 @@ mod tests {
             queue: Vec::new(),
             skip_requested: false,
             paused: false,
+            current_cancel: None,
+            session_migrated_ids: Vec::new(),
             driver: None,
             speed_sample: None,
             _scan_task: None,

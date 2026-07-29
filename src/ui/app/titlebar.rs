@@ -6,7 +6,7 @@
 use gpui::{img, *};
 use gpui::prelude::FluentBuilder as _;
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, Selectable as _, Disableable as _,
-    button::{Button, ButtonVariants as _}, h_flex, v_flex, popover::Popover};
+    button::{Button, ButtonVariants as _}, h_flex, v_flex, popover::Popover, WindowExt};
 use crate::assets::{BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF,
     HISTORY, IMPORT, K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE,
     SAVE_AS, SERVER, SHARE};
@@ -1510,33 +1510,70 @@ impl VerveApp {
                         let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
                     })),
             )
-            // Icon + filename + dirty marker
+            // Icon + filename + dirty marker. The whole block is width-bounded
+            // (`min_w_0` + `max_w`) so a very long filename/path can ellipsize
+            // instead of growing unbounded and starving the right-side menu off
+            // screen. `min_w_0` is what lets the flex child actually shrink below
+            // its content size so truncation takes effect.
             .child(
                 h_flex()
                     .gap(px(6.))
                     .items_center()
-                    .child(div().text_color(theme.primary).child(vicon(DOCS)))
+                    .min_w_0()
+                    .max_w(px(320.))
+                    .overflow_hidden()
+                    .child(div().flex_shrink_0().text_color(theme.primary).child(vicon(DOCS)))
                     .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(title),
-                            )
-                            .when(dirty, |d| {
-                                d.child(div().text_color(theme.primary).child("●"))
-                            }),
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(title),
                     )
+                    .when(dirty, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(theme.primary)
+                                .child("●"),
+                        )
+                    })
                     .when_some(file_path, |this, path| {
+                        // Click the path to copy the full path to the clipboard
+                        // (it's the full display path, already available here).
+                        let path_copy = path.clone();
+                        let copy_tip = rust_i18n::t!("markdown.copy_path").to_string();
+                        let copied_tip = rust_i18n::t!("markdown.path_copied").to_string();
                         this.child(
                             div()
+                                .id("md-title-path")
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .truncate()
-                                .child(path),
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .cursor_pointer()
+                                .hover(|s| s.text_color(theme.foreground))
+                                // Plain `div` (not `Button`) takes a tooltip via a
+                                // closure that builds the tooltip view.
+                                .tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(copy_tip.clone())
+                                        .build(window, cx)
+                                })
+                                .child(path)
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        path_copy.clone(),
+                                    ));
+                                    window.push_notification(
+                                        gpui_component::notification::Notification::new()
+                                            .title(copied_tip.clone())
+                                            .autohide(true),
+                                        cx,
+                                    );
+                                }),
                         )
                     }),
             )

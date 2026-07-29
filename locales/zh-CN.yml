@@ -345,6 +345,8 @@ markdown:
   save_as: 另存为
   outline: 大纲
   collapse_outline: 收起大纲
+  copy_path: 点击复制路径
+  path_copied: 路径已复制
   export_html: 导出 HTML
   export_pdf: 导出 PDF
   no_recent: 没有最近文件

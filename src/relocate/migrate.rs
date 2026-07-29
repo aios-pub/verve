@@ -131,15 +131,34 @@ fn summarize_lsof(stdout: &[u8]) -> String {
     seen.into_iter().collect::<Vec<_>>().join("\n")
 }
 
-/// Resolve the external target path for a source directory: target_root joined
-/// with the source's final path component (e.g. `~/.cargo` →
-/// `<root>/.cargo`).
+/// Resolve the external target path for a source directory.
+///
+/// Preserves the source's path **relative to the user's home directory** so the
+/// external copy mirrors the original on-disk layout (e.g.
+/// `~/.cargo` → `<root>/.cargo`, `~/Library/Caches/X` →
+/// `<root>/Library/Caches/X`). This avoids basename collisions between unrelated
+/// directories and keeps the external tree browsable. Directories outside `~`
+/// (rare for custom-added paths) fall back to the basename, same as before.
 pub fn external_target(target_root: &Path, source: &Path) -> PathBuf {
-    let name = source
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_else(|| source.as_os_str().to_os_string());
-    target_root.join(name)
+    let rel: std::path::PathBuf = match super::blacklist::home() {
+        Some(home) => source
+            .strip_prefix(&home)
+            .map(|r| r.to_path_buf())
+            .unwrap_or_else(|_| source.to_path_buf()),
+        None => source.to_path_buf(),
+    };
+    // If strip_prefix failed (path not under home), fall back to basename so we
+    // never accidentally recreate a full absolute path under the external root.
+    let rel = if rel.starts_with("/") || rel == *source {
+        source
+            .file_name()
+            .map(std::ffi::OsString::from)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| source.to_path_buf())
+    } else {
+        rel
+    };
+    target_root.join(rel)
 }
 
 /// Copy a directory tree into `dest`, reporting progress via the callback and
@@ -384,9 +403,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn external_target_joins_basename() {
-        let t = external_target(Path::new("/Volumes/Ext/relocate"), Path::new("/Users/x/.cargo"));
-        assert_eq!(t, PathBuf::from("/Volumes/Ext/relocate/.cargo"));
+    fn external_target_preserves_home_relative_structure() {
+        // Paths under $HOME keep their full relative structure (no flattening,
+        // no basename collisions between unrelated dirs).
+        let home = super::super::blacklist::home().expect("HOME set in test env");
+        let root = Path::new("/Volumes/Ext");
+
+        // ~/.cargo → <root>/.cargo
+        let t = external_target(root, &home.join(".cargo"));
+        assert_eq!(t, PathBuf::from("/Volumes/Ext/.cargo"));
+
+        // ~/Library/Caches/X → <root>/Library/Caches/X (nested structure preserved)
+        let t = external_target(root, &home.join("Library/Caches/X"));
+        assert_eq!(t, PathBuf::from("/Volumes/Ext/Library/Caches/X"));
+    }
+
+    #[test]
+    fn external_target_falls_back_to_basename_outside_home() {
+        // A path NOT under $HOME (e.g. a custom dir on another volume) falls
+        // back to its basename so we never recreate an absolute path tree.
+        let root = Path::new("/Volumes/Ext");
+        let t = external_target(root, Path::new("/opt/some/dir/cache"));
+        assert_eq!(t, PathBuf::from("/Volumes/Ext/cache"));
     }
 
     #[test]
@@ -481,12 +519,15 @@ mod tests {
             "symlink must be absolute (PRD §2.2), got {:?}",
             link_target
         );
-        let canonical_ext = std::fs::canonicalize(&target_root)
-            .unwrap_or_else(|_| target_root.clone())
-            .join(".proj");
+        // The external target preserves the source's home-relative path, so
+        // compute the expected location via the same helper (not a hardcoded
+        // ".proj" — the source lives under <HOME>/.verve-migrate-e2e-.../home).
+        let canonical_target_root =
+            std::fs::canonicalize(&target_root).unwrap_or_else(|_| target_root.clone());
+        let expected_ext = external_target(&canonical_target_root, &source);
         assert_eq!(
-            link_target, canonical_ext,
-            "symlink should point at the external copy"
+            link_target, expected_ext,
+            "symlink should point at the external copy (home-relative layout)"
         );
 
         // 3. Files are still reachable THROUGH the original path — i.e. the

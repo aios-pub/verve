@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 /// Resolve `~/`-prefixed path strings to absolute `PathBuf`s against `$HOME`.
-pub(crate) fn home() -> Option<PathBuf> {
+pub fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 

@@ -241,7 +241,10 @@ impl RelocatePanel {
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .py(px(2.))
+                        .px(px(4.))
+                        .py(px(3.))
+                        .rounded(px(4.))
+                        .hover(|d| d.bg(theme.muted.opacity(0.4)))
                         .child(
                             Checkbox::new(format!("ent-{}-{}", gi, ei))
                                 .checked(checked)
@@ -277,7 +280,11 @@ impl RelocatePanel {
                 .rounded(theme.radius)
                 .p_3()
                 .gap_1()
-                .bg(theme.muted.opacity(0.25))
+                // Use secondary (brighter than muted in dark themes) so the
+                // checkbox border (theme.input ≈ border) stays visible against
+                // the card. muted@0.25 was nearly the same shade as the
+                // checkbox outline, hiding it in dark mode.
+                .bg(theme.secondary.opacity(0.15))
                 .child(header)
                 .child(hint_row)
                 .child(entries_col);

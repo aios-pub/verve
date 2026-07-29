@@ -951,7 +951,12 @@ impl Editor {
     ) -> String {
         if let Some(mapping) = mappings.get(&entity.entity_id()) {
             if full_block {
-                return source[mapping.full_source_range.clone()].to_string();
+                return safe_slice(
+                    source,
+                    mapping.full_source_range.start,
+                    mapping.full_source_range.end,
+                )
+                .to_string();
             }
 
             let start = self

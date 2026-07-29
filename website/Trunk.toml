@@ -1,0 +1,23 @@
+# Trunk build configuration for the Verve website (pure CSR).
+# https://github.com/trunk-rs/trunk
+
+[build]
+# Output to dist/.
+dist = "dist"
+# Sub-path the site is served from on GitHub Pages.
+# Trunk rewrites every asset href with this prefix. Leading slash makes it an
+# absolute path so it resolves correctly regardless of the page's own path.
+public_url = "/verve/"
+# Release optimisation.
+release = true
+
+[serve]
+# Local dev server.
+address = "127.0.0.1"
+port = 8080
+
+[[hooks]]
+# Build Tailwind CSS before Trunk bundles.
+stage = "build"
+command = "sh"
+command_arguments = ["-c", "npx @tailwindcss/cli -i style/input.css -o public/tailwind.css --minify"]

@@ -278,6 +278,37 @@ impl RelocateEngine {
         cx.notify();
     }
 
+    /// Select every entry across all groups (the panel's "全选" button).
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        for g in &self.scan.groups {
+            for e in &g.entries {
+                self.selected.insert(e.path.to_string_lossy().to_string());
+            }
+        }
+        cx.notify();
+    }
+
+    /// Clear all selections (the panel's "取消全选" button).
+    pub fn clear_all(&mut self, cx: &mut Context<Self>) {
+        self.selected.clear();
+        cx.notify();
+    }
+
+    /// Whether every entry in every group is currently selected. Used to drive
+    /// the "全选/取消全选" toggle label.
+    pub fn all_selected(&self) -> bool {
+        let mut any = false;
+        for g in &self.scan.groups {
+            for e in &g.entries {
+                any = true;
+                if !self.selected.contains(&e.path.to_string_lossy().to_string()) {
+                    return false;
+                }
+            }
+        }
+        any
+    }
+
     /// Total bytes across all selected (not-yet-migrated) entries.
     pub fn selected_total_bytes(&self) -> u64 {
         let mut total = 0u64;
@@ -757,3 +788,107 @@ impl EventEmitter<RelocateEvent> for RelocateEngine {}
 
 // Re-export DirEntry/scan types the panel needs to enumerate.
 pub use super::scanner::ScanResult as ScanSnapshot;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine_with_groups() -> RelocateEngine {
+        let mut e = RelocateEngine {
+            scan: ScanResult::default(),
+            custom_paths: Vec::new(),
+            selected: HashSet::new(),
+            target_root: None,
+            probe: None,
+            tasks: Vec::new(),
+            conflict_policy: ConflictPolicy::Merge,
+            verify: false,
+            state: EngineState::Idle,
+            progress: Progress::default(),
+            logs: Vec::new(),
+            queue: Vec::new(),
+            skip_requested: false,
+            paused: false,
+            driver: None,
+            speed_sample: None,
+            _scan_task: None,
+        };
+        // Two groups with a couple of entries each.
+        e.scan.groups = vec![
+            AutoGroup {
+                group_name: "g1".into(),
+                description: String::new(),
+                hint_text: String::new(),
+                risk: super::super::types::RiskLevel::Safe,
+                entries: vec![
+                    DirEntry {
+                        path: PathBuf::from("/tmp/a"),
+                        size_bytes: 1,
+                    },
+                    DirEntry {
+                        path: PathBuf::from("/tmp/b"),
+                        size_bytes: 2,
+                    },
+                ],
+                total_size_bytes: 3,
+            },
+            AutoGroup {
+                group_name: "g2".into(),
+                description: String::new(),
+                hint_text: String::new(),
+                risk: super::super::types::RiskLevel::Safe,
+                entries: vec![DirEntry {
+                    path: PathBuf::from("/tmp/c"),
+                    size_bytes: 4,
+                }],
+                total_size_bytes: 4,
+            },
+        ];
+        e
+    }
+
+    #[test]
+    fn all_selected_false_until_every_entry_is_in_selected() {
+        let mut e = engine_with_groups();
+        // Nothing selected → not all.
+        assert!(!e.all_selected());
+        assert_eq!(e.selected_total_bytes(), 0);
+
+        // Two of three selected → still not all.
+        e.selected.insert("/tmp/a".into());
+        e.selected.insert("/tmp/c".into());
+        assert!(!e.all_selected());
+        assert_eq!(e.selected_total_bytes(), 5);
+
+        // All three → all_selected() is true and the byte total covers everything.
+        e.selected.insert("/tmp/b".into());
+        assert!(e.all_selected());
+        assert_eq!(e.selected_total_bytes(), 7);
+    }
+
+    #[test]
+    fn all_selected_false_when_there_are_no_entries() {
+        // An empty scan must report NOT-all-selected, so the panel's "全选"
+        // button (which is disabled in this case anyway) never reads as "全".
+        let e = RelocateEngine {
+            scan: ScanResult::default(),
+            custom_paths: Vec::new(),
+            selected: HashSet::new(),
+            target_root: None,
+            probe: None,
+            tasks: Vec::new(),
+            conflict_policy: ConflictPolicy::Merge,
+            verify: false,
+            state: EngineState::Idle,
+            progress: Progress::default(),
+            logs: Vec::new(),
+            queue: Vec::new(),
+            skip_requested: false,
+            paused: false,
+            driver: None,
+            speed_sample: None,
+            _scan_task: None,
+        };
+        assert!(!e.all_selected());
+    }
+}

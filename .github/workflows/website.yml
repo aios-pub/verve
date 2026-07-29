@@ -1,0 +1,90 @@
+name: Deploy website to GitHub Pages
+
+# Builds the Trunk CSR bundle and deploys `dist/` to the gh-pages branch of
+# this repo (aios-rs/verve). Pages is then served from
+# https://aios-rs.github.io/verve/
+#
+# Trigger: any push that touches the website/ directory or shared assets,
+# or manual dispatch.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "website/**"
+      - "assets/verve_demo/**"
+      - "assets/icons/**"
+      - "assets/wechat*.jpg"
+      - "docs/verve-server.md"
+  workflow_dispatch:
+
+# Allow only one concurrent deployment.
+concurrency:
+  group: "website-pages"
+  cancel-in-progress: false
+
+permissions:
+  contents: write # commit to gh-pages branch
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable) + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            website/target
+          key: ${{ runner.os }}-cargo-website-${{ hashFiles('website/Cargo.lock', 'website/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-website-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Trunk
+        uses: jetli/trunk-action@v0.5.0
+        with:
+          version: "0.21.14"
+
+      - name: Install website npm deps (Tailwind)
+        run: |
+          cd website
+          npm install
+
+      - name: Build website (Trunk CSR)
+        env:
+          VERVE_VERSION: "0.3.0"
+        run: |
+          cd website
+          trunk build --release
+
+      - name: Add SPA fallback & disable Jekyll
+        run: |
+          cd website/dist
+          # Disable Jekyll so _-* / hashed dirs are served by Pages.
+          touch .nojekyll
+          # GitHub Pages 404 fallback → load the SPA shell for client routing.
+          cp index.html 404.html
+
+      - name: Deploy to gh-pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: website/dist
+          clean: true

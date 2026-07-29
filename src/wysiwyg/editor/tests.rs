@@ -214,6 +214,46 @@ fn rendered_window_all_estimated_windows_near_top() {
 }
 
 #[test]
+fn rendered_window_no_hit_anchors_on_viewport_row() {
+    // The no-hit fallback fires on overscroll (scroll offset past the
+    // estimated document end, the classic symptom of an under-estimated
+    // stride accumulator) and on a negative/before-top overscroll. It must
+    // anchor on the row nearest the scroll offset and keep the height
+    // invariant exact rather than leaving the viewport on a blank spacer.
+    let strides = uniform_strides(50, 20.0); // total 1000
+    let window = Editor::rendered_window(&strides, 1200.0, 400.0, 0.0, None);
+
+    // Anchored on the document tail (the row closest to the overscrolled
+    // offset); at least that one row is mounted, never zero.
+    assert!(window.run_end > window.run_start);
+    assert_eq!(window.run_end, strides.len());
+    // The height invariant still holds exactly.
+    let total: f32 = strides.iter().sum();
+    let rendered: f32 = strides[window.run_start..window.run_end].iter().sum();
+    assert!(
+        (window.top_h + rendered + window.bottom_h - total).abs() < 0.01,
+        "height invariant broken in no-hit fallback"
+    );
+}
+
+#[test]
+fn rendered_window_no_hit_top_overscroll_anchors_head() {
+    // Overscroll above the document: the band sits entirely above row 0. The
+    // fallback must anchor on the head and still preserve the invariant.
+    let strides = uniform_strides(30, 10.0); // total 300
+    let window = Editor::rendered_window(&strides, -500.0, 400.0, 0.0, None);
+
+    assert_eq!(window.run_start, 0);
+    assert!(window.run_end > window.run_start);
+    let total: f32 = strides.iter().sum();
+    let rendered: f32 = strides[window.run_start..window.run_end].iter().sum();
+    assert!(
+        (window.top_h + rendered + window.bottom_h - total).abs() < 0.01,
+        "height invariant broken in top overscroll"
+    );
+}
+
+#[test]
 fn about_dialog_body_lines_include_repository_and_star_message() {
     let strings = I18nStrings::zh_cn();
     let lines = Editor::about_dialog_body_lines(&strings);

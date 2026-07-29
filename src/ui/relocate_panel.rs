@@ -295,7 +295,9 @@ impl RelocatePanel {
             );
         }
 
-        // "+ add custom" + rescan row.
+        // "+ add custom" + select-all + rescan row.
+        let all_sel = self.engine.read(cx).all_selected();
+        let has_groups = !groups.is_empty();
         let actions = h_flex().gap_2().pt(px(4.)).children([
             Button::new("relocate-add-custom")
                 .outline()
@@ -303,6 +305,21 @@ impl RelocatePanel {
                 .icon(IconName::Plus)
                 .label("添加自定义迁移目录")
                 .on_click(cx.listener(|this, _, w, cx| this.pick_custom(w, cx))),
+            Button::new("relocate-select-all")
+                .outline()
+                .small()
+                .icon(IconName::Check)
+                .label(if all_sel { "取消全选" } else { "全选" })
+                .disabled(!has_groups || is_running)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.engine.update(cx, |e, cx| {
+                        if all_sel {
+                            e.clear_all(cx);
+                        } else {
+                            e.select_all(cx);
+                        }
+                    });
+                })),
             Button::new("relocate-rescan")
                 .ghost()
                 .small()

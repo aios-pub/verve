@@ -74,14 +74,27 @@ impl Editor {
         let band_top = scroll_y - overdraw;
         let band_bottom = scroll_y + viewport_height + overdraw;
 
+        // Prefix sums of strides: `tops[i]` is the y of row i's top edge, and
+        // `tops[n]` is the total content height. Precomputing them lets both the
+        // normal band-walk and the no-hit fallback position rows identically,
+        // which is what keeps the `top_h + rendered + bottom_h == total`
+        // invariant exact.
+        let mut tops = Vec::with_capacity(n + 1);
+        let mut cursor = 0.0f32;
+        for &stride in strides {
+            tops.push(cursor);
+            cursor += stride.max(0.0);
+        }
+        tops.push(cursor);
+        let total = cursor;
+
         let mut run_start = n;
         let mut run_end = 0usize;
         let mut top_of_start = 0.0f32;
         let mut bottom_of_end = 0.0f32;
-        let mut cursor = 0.0f32;
-        for (index, &stride) in strides.iter().enumerate() {
-            let top = cursor;
-            let bottom = cursor + stride.max(0.0);
+        for index in 0..n {
+            let top = tops[index];
+            let bottom = tops[index + 1];
             if bottom >= band_top && top <= band_bottom {
                 if index < run_start {
                     run_start = index;
@@ -90,17 +103,38 @@ impl Editor {
                 run_end = index + 1;
                 bottom_of_end = bottom;
             }
-            cursor = bottom;
         }
-        let total = cursor;
 
-        // Nothing hit the band (float edge, or estimate short of scroll): mount
-        // the last row so the viewport never lands on a spacer.
+        // Nothing hit the band. This happens on a float edge, or — far more
+        // often, and the real cause of the "scroll black screen" — when the
+        // stride accumulator for a run of unmeasured rows drifts so far from
+        // the real content that the visible band falls in a gap between rows.
+        // The old fallback mounted only the last row, leaving the whole
+        // viewport on blank spacers. Instead, anchor on the row that contains
+        // the current scroll offset and expand the mounted run to cover the
+        // visible band, so the viewport is always backed by real rows (which
+        // re-measure themselves on this frame). If the scroll offset is past
+        // the end (overscroll), clamp to the document tail.
         if run_start >= run_end {
-            run_start = n - 1;
-            run_end = n;
-            top_of_start = total - strides[n - 1].max(0.0);
-            bottom_of_end = total;
+            // Row whose [top, bottom) contains scroll_y; clamp to [0, n).
+            let anchor = match tops[..n].binary_search_by(|t| {
+                t.partial_cmp(&scroll_y).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1).min(n.saturating_sub(1)),
+            };
+            run_start = anchor;
+            run_end = anchor + 1;
+            // Expand upward to the first row that crosses the band top.
+            while run_start > 0 && tops[run_start] > band_top {
+                run_start -= 1;
+            }
+            // Expand downward to the first row that crosses the band bottom.
+            while run_end < n && tops[run_end] < band_bottom {
+                run_end += 1;
+            }
+            top_of_start = tops[run_start];
+            bottom_of_end = tops[run_end];
         }
 
         // Keep the focused row mounted; GPUI blurs an unmounted caret. Reaching a

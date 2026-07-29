@@ -1126,10 +1126,23 @@ impl RequestPanel {
             let mut has_form_field = false;
             for kv in &self.body_rows {
                 let key = kv.key.read(cx).value().to_string();
-                let val = kv.value.read(cx).value().to_string();
                 if kv.enabled && !key.trim().is_empty() {
-                    parts.push(format!("-F '{}={}'", key, val));
-                    has_form_field = true;
+                    // File rows send the file via curl's `@path` syntax; text
+                    // rows use the literal value.
+                    if kv.field_type == FieldType::File {
+                        let path = kv.file_path.clone().unwrap_or_default();
+                        if !path.trim().is_empty() {
+                            // Quote the path so paths with spaces/special chars
+                            // survive the shell. The leading `@` tells curl to
+                            // read & upload the file.
+                            parts.push(format!("-F '{}=@\"{}\"'", key, path.replace('"', "\\\"")));
+                            has_form_field = true;
+                        }
+                    } else {
+                        let val = kv.value.read(cx).value().to_string();
+                        parts.push(format!("-F '{}={}'", key, val));
+                        has_form_field = true;
+                    }
                 }
             }
             // curl sets multipart/form-data automatically when using -F, so

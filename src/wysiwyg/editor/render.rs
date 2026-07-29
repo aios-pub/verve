@@ -31,7 +31,9 @@ pub(crate) const ABOUT_GITHUB_URL: &str = "https://github.com/manyougz/velotype"
 /// (and laid out) by the time they enter the viewport. 800px (~25 lines) was
 /// too tight for a scrollbar fling and left a black gap that only filled in
 /// after the next frame's re-measure — visibly read as "black screen + jitter."
-const RENDER_OVERDRAW_PX: f32 = 1600.0;
+/// 1600 still missed during aggressive drags into tall code/table blocks, so
+/// raise it to 2400 (~75 short rows) to absorb the worst flings.
+const RENDER_OVERDRAW_PX: f32 = 2400.0;
 
 pub(crate) fn open_about_github_url(cx: &mut App) {
     cx.open_url(ABOUT_GITHUB_URL);
@@ -2205,18 +2207,34 @@ impl Render for Editor {
             }
         }
 
-        // Unmeasured rows fall back to an estimate. The minimum block height is
-        // a strict lower bound, but using it for many consecutive unmeasured
-        // rows (as happens during a fast scrollbar drag into fresh territory)
-        // makes the stride accumulator run far ahead of the real content
-        // position, so `rendered_window` both mounts too few rows AND places the
-        // mounted run at the wrong offset — the user sees a black gap that only
-        // closes after the next frame's re-measure, plus a one-frame position
-        // jump (jitter). A typical rendered paragraph line plus its trailing
-        // gap is closer to one-and-a-half line heights, so use that: it keeps
-        // the accumulator near the real content position while still erring
-        // toward over-mounting (rows are mounted a hair early, never late).
-        let estimated_stride = (d.block_min_height.max(1.0) * 1.5).max(d.block_min_height);
+        // Unmeasured rows fall back to an estimate. A too-small estimate (the old
+        // 1.5× minimum height ≈ 42px) makes the stride accumulator run far ahead
+        // of the real content position when many consecutive rows are
+        // unmeasured — as happens during a fast scrollbar drag into fresh
+        // territory — so `rendered_window` both mounts too few rows AND places
+        // the mounted run at the wrong offset, leaving a blank gap that only
+        // closes after the next frame's re-measure.
+        //
+        // The best estimate for an unmeasured row is what the document's other
+        // rows actually measure, so use the median cached stride (the median is
+        // robust against a few towering code/table blocks inflating a mean).
+        // Only when nothing is measured yet do we fall back to a conservative
+        // multiple of the minimum height that covers a typical multi-line
+        // paragraph. Staying on the smaller side biases the accumulator toward
+        // over-mounting (rows mount a hair early, never late).
+        let measured_strides: Vec<f32> = row_first_ids
+            .iter()
+            .filter_map(|id| self.row_stride_cache.get(id).copied())
+            .filter(|s| *s > 0.0 && s.is_finite())
+            .collect();
+        let estimated_stride = match measured_strides.len() {
+            0 => (d.block_min_height.max(1.0) * 3.0).max(d.block_min_height),
+            _ => {
+                let mut sorted = measured_strides.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                sorted[sorted.len() / 2]
+            }
+        };
         let strides: Vec<f32> = row_first_ids
             .iter()
             .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimated_stride))
@@ -2251,6 +2269,14 @@ impl Render for Editor {
                     .w_full()
                     .flex_shrink_0()
                     .h(px(top_h))
+                    // The spacers stand in for culled (unmounted) rows. Without
+                    // an explicit background a windowing miss leaves them
+                    // transparent, letting the underlying window surface
+                    // (often the default black clear) show through — perceived
+                    // as the editor "going black" during a fast scroll. Paint
+                    // them with the editor background so a miss reads as a
+                    // same-colour blank that the next frame's re-measure fills.
+                    .bg(theme.colors.editor_background)
                     .into_any_element(),
             );
         }
@@ -2265,6 +2291,7 @@ impl Render for Editor {
                     .w_full()
                     .flex_shrink_0()
                     .h(px(render_window.bottom_h))
+                    .bg(theme.colors.editor_background)
                     .into_any_element(),
             );
         }

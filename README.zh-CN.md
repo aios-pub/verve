@@ -31,6 +31,18 @@ Verve 基于 **Rust + [GPUI](https://github.com/zed-industries/zed)**（与 Zed 
 
 [功能特性](#-功能特性) · [社区版 vs Pro 版](#-社区版-vs-pro-版) · [快速开始](#-快速开始) · [Pro 版获取](#-pro-版--赞助获取)
 
+<br/>
+
+<a href="https://aios-rs.github.io/verve/">
+  <img src="https://img.shields.io/badge/官网-verve.app-bolt?style=flat-square&labelColor=0a0c10&color=d4e317" alt="官方网站" />
+</a>
+<a href="https://github.com/aios-rs/verve/releases/latest">
+  <img src="https://img.shields.io/github/v/release/aios-rs/verve?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&labelColor=0a0c10&color=d4e317" alt="最新版本" />
+</a>
+<a href="https://github.com/aios-rs/verve">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Pro-d4e317?style=flat-square&labelColor=0a0c10" alt="License" />
+</a>
+
 </div>
 
 ---

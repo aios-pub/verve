@@ -1,0 +1,14 @@
+{
+  "name": "verve-website",
+  "private": true,
+  "description": "Verve official website (Leptos + Tailwind)",
+  "license": "AGPL-3.0",
+  "scripts": {
+    "css": "npx @tailwindcss/cli -i style/input.css -o public/tailwind.css --watch",
+    "css:build": "npx @tailwindcss/cli -i style/input.css -o public/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

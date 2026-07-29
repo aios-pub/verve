@@ -987,16 +987,29 @@ impl RequestPanel {
 
     /// Change the field type of a kv row (form-data/query).
     pub fn change_kv_type(&mut self, ix: usize, ft: FieldType, cx: &mut Context<Self>) {
+        // Track whether we should auto-open the file picker: switching a row
+        // *to* File (in a form-data context) with no path yet selected.
+        let mut open_picker = false;
         if let Some(rows) = self.active_rows_mut() {
             if let Some(row) = rows.get_mut(ix) {
                 row.field_type = ft;
                 // Switching away from File clears the file path.
                 if ft != FieldType::File {
                     row.file_path = None;
+                } else if row.file_path.is_none() {
+                    // Only auto-pick for form-data rows (the only scope that
+                    // supports files); urlencoded etc. have no file concept.
+                    open_picker = self.body_type == BodyType::FormData
+                        && self.active_tab == ReqTab::Body;
                 }
             }
         }
         self.commit_to_model(cx);
+        if open_picker {
+            // Defer to reconcile_pending_add, which runs in render where a
+            // Window is available (required by prompt_for_paths).
+            self.pending_file_pick = Some(ix);
+        }
         cx.notify();
     }
 

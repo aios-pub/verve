@@ -1,0 +1,42 @@
+[package]
+name = "website"
+version = "0.1.0"
+edition = "2024"
+authors = ["Verve"]
+license = "AGPL-3.0"
+publish = false
+
+# Independent crate — deliberately NOT a member of the root workspace.
+# The main `verve` crate pulls in GPUI + heavy native bindings (pdfium,
+# tree-sitter, …); building the website against those would be wasteful.
+# `cargo-leptos` builds this crate on its own.
+
+[dependencies]
+# Leptos core stack — stable 0.8.x (required by leptos_i18n 0.6.2).
+leptos = { version = "0.8", features = ["csr"] }
+leptos_meta = { version = "0.8" }
+leptos_router = { version = "0.8" }
+leptos_i18n = { version = "0.6", features = ["csr", "cookie"] }
+
+log = "0.4"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Storage", "Element"] }
+leptos-use = "0.18"
+console_error_panic_hook = "0.1"
+console_log = "1"
+
+[build-dependencies]
+# i18n codegen — reads ./i18n/*.yml and emits a typed locale module.
+leptos_i18n_build = { version = "0.6", features = ["csr"] }
+
+# ---------------------------------------------------------------------------
+# Build: Trunk (pure CSR). See index.html + Trunk.toml.
+# Build output goes to dist/. The site is hosted at
+# https://aios-rs.github.io/verve/  →  public-url "verve/" (Trunk rewrites
+# all asset hrefs with this prefix). See Trunk.toml.
+
+[profile.release]
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"

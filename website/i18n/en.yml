@@ -1,0 +1,133 @@
+# en.yml — English translations for the Verve website.
+# Keys are at the top level (the locale is inferred from the filename).
+
+# ---- Navigation ---------------------------------------------------------
+nav:
+  home: "Home"
+  features: "Features"
+  download: "Download"
+  pricing: "Pricing"
+  docs: "Docs"
+  blog: "Changelog"
+  get_app: "Get Verve"
+
+# ---- Hero ---------------------------------------------------------------
+hero:
+  badge: "Native • GPU-accelerated • Rust + GPUI"
+  title: "The native dev workbench"
+  title_accent: "one window is enough"
+  subtitle: "An offline-first workbench built with Rust + GPUI — API debugging, capture, server triage, load testing, mock, notes, hosts and JSON, together. GPU-rendered. No Electron."
+  cta_download: "Download"
+  cta_features: "Explore features"
+  platform_macos: "macOS"
+  platform_linux: "Linux"
+  platform_windows: "Windows"
+
+# ---- Performance badges -------------------------------------------------
+perf:
+  startup: "<1s startup"
+  ram: "<100MB RAM"
+  fps: "GPU ~60fps"
+  offline: "Offline-first"
+  safe: "Memory-safe"
+  cross: "Cross-platform"
+
+# ---- Why Rust + GPUI ----------------------------------------------------
+why:
+  title: "Built with Rust + GPUI — why it matters"
+  subtitle: "Rendered by the GPU, not Chromium. The clearest gap vs Electron tools:"
+  col_verve: "Verve (Rust + GPUI)"
+  col_electron: "Electron tools"
+  row_startup: "Startup"
+  row_startup_v: "< 1s"
+  row_startup_e: "3–5s"
+  row_ram: "Memory"
+  row_ram_v: "< 100MB"
+  row_ram_e: "500MB+"
+  row_render: "Rendering"
+  row_render_v: "Native GPU, ~60fps"
+  row_render_e: "Chromium software compositing"
+  row_safety: "Safety"
+  row_safety_v: "Memory-safe, zero-cost abstraction"
+  row_safety_e: "GC stalls, V8 overhead"
+
+# ---- Capability pillars -------------------------------------------------
+pillars:
+  title: "Seven pillars, one window"
+  api: "API & Testing"
+  api_d: "Full HTTP debugging, gRPC-Web, TCP, SSE, WebSocket, Socket.IO, multi-environment variables, pre-request & test scripts."
+  terminal: "Terminal & Triage"
+  terminal_d: "SSH terminal, SFTP, Zmodem, port forwarding, Docker & Kubernetes log inspection and exec."
+  mock: "Mock & Capture"
+  mock_d: "HTTP capture proxy and a local mock server with Exact→Prefix→Regex matching."
+  docs: "Docs & Git"
+  docs_d: "Document sharing and Git-based cross-machine sync — each workspace is a branch."
+  notes: "Notes"
+  notes_d: "Markdown block editor with live preview and PDF export."
+  hosts: "Hosts"
+  hosts_d: "Manage hosts profiles without touching system files."
+  json: "JSON"
+  json_d: "Collapsible JSON formatter, tree navigation, instant validation."
+
+# ---- Editions -----------------------------------------------------------
+editions:
+  title: "Two editions"
+  community: "Community"
+  community_tag: "Free • AGPL-3.0"
+  community_d: "Open source. Covers everything an individual developer needs for daily API work: full HTTP debugging, capture, JSON, hosts, local mock, local document sharing, and Git cross-machine sync."
+  pro: "Pro"
+  pro_tag: "Sponsored • Proprietary"
+  pro_d: "Stacks server triage, testing, knowledge tools and cloud sharing on top of the Community edition."
+
+# ---- Comparison ---------------------------------------------------------
+compare:
+  title: "Community vs Pro"
+  col_feature: "Capability"
+  has: "✓"
+  opensource: "Open source (AGPL-3.0)"
+
+# ---- Download -----------------------------------------------------------
+download:
+  title: "Download Verve"
+  subtitle: "Pre-built binaries for every platform. Latest release:"
+  btn: "Download for"
+  latest: "View all releases"
+  install_title: "Install"
+  build_title: "Or build from source"
+  build_d: "Clone the repo and build with Cargo. See the README for prerequisites."
+
+# ---- Pricing ------------------------------------------------------------
+pricing:
+  title: "Pricing & sponsorship"
+  subtitle: "Community is free and open source. Pro is obtained via sponsorship."
+  most_popular: "Most popular"
+  per_once: "one-time"
+  cta_community: "Download Community"
+  cta_pro: "Sponsor for Pro"
+  early_bird: "Early-bird"
+  regular: "Regular"
+  sponsor_qr_alt: "WeChat Official Account QR code"
+  sponsor_note: "Sponsor via the WeChat Official Account to unlock the Pro edition."
+
+# ---- Docs ---------------------------------------------------------------
+docs:
+  title: "Documentation"
+  getting_started: "Getting started"
+  verve_server: "Self-host verve-server"
+
+# ---- Blog / changelog ---------------------------------------------------
+blog:
+  title: "Changelog"
+  subtitle: "Release history on GitHub."
+
+# ---- Footer -------------------------------------------------------------
+footer:
+  tagline: "A native, GPU-accelerated developer workbench built with Rust."
+  product: "Product"
+  resources: "Resources"
+  community: "Community"
+  github: "GitHub"
+  releases: "Releases"
+  disclaimer_title: "Disclaimer"
+  disclaimer: "Verve is an ongoing project under active development. There is no guarantee that every feature described here is available, complete, or stable — the actual capabilities of the trial build shall prevail."
+  rights: "All rights reserved."

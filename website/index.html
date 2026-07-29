@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a0c10" />
+    <!-- static assets, resolved relative to the public-url base -->
+    <link data-trunk rel="icon" href="public/icons/verve.png" />
+    <link data-trunk rel="copy-file" href="public/tailwind.css" />
+    <link data-trunk rel="copy-dir" href="public/screenshots" />
+    <link data-trunk rel="copy-dir" href="public/icons" />
+    <link data-trunk rel="copy-file" href="public/wechat_official.jpg" />
+    <!-- the WASM app; weak-refs + optimized -->
+    <link data-trunk rel="rust" data-wasm-opt="z" data-weak-refs />
+    <title>Verve — 原生 GPU 加速研发工作台</title>
+    <meta
+      name="description"
+      content="Verve 是基于 Rust + GPUI 构建的原生、GPU 加速研发工作台，集成接口调试、抓包、服务器排查、压测、Mock、笔记、Hosts 与 JSON 等日常开发工具。"
+    />
+  </head>
+  <body></body>
+</html>

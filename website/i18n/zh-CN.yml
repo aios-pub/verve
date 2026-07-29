@@ -1,0 +1,133 @@
+# zh-CN.yml — 中文翻译（Verve 官网）
+# 键直接位于顶层（locale 由文件名推断）。
+
+# ---- 导航 ---------------------------------------------------------------
+nav:
+  home: "首页"
+  features: "功能"
+  download: "下载"
+  pricing: "定价"
+  docs: "文档"
+  blog: "更新日志"
+  get_app: "获取 Verve"
+
+# ---- 首屏 ---------------------------------------------------------------
+hero:
+  badge: "原生 • GPU 加速 • Rust + GPUI"
+  title: "原生研发工作台"
+  title_accent: "一个窗口就够了"
+  subtitle: "基于 Rust + GPUI 构建的离线优先研发工作台——集成接口调试、抓包、服务器排查、压测、Mock、笔记、Hosts 与 JSON。GPU 渲染，告别 Electron 臃肿。"
+  cta_download: "下载"
+  cta_features: "查看功能"
+  platform_macos: "macOS"
+  platform_linux: "Linux"
+  platform_windows: "Windows"
+
+# ---- 性能徽章 -----------------------------------------------------------
+perf:
+  startup: "<1秒启动"
+  ram: "<100MB内存"
+  fps: "GPU ~60fps"
+  offline: "离线优先"
+  safe: "内存安全"
+  cross: "跨平台"
+
+# ---- 为什么 Rust + GPUI ------------------------------------------------
+why:
+  title: "基于 Rust + GPUI 构建 —— 为什么重要"
+  subtitle: "由 GPU 渲染，无 Chromium。这是与 Electron 类工具最直观的差距："
+  col_verve: "Verve（Rust + GPUI）"
+  col_electron: "Electron 类工具"
+  row_startup: "启动速度"
+  row_startup_v: "< 1 秒"
+  row_startup_e: "3–5 秒"
+  row_ram: "内存占用"
+  row_ram_v: "< 100 MB"
+  row_ram_e: "500 MB+"
+  row_render: "渲染方式"
+  row_render_v: "原生 GPU，~60fps"
+  row_render_e: "Chromium 软件合成"
+  row_safety: "安全性"
+  row_safety_v: "内存安全，零成本抽象"
+  row_safety_e: "GC 卡顿，V8 开销"
+
+# ---- 能力支柱 -----------------------------------------------------------
+pillars:
+  title: "七大支柱，一个窗口"
+  api: "接口与测试"
+  api_d: "完整 HTTP 调试、gRPC-Web、TCP、SSE、WebSocket、Socket.IO，多环境变量，前置脚本与测试脚本。"
+  terminal: "终端与排查"
+  terminal_d: "SSH 终端、SFTP、Zmodem、端口转发、Docker 与 Kubernetes 日志查看与 exec。"
+  mock: "Mock 与抓包"
+  mock_d: "HTTP 抓包代理与本地 Mock 服务，支持 精确→前缀→正则 匹配。"
+  docs: "文档与 Git"
+  docs_d: "文档分享与基于 Git 的跨机器同步——每个工作区即一个分支。"
+  notes: "笔记"
+  notes_d: "Markdown 块编辑器，实时预览与 PDF 导出。"
+  hosts: "Hosts"
+  hosts_d: "管理 Hosts 配置组，无需改动系统文件。"
+  json: "JSON"
+  json_d: "可折叠 JSON 格式化器，树形导航，即时校验。"
+
+# ---- 版本 ---------------------------------------------------------------
+editions:
+  title: "两个版本"
+  community: "社区版"
+  community_tag: "免费 • AGPL-3.0"
+  community_d: "开源。覆盖个人开发者日常接口工作所需：完整 HTTP 调试、抓包、JSON、Hosts、本地 Mock、本地文档分享，以及 Git 跨机器同步。"
+  pro: "Pro 版"
+  pro_tag: "赞助获取 • 专有"
+  pro_d: "在社区版基础上叠加服务器排查、测试、知识工具与云端分享。"
+
+# ---- 对比 ---------------------------------------------------------------
+compare:
+  title: "社区版 vs Pro 版"
+  col_feature: "能力"
+  has: "✓"
+  opensource: "开源（AGPL-3.0）"
+
+# ---- 下载 ---------------------------------------------------------------
+download:
+  title: "下载 Verve"
+  subtitle: "全平台预编译二进制。最新版本："
+  btn: "下载"
+  latest: "查看全部版本"
+  install_title: "安装"
+  build_title: "或从源码构建"
+  build_d: "克隆仓库后用 Cargo 构建。前置依赖详见 README。"
+
+# ---- 定价 ---------------------------------------------------------------
+pricing:
+  title: "定价与赞助"
+  subtitle: "社区版免费开源，Pro 版通过赞助获取。"
+  most_popular: "最受欢迎"
+  per_once: "一次性"
+  cta_community: "下载社区版"
+  cta_pro: "赞助获取 Pro"
+  early_bird: "早鸟特惠"
+  regular: "常规价"
+  sponsor_qr_alt: "微信公众号二维码"
+  sponsor_note: "通过微信公众号赞助即可解锁 Pro 版。"
+
+# ---- 文档 ---------------------------------------------------------------
+docs:
+  title: "文档"
+  getting_started: "快速开始"
+  verve_server: "自托管 verve-server"
+
+# ---- 更新日志 -----------------------------------------------------------
+blog:
+  title: "更新日志"
+  subtitle: "GitHub 上的发布历史。"
+
+# ---- 页脚 ---------------------------------------------------------------
+footer:
+  tagline: "基于 Rust 构建的原生、GPU 加速研发工作台。"
+  product: "产品"
+  resources: "资源"
+  community: "社区"
+  github: "GitHub"
+  releases: "Releases"
+  disclaimer_title: "免责声明"
+  disclaimer: "Verve 是一个持续开发中的项目。本文档所述功能不保证均已实现、完整或稳定——以实际可用版本的能力为准。"
+  rights: "保留所有权利。"

@@ -408,4 +408,125 @@ mod tests {
         assert_eq!(tree_sha256(&a).unwrap(), tree_sha256(&b).unwrap());
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    /// End-to-end check that after migration the original path is an
+    /// **absolute-path symlink** pointing at the external copy, and that files
+    /// remain reachable through it (the "still usable after move" guarantee —
+    /// PRD §2.2, §8.2.6). This guards the critical copy→delete→symlink sequence.
+    #[test]
+    #[cfg(unix)]
+    fn migrate_creates_absolute_symlink_and_stays_usable() {
+        use std::path::Path;
+
+        // NOTE: we can't use std::env::temp_dir() here — on macOS it lives under
+        // /var → /private, which the relocate system blacklist rejects, and
+        // migrate_one enforces the blacklist at execute time. We instead root
+        // the fixture under the user's home (the real migration scenario: the
+        // source is always a home subdirectory).
+        let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(h) if !h.as_os_str().is_empty() => h,
+            _ => {
+                // No HOME: nothing meaningful to assert about a home-rooted
+                // migration. Skip rather than fail.
+                eprintln!("skip: HOME not set");
+                return;
+            }
+        };
+        let tmp = home.join(format!(
+            ".verve-migrate-e2e-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Layout: tmp/home/.proj  (source)  →  tmp/external/.proj  (target).
+        let src_root = tmp.join("home");
+        let target_root = tmp.join("external");
+        let source = src_root.join(".proj");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::create_dir_all(&target_root).unwrap();
+        std::fs::write(source.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(source.join("nested").join("b.txt"), b"beta").unwrap();
+
+        let abs_source = std::fs::canonicalize(&source).unwrap_or(source.clone());
+        let size = 10u64; // bytes; exact value doesn't affect the symlink check.
+
+        let outcome = migrate_one(
+            &source,
+            &target_root,
+            "test-group",
+            size,
+            ConflictPolicy::Merge,
+            false, // skip verify to keep the test fast; symlink logic is the focus
+            |_| {},
+        );
+
+        let record = match outcome {
+            MigrateOutcome::Done { record, .. } => record,
+            other => panic!("expected Done, got {other:?}"),
+        };
+
+        // 1. The source location is now a symlink (not a real directory).
+        let meta = std::fs::symlink_metadata(&source).expect("source path missing after migrate");
+        assert!(
+            meta.file_type().is_symlink(),
+            "source should be a symlink after migration"
+        );
+
+        // 2. It points at the external copy via an ABSOLUTE path.
+        let link_target = std::fs::read_link(&source).expect("read_link");
+        assert!(
+            link_target.is_absolute(),
+            "symlink must be absolute (PRD §2.2), got {:?}",
+            link_target
+        );
+        let canonical_ext = std::fs::canonicalize(&target_root)
+            .unwrap_or_else(|_| target_root.clone())
+            .join(".proj");
+        assert_eq!(
+            link_target, canonical_ext,
+            "symlink should point at the external copy"
+        );
+
+        // 3. Files are still reachable THROUGH the original path — i.e. the
+        //    directory remains usable as if it had never moved.
+        assert_eq!(
+            std::fs::read(abs_source.join("a.txt")).unwrap(),
+            b"alpha",
+            "file must still be readable via original path"
+        );
+        assert_eq!(
+            std::fs::read(abs_source.join("nested").join("b.txt")).unwrap(),
+            b"beta",
+            "nested file must still be readable via original path"
+        );
+        // `metadata` (which follows the link) reports a directory, so existing
+        // tools that `stat` the path keep working.
+        assert!(
+            Path::new(&abs_source)
+                .metadata()
+                .map(|m| m.is_dir())
+                .unwrap_or(false),
+            "path through symlink must still resolve to a directory"
+        );
+
+        // 4. The persisted record reflects the absolute symlink target.
+        assert_eq!(
+            record.symlink_path,
+            source.to_string_lossy(),
+            "record symlink_path should be the original source"
+        );
+        assert!(
+            record.target_external_path.starts_with(
+                std::fs::canonicalize(&target_root)
+                    .unwrap_or_else(|_| target_root.clone())
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "record target_external_path should be under the external root"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

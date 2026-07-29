@@ -168,9 +168,13 @@ pub fn prepare(
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("file")
                                 .to_string();
+                            // Infer a per-part Content-Type from the
+                            // extension (RFC 7578). Strict servers reject file
+                            // parts that omit it. Falls back to a binary stream.
+                            let mime = guess_mime(&filename);
                             body_bytes.extend_from_slice(
                                 format!(
-                                    "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n\r\n"
+                                    "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n"
                                 )
                                 .as_bytes(),
                             );
@@ -278,6 +282,50 @@ fn base64_encode(input: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Infer a MIME type from a filename's extension. Covers the common cases
+/// enough for `multipart/form-data` file parts (RFC 7578); unknown extensions
+/// fall back to a generic binary stream. Kept dependency-free.
+fn guess_mime(filename: &str) -> &'static str {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        // Images.
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" | "dib" => "image/bmp",
+        "ico" => "image/x-icon",
+        "tiff" | "tif" => "image/tiff",
+        // Documents.
+        "pdf" => "application/pdf",
+        "html" | "htm" => "text/html",
+        "xml" => "text/xml",
+        "csv" => "text/csv",
+        "txt" | "log" | "md" | "markdown" => "text/plain",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/x-yaml",
+        // Archives / binaries.
+        "zip" => "application/zip",
+        "gz" | "gzip" => "application/gzip",
+        "tar" => "application/x-tar",
+        "rar" => "application/vnd.rar",
+        "7z" => "application/x-7z-compressed",
+        // Audio / video.
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "mpeg" | "mpg" => "video/mpeg",
+        "webm" => "video/webm",
+        "ogg" => "application/ogg",
+        _ => "application/octet-stream",
+    }
 }
 
 fn serde_urlencode(pairs: &[(String, String)]) -> String {

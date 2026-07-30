@@ -330,16 +330,19 @@ pub(crate) fn copy_dir_with_progress(
     // large files each worker streams a different file concurrently. Progress
     // is tracked atomically and sampled by time.
     let copied_atomic = AtomicU64::new(0);
-    let error_slot = std::sync::Mutex::new(None::<String>);
+    // Collect per-file errors instead of aborting on the first one. Most
+    // failures are permission-denied on individual files (.git objects,
+    // iCloud-fetched files, special chars) — skipping them and continuing
+    // the rest of the directory is far more useful than aborting everything.
+    let errors: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+    let skipped_atomic = AtomicU64::new(0);
+    let total_files_atomic = AtomicU64::new(0);
     let num_workers = num_copy_workers();
     let queue = std::sync::Mutex::new(file_tasks.into_iter().collect::<Vec<_>>());
 
     let reporter_done = std::sync::atomic::AtomicBool::new(false);
 
     std::thread::scope(|s| {
-        // Progress reporter: runs in a dedicated thread, samples the atomic
-        // counter every 100 ms and calls on_progress. Only this thread touches
-        // the FnMut callback.
         s.spawn(|| {
             let interval = std::time::Duration::from_millis(100);
             loop {
@@ -364,13 +367,11 @@ pub(crate) fn copy_dir_with_progress(
                     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                         return;
                     }
-                    if error_slot.lock().unwrap().is_some() {
-                        return;
-                    }
                     let task = queue.lock().unwrap().pop();
                     let Some(task) = task else {
                         return;
                     };
+                    total_files_atomic.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                     if task.dst.exists() && !overwrite {
                         copied_atomic.fetch_add(task.size, std::sync::atomic::Ordering::Relaxed);
@@ -390,28 +391,31 @@ pub(crate) fn copy_dir_with_progress(
                             }
                         }
                         Err(e) => {
-                            *error_slot.lock().unwrap() = Some(format!(
-                                "复制文件失败 {}: {}",
-                                task.src.display(),
-                                e
-                            ));
-                            return;
+                            // Log and skip — don't abort the whole directory over
+                            // one permission-denied file.
+                            skipped_atomic.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let err_msg = format!("{}", e);
+                            // Keep only the first 50 errors to avoid huge logs.
+                            let mut errs = errors.lock().unwrap();
+                            if errs.len() < 50 {
+                                errs.push((task.src.to_string_lossy().into_owned(), err_msg));
+                            }
+                            continue;
                         }
                     }
                 }
             });
         }
-        // Signal the reporter to stop after all workers finish.
         reporter_done.store(true, std::sync::atomic::Ordering::Relaxed);
     });
 
-    // Check for error.
-    if let Some(err) = error_slot.lock().unwrap().take() {
-        return Err(err);
-    }
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(CANCELLED_ERR.to_string());
     }
+
+    let total_files = total_files_atomic.load(std::sync::atomic::Ordering::Relaxed);
+    let skipped = skipped_atomic.load(std::sync::atomic::Ordering::Relaxed);
+    let errs = errors.lock().unwrap().clone();
 
     // Final progress report.
     let total = copied_atomic.load(std::sync::atomic::Ordering::Relaxed);
@@ -421,6 +425,25 @@ pub(crate) fn copy_dir_with_progress(
             bytes_total,
             current_file: String::new(),
         });
+    }
+
+    // If some files were skipped (permission denied, etc.), include a summary
+    // in the Ok result — the caller (engine) can log it. We don't fail unless
+    // ALL files failed.
+    if !errs.is_empty() && skipped >= total_files {
+        // Every single file failed — this is a real failure.
+        let first = &errs[0];
+        return Err(format!(
+            "复制失败：{} 个文件全部失败。首个错误：{} — {}",
+            skipped, first.0, first.1
+        ));
+    }
+    if !errs.is_empty() {
+        log::warn!(
+            "relocate: 复制完成，跳过 {} 个失败文件（共 {} 个）",
+            skipped,
+            total_files
+        );
     }
     Ok(total)
 }

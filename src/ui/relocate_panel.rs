@@ -736,16 +736,24 @@ impl RelocatePanel {
                     .gap_2()
                     .px(px(6.))
                     .py(px(1.))
+                    .min_w_full()
                     .child(
                         div()
                             .text_size(px(10.))
                             .text_color(theme.muted_foreground)
+                            .flex_shrink_0()
                             .child(line.time.clone()),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
                             .text_color(color)
+                            // Allow the message to take remaining width and
+                            // truncate long paths with ellipsis rather than
+                            // overflowing the panel.
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
                             .child(line.message.clone()),
                     ),
             );
@@ -995,22 +1003,28 @@ impl Render for RelocatePanel {
             .child(self.render_groups(cx))
             .child(self.render_migration_controls(cx));
 
-        // Right column: progress + log + tasks. The log area takes the
-        // remaining vertical space (flex_1) so it scrolls instead of pushing
-        // the whole panel to overflow.
+        // Right column: progress + log + tasks. Each section scrolls
+        // independently — the log gets the most space (flex_1), tasks get a
+        // bounded max height so both are always visible and scrollable.
         let right = v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
             .min_h_0()
             .p_4()
-            .gap_4()
+            .gap_3()
             .child(self.render_progress(cx))
+            // Log: takes remaining space, scrolls internally.
+            .child(div().flex_1().min_h_0().child(self.render_log(cx)))
+            // Tasks: bounded height, scrolls internally.
             .child(
-                // Log fills remaining space and scrolls internally.
-                div().flex_1().min_h_0().child(self.render_log(cx)),
-            )
-            .child(self.render_tasks(cx));
+                div()
+                    .id("relocate-tasks-scroll")
+                    .max_h(px(300.))
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(self.render_tasks(cx)),
+            );
 
         h_flex()
             .size_full()

@@ -770,6 +770,19 @@ impl RelocateEngine {
                     this.progress.current_bytes_total = item.size_bytes;
                     this.speed_sample = None;
                     this.current_cancel = Some(cancel.clone());
+                    // Soft occupancy warning (visible in the UI log). Many macOS
+                    // system caches are held open by un-killable daemons; we warn
+                    // but still proceed — the robust delete step handles real
+                    // failures, and the external copy already exists by then.
+                    if let Some(summary) = migrate::check_occupied(&item.source) {
+                        this.log(
+                            LogLevel::Warn,
+                            &format!(
+                                "⚠️ 该目录被进程占用，迁移可能失败（仍将尝试）：\n{}",
+                                summary
+                            ),
+                        );
+                    }
                     cx.emit(RelocateEvent::Progress);
                 });
 

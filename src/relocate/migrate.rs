@@ -84,49 +84,46 @@ pub enum MigrateOutcome {
 }
 
 /// Detect whether a path (or anything under it) is held open by a running
-/// process (PRD §8.2.1). Returns the offending process summary if occupied.
+/// process (PRD §8.2.1). Returns `Some(summary)` if occupied, `None` otherwise.
 ///
-/// macOS only — `lsof` invocation. On other platforms, returns `Ok(())`
-/// (best-effort; the copy will still fail on a locked file with a clear error).
+/// This is a **soft** check: it does NOT block migration. Many macOS system
+/// caches (e.g. `~/Library/Caches/GeoServices`) are perpetually held open by
+/// un-killable daemons (Spotlight, assistantd, suggestd, …), so a hard block
+/// would make those directories unmigratable forever. Instead we surface the
+/// occupied processes as a warning and let the migration proceed; the copy
+/// still succeeds (files are readable while open), and the robust delete step
+/// retries — if the dir genuinely can't be removed the migration fails at the
+/// delete step with a clear message, by which point the external copy exists
+/// and can be cleaned up.
 #[cfg(target_os = "macos")]
-pub fn check_occupied(path: &Path) -> Result<(), String> {
+pub fn check_occupied(path: &Path) -> Option<String> {
     // `+D` makes lsof descend the whole tree rooted at `path`, so it catches
     // processes holding files *inside* the directory (e.g. a running IDE with
-    // its cache open) — not just the exact directory path. This is essential:
-    // `lsof <dir>` only reports the directory itself and would let a migration
-    // proceed, only for `remove_dir_all` to fail later with "Directory not
-    // empty" because files are still open.
+    // its cache open) — not just the exact directory path.
     let out = std::process::Command::new("lsof")
         .args(["-Fpcn", "+D"])
         .arg(path)
         .output();
     match out {
         Ok(o) if o.status.success() => {
-            // lsof prints nothing when no process holds the path.
             if o.stdout.is_empty() {
-                Ok(())
+                None
             } else {
-                let summary = summarize_lsof(&o.stdout);
-                Err(format!(
-                    "目录被进程占用，请先关闭相关程序后重试：\n{}",
-                    summary
-                ))
+                Some(summarize_lsof(&o.stdout))
             }
         }
         // lsof exit 1 means "no matches" → not occupied.
-        Ok(_) => Ok(()),
+        Ok(_) => None,
         Err(e) => {
-            // Couldn't run lsof — warn but don't block (the robust remove
-            // below + the copy's own error will still surface real problems).
             log::warn!("relocate: lsof unavailable ({e}); skipping occupancy check");
-            Ok(())
+            None
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn check_occupied(_path: &Path) -> Result<(), String> {
-    Ok(())
+pub fn check_occupied(_path: &Path) -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -273,8 +270,46 @@ pub(crate) fn copy_dir_with_progress(
             }
             continue;
         }
+        if ft.is_symlink() {
+            // Preserve symlinks as symlinks (re-create the link at the target
+            // with the same destination). This is essential for toolchain dirs
+            // like ~/.cargo/bin, where rustup's proxies (cargo, rustc, ...) are
+            // symlinks to `rustup`; copying them as regular files would break
+            // the dispatch, and skipping them would lose the binaries entirely.
+            // We read the link target and re-create it relative/absolute as-is.
+            match std::fs::read_link(entry.path()) {
+                Ok(link_target) => {
+                    // Remove anything already at the target so the symlink lands.
+                    let _ = std::fs::remove_file(&target);
+                    #[cfg(unix)]
+                    {
+                        if let Err(e) = std::os::unix::fs::symlink(&link_target, &target) {
+                            return Err(format!(
+                                "创建符号链接失败 {} -> {}: {}",
+                                target.display(),
+                                link_target.display(),
+                                e
+                            ));
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = link_target;
+                        // Non-unix can't carry symlinks; fall through to skip.
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "读取符号链接失败 {}: {}",
+                        entry.path().display(),
+                        e
+                    ))
+                }
+            }
+            continue;
+        }
         if !ft.is_file() {
-            // Symlinks / special files: skip (mirrors fs_extra's file-only copy).
+            // Other special files (fifos, sockets, devices): skip.
             continue;
         }
 
@@ -539,9 +574,12 @@ pub fn migrate_one(
         };
     }
 
-    // 2. Occupancy check (PRD §8.2.1).
-    if let Err(reason) = check_occupied(source) {
-        return MigrateOutcome::PreconditionFailed { reason };
+    // 2. Occupancy check (PRD §8.2.1) — SOFT: log a warning but don't block.
+    //    Many macOS system caches are held open by un-killable daemons; blocking
+    //    here would make them unmigratable. We proceed and let the robust delete
+    //    step surface a real failure (with the external copy already in place).
+    if let Some(summary) = check_occupied(source) {
+        log::warn!("relocate: {} 被进程占用，迁移可能失败：\n{}", source.display(), summary);
     }
 
     let dest = external_target(target_root, source);
@@ -796,6 +834,74 @@ mod tests {
 
         force_remove_dir_all(&tmp).expect("should remove despite read-only perms");
         assert!(!tmp.exists(), "tree should be gone despite read-only entries");
+    }
+
+    /// Symlinks *inside* the source tree must be preserved as symlinks at the
+    /// target (not skipped, not copied as regular files). This is the rustup
+    /// scenario that broke `cargo`: `~/.cargo/bin/cargo` is a symlink to
+    /// `rustup`; if the copy skipped it, the migrated tree lost the proxy and
+    /// `cargo` stopped working. This test mirrors that layout.
+    #[test]
+    #[cfg(unix)]
+    fn copy_preserves_internal_symlinks() {
+        let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(h) if !h.as_os_str().is_empty() => h,
+            _ => {
+                eprintln!("skip: HOME not set");
+                return;
+            }
+        };
+        let tmp = home.join(format!(
+            ".verve-migrate-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = tmp.join("home").join(".proj");
+        let target_root = tmp.join("external");
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::fs::create_dir_all(&target_root).unwrap();
+        // A real file (the dispatcher) + a relative symlink proxy to it, like
+        // rustup's `cargo -> rustup`.
+        std::fs::write(source.join("bin/rustup"), b"dispatcher").unwrap();
+        std::os::unix::fs::symlink("rustup", source.join("bin/cargo")).unwrap();
+
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let outcome = migrate_one(
+            &source,
+            &target_root,
+            "test-group",
+            0,
+            ConflictPolicy::Merge,
+            false,
+            cancel,
+            |_| {},
+        );
+        // We expect Done (or Cancelled with copy_completed if a checkpoint
+        // fired); either way the copy must have run. For this fixture Done.
+        match outcome {
+            MigrateOutcome::Done { .. } => {}
+            other => panic!("expected Done, got {other:?}"),
+        }
+
+        // The proxy symlink is preserved at the target.
+        let dest = external_target(&target_root, &source);
+        let proxy = dest.join("bin/cargo");
+        let meta = std::fs::symlink_metadata(&proxy).expect("proxy missing at target");
+        assert!(
+            meta.file_type().is_symlink(),
+            "proxy must remain a symlink, got {:?}",
+            meta.file_type()
+        );
+        assert_eq!(
+            std::fs::read_link(&proxy).unwrap(),
+            std::path::Path::new("rustup"),
+            "proxy must point at rustup (relative)"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// End-to-end check that after migration the original path is an

@@ -163,7 +163,17 @@ mod tests {
         let home = home().expect("HOME set in test env");
         assert!(!is_blacklisted(&home.join("Documents")));
         assert!(!is_blacklisted(&home.join("CodeProjects/verve")));
-        assert!(!is_blacklisted(&home.join(".cargo")));
+        // `~/.cargo` is normally a real dir (not blacklisted). But after a
+        // relocate migration it may be a symlink into /Volumes (which IS in the
+        // system blocklist) — in that migrated state the path legitimately
+        // canonicalizes under /Volumes, so only assert when it's a real dir.
+        let cargo = home.join(".cargo");
+        let is_real_dir = std::fs::symlink_metadata(&cargo)
+            .map(|m| m.is_dir() && !m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_real_dir {
+            assert!(!is_blacklisted(&cargo));
+        }
     }
 
     #[test]

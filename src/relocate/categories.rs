@@ -17,32 +17,48 @@ use super::types::{CategoryRule, RiskLevel};
 pub fn dev_caches() -> CategoryRule {
     CategoryRule {
         group_name: "开发工具缓存".to_string(),
-        description: "Xcode/Android 模拟器、编译缓存、包管理器缓存，可安全迁移到高速外置固态。"
+        description: "编译缓存、包管理器缓存、SDK 数据，可安全迁移到高速外置固态。"
             .to_string(),
-        // NOTE: active dev runtimes (~/.cargo, ~/.rustup, ~/.android,
-        // ~/Library/Android) are intentionally EXCLUDED — migrating them
-        // breaks the running toolchain (cargo/rustc/adb stop working). They
-        // are listed in DEV_RUNTIME_EXCLUDE below so even custom-added paths
-        // are rejected. Only pure caches (auto-rebuilt on demand) remain.
+        // Strategy: migrate specific CACHE subdirectories, never the whole
+        // runtime. E.g. ~/.cargo is excluded (it has bin/ proxies), but
+        // ~/.cargo/registry and ~/.cargo/git (crates source cache) are safe —
+        // cargo rebuilds them on demand. Same for ~/.rustup/toolchains vs
+        // ~/.rustup/downloads. Go pkg/mod is the module cache. SDKMAN
+        // candidates are JDK archives.
         path_patterns: vec![
+            // --- Rust: cache subdirs only (NOT ~/.cargo/bin or ~/.cargo/config) ---
+            "~/.cargo/registry".to_string(),
+            "~/.cargo/git".to_string(),
+            // --- Rustup: toolchains + downloads (re-downloadable, huge) ---
+            "~/.rustup/toolchains".to_string(),
+            "~/.rustup/downloads".to_string(),
+            // --- Go: module cache (NOT ~/go/bin) ---
+            "~/go/pkg".to_string(),
+            // --- SDKMAN: JDK candidates (re-installable) ---
+            "~/.sdkman/candidates".to_string(),
+            // --- Node/JS ---
             "~/.npm".to_string(),
             "~/Library/pnpm".to_string(),
+            // --- Java/Gradle/Maven ---
             "~/.m2".to_string(),
             "~/.gradle".to_string(),
+            // --- General caches ---
             "~/.cache".to_string(),
             "~/Library/Caches/*".to_string(),
+            // --- Xcode ---
             "~/Library/Developer/Xcode/DerivedData".to_string(),
             "~/Library/Developer/Xcode/Archives".to_string(),
             "~/Library/Developer/CoreSimulator".to_string(),
             "~/Library/Caches/com.apple.dt.Xcode".to_string(),
             "~/Library/Caches/AndroidEmulator".to_string(),
+            // --- Flutter/Dart ---
             "~/.flutter".to_string(),
             "~/.dart-tool".to_string(),
             "~/.cocoapods".to_string(),
         ],
         priority: 10,
         default_risk: RiskLevel::Safe,
-        hint_text: "🟢 安全 | 高速外置固态推荐迁移；机械硬盘会显著降低编译、模拟器启动速度。已排除 .cargo/.rustup/.android 等活跃开发运行时（迁移会破坏工具链）。"
+        hint_text: "🟢 安全 | 迁移的是缓存/SDK数据子目录（非运行时本体），工具找不到会自动重建/重下，不破坏项目代码。"
             .to_string(),
     }
 }

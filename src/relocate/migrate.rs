@@ -600,6 +600,44 @@ pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
     }
 
     if !root.exists() {
+        return Ok(());
+    }
+
+    // Last resort on macOS: ask for admin privileges via osascript. This pops
+    // up the native password dialog and runs `rm -rf` as root, which can
+    // remove files protected by TCC (Downloads, Documents) or owned by other
+    // users. On non-macOS or if the user cancels, we fall through to the error.
+    #[cfg(target_os = "macos")]
+    {
+        let path_str = root.to_string_lossy();
+        // Escape single quotes in the path for the shell script.
+        let escaped = path_str.replace('\'', "'\\''");
+        let script = format!(
+            "do shell script \"rm -rf '{}'\" with administrator privileges",
+            escaped
+        );
+        let out = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                if !root.exists() {
+                    return Ok(());
+                }
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                // User cancelled (-128) or wrong password — don't treat as
+                // fatal, just fall through to the error message.
+                log::warn!("relocate: osascript admin remove failed: {}", stderr.trim());
+            }
+            Err(e) => {
+                log::warn!("relocate: osascript unavailable: {}", e);
+            }
+        }
+    }
+
+    if !root.exists() {
         Ok(())
     } else {
         Err(format!(

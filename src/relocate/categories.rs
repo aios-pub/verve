@@ -92,7 +92,7 @@ pub fn docs_media() -> CategoryRule {
             "~/Documents".to_string(),
             "~/Movies".to_string(),
             "~/Pictures".to_string(),
-            "~/Library/Application Support".to_string(),
+            "~/Library/Application Support/*".to_string(),
         ],
         priority: 5,
         default_risk: RiskLevel::Safe,

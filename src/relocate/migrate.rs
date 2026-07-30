@@ -401,16 +401,21 @@ pub fn tree_sha256(dir: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest))
 }
 
-/// Recursively remove a directory, tolerating transient re-population.
+/// Recursively remove a directory, tolerating transient re-population AND
+/// read-only permissions.
 ///
 /// `std::fs::remove_dir_all` can fail with "Directory not empty" on macOS when
 /// Spotlight/Finder recreate `.DS_Store` or other metadata between its internal
-/// walk and the rmdir, or when a process briefly touches a file mid-delete.
-/// This does a robust two-pass sweep:
-///   1. Walk the tree and delete every file (ignoring per-file errors).
-///   2. Walk again and rmdir every directory deepest-first (ignoring errors),
-///      then rmdir the root. Retry the dir pass a couple of times so files
-///      removed in pass 1 are actually settled by the time pass 2 runs.
+/// walk and the rmdir, and with "Permission denied" when files are read-only
+/// or parent dirs lack write permission (common for caches like `~/.cache`).
+///
+/// This mirrors `rm -rf`: before deleting anything it makes the entry (and, for
+/// directory removal, the parent) user-writable, then does a robust two-pass
+/// sweep:
+///   1. Walk the tree and delete every file/symlink (chmod u+w first).
+///   2. Walk again and rmdir every directory deepest-first (chmod the dir u+w
+///      first so its children can be unlinked), then rmdir the root. Retry a
+///      few times so transient re-population settles.
 /// Returns Ok only once the root path no longer exists.
 pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
     // Fast path: if it's already gone, nothing to do.
@@ -418,7 +423,23 @@ pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    // Pass 1: delete every regular file + symlink in the tree.
+    // Helper: make a path user-writable (best-effort chmod u+w). On unix this
+    // adds the owner-write bit; needed before unlinking read-only files and
+    // before rmdir-ing a directory whose children must be removable.
+    #[cfg(unix)]
+    fn ensure_writable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o200); // S_IWUSR
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    fn ensure_writable(_path: &Path) {}
+
+    // Pass 1: delete every regular file + symlink in the tree. contents_first
+    // yields children before parents, which is what we want for files.
     for entry in walkdir::WalkDir::new(root)
         .follow_links(false)
         .contents_first(true)
@@ -427,13 +448,15 @@ pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
     {
         let ft = entry.file_type();
         if ft.is_file() || ft.is_symlink() {
+            ensure_writable(entry.path());
             let _ = std::fs::remove_file(entry.path());
         }
     }
 
     // Pass 2: remove directories deepest-first (contents_first already yields
-    // children before parents), then the root. Retry a few times to let the
-    // filesystem settle any just-removed files.
+    // children before parents), then the root. chmod each dir u+w first (so its
+    // remaining children, if any, are unlinkable) and retry a few times to let
+    // the filesystem settle any just-removed files.
     for _attempt in 0..5 {
         for entry in walkdir::WalkDir::new(root)
             .follow_links(false)
@@ -442,9 +465,11 @@ pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
             .filter_map(|e| e.ok())
         {
             if entry.file_type().is_dir() {
+                ensure_writable(entry.path());
                 let _ = std::fs::remove_dir(entry.path());
             }
         }
+        ensure_writable(root);
         // Also try a plain remove_dir_all on the root as a fast finisher.
         let _ = std::fs::remove_dir_all(root);
         if !root.exists() {
@@ -458,7 +483,7 @@ pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "无法彻底删除目录（可能仍有进程占用其中的文件）：{}",
+            "无法彻底删除目录（可能仍有进程占用其中的文件，或权限不足）：{}",
             root.display()
         ))
     }
@@ -742,6 +767,35 @@ mod tests {
         // No-op on a path that no longer exists.
         force_remove_dir_all(&tmp).expect("should be a no-op for missing path");
         assert!(!tmp.exists());
+    }
+
+    /// `force_remove_dir_all` must succeed even when files are read-only and
+    /// directories lack write permission (the `~/.cache` "Permission denied"
+    /// scenario). It chmod's entries u+w before unlinking, like `rm -rf`.
+    #[test]
+    #[cfg(unix)]
+    fn force_remove_dir_all_handles_readonly_files_and_dirs() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-force-rm-ro-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(tmp.join("nested")).unwrap();
+        let ro_file = tmp.join("nested/readonly.txt");
+        std::fs::write(&ro_file, b"locked").unwrap();
+        // Make the file read-only (no write for anyone).
+        std::fs::set_permissions(&ro_file, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // Make the nested dir non-writable (would block unlinking the file
+        // without our chmod-u+w step).
+        std::fs::set_permissions(tmp.join("nested"), std::fs::Permissions::from_mode(0o555))
+            .unwrap();
+
+        force_remove_dir_all(&tmp).expect("should remove despite read-only perms");
+        assert!(!tmp.exists(), "tree should be gone despite read-only entries");
     }
 
     /// End-to-end check that after migration the original path is an

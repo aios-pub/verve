@@ -214,7 +214,11 @@ pub(crate) fn copy_dir_with_progress(
     if dest.exists() {
         match policy {
             ConflictPolicy::Skip => {
-                return Err("用户选择跳过（目标已存在）".into());
+                // Skip = don't overwrite existing files, but still copy any
+                // missing ones and complete the migration (delete source +
+                // create symlink). Previously this aborted the entire copy,
+                // leaving the source unmigrated. Now it behaves like Merge but
+                // without overwriting existing files.
             }
             ConflictPolicy::BackupRename => {
                 let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
@@ -223,7 +227,7 @@ pub(crate) fn copy_dir_with_progress(
                     .map_err(|e| format!("备份重命名失败: {}", e))?;
             }
             ConflictPolicy::Merge => {
-                // Leave dest in place; we copy into it, skipping existing files.
+                // Leave dest in place; we copy into it, overwriting existing files.
             }
         }
     } else {
@@ -232,6 +236,8 @@ pub(crate) fn copy_dir_with_progress(
             .map_err(|e| format!("创建目标目录失败 {}: {}", dest.display(), e))?;
     }
 
+    // Skip policy: don't overwrite existing files. Merge: overwrite.
+    // BackupRename: fresh dest (old was renamed away), so overwrite=false is fine.
     let overwrite = policy == ConflictPolicy::Merge;
 
     // ---- Phase 1: walk the tree, create all directories, collect file tasks.

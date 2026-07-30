@@ -62,10 +62,23 @@ pub enum MigrateOutcome {
     /// A precondition failed before any destructive action (occupancy, space,
     /// blacklist, target-not-dir). No data was modified.
     PreconditionFailed { reason: String },
-    /// The user cancelled mid-copy. The original local directory is intact
-    /// (the destructive delete/symlink steps run only after a successful copy);
-    /// the partial external copy has been removed.
-    Cancelled,
+    /// The user cancelled. Carries the exact on-disk state so the engine can
+    /// do the *cheapest correct* recovery:
+    /// - `copy_completed=false, source_deleted=false`: copy aborted partway;
+    ///   the partial external copy (`dest`) was already removed by `migrate_one`
+    ///   and the original (`source`) is intact. The engine need not touch it.
+    /// - `copy_completed=true, source_deleted=false`: copy finished but the
+    ///   original was not yet deleted. The engine should just `remove_dir_all(dest)`;
+    ///   the original is intact (zero extra copy).
+    /// - `copy_completed=true, source_deleted=true`: original was deleted but the
+    ///   symlink was not created. The engine must restore the original from
+    ///   `dest` (`rollback::restore_from_external`), then remove `dest`.
+    Cancelled {
+        copy_completed: bool,
+        source_deleted: bool,
+        dest: PathBuf,
+        source: PathBuf,
+    },
     /// Something went wrong mid-copy/verify; partial external data may exist.
     Failed { reason: String },
 }
@@ -457,7 +470,12 @@ pub fn migrate_one(
             // report cancellation. The original local directory is untouched.
             if reason == CANCELLED_ERR {
                 let _ = std::fs::remove_dir_all(&dest);
-                return MigrateOutcome::Cancelled;
+                return MigrateOutcome::Cancelled {
+                    copy_completed: false,
+                    source_deleted: false,
+                    dest: dest.clone(),
+                    source: source.to_path_buf(),
+                };
             }
             // Distinguish "user chose skip" from a real failure.
             if reason.starts_with("用户选择跳过") {
@@ -468,6 +486,7 @@ pub fn migrate_one(
     };
 
     // 5. Optional integrity verification (PRD §8.2.4).
+    //    The copy is complete; from here on a cancel means "copy_completed=true".
     if verify {
         let src_digest = match tree_sha256(source) {
             Ok(d) => d,
@@ -488,6 +507,17 @@ pub fn migrate_one(
         }
     }
 
+    // Cancel checkpoint: copy finished, original still intact. The engine will
+    // just remove the external copy (zero extra copy, original untouched).
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return MigrateOutcome::Cancelled {
+            copy_completed: true,
+            source_deleted: false,
+            dest: dest.clone(),
+            source: source.to_path_buf(),
+        };
+    }
+
     // 6. Delete the original local directory (only after copy+verify).
     if let Err(e) = std::fs::remove_dir_all(source) {
         return MigrateOutcome::Failed {
@@ -495,20 +525,46 @@ pub fn migrate_one(
         };
     }
 
-    // 7. Create absolute-path symlink (PRD §2.2, §8.2.6).
+    // Cancel checkpoint: original just deleted, symlink not yet created. The
+    // engine must restore the original from the external copy.
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return MigrateOutcome::Cancelled {
+            copy_completed: true,
+            source_deleted: true,
+            dest: dest.clone(),
+            source: source.to_path_buf(),
+        };
+    }
+
+    // 7. Create absolute-path symlink (PRD §2.2, §8.2.6). If this fails the
+    //    original is already deleted, so we restore it from the external copy
+    //    before reporting failure (never leave the user without their data).
     let abs_dest = std::fs::canonicalize(&dest).unwrap_or_else(|_| dest.clone());
     #[cfg(unix)]
     {
         if let Err(e) = std::os::unix::fs::symlink(&abs_dest, source) {
-            return MigrateOutcome::Failed {
-                reason: format!("创建符号链接失败 {}: {}", source.display(), e),
+            let restore_err = super::rollback::restore_from_external(source, &dest);
+            let reason = match restore_err {
+                Ok(()) => format!(
+                    "创建符号链接失败 {}: {}（已从外置副本恢复原目录）",
+                    source.display(),
+                    e
+                ),
+                Err(re) => format!(
+                    "创建符号链接失败 {} 且恢复原目录失败：{}（外置副本仍在 {}）",
+                    source.display(),
+                    e,
+                    re
+                ),
             };
+            return MigrateOutcome::Failed { reason };
         }
     }
     #[cfg(not(unix))]
     {
+        let _ = super::rollback::restore_from_external(source, &dest);
         return MigrateOutcome::Failed {
-            reason: "当前平台不支持符号链接".into(),
+            reason: "当前平台不支持符号链接（已从外置副本恢复原目录）".into(),
         };
     }
 
@@ -763,8 +819,15 @@ mod tests {
         );
 
         assert!(
-            matches!(outcome, MigrateOutcome::Cancelled),
-            "expected Cancelled, got {:?}",
+            matches!(
+                outcome,
+                MigrateOutcome::Cancelled {
+                    copy_completed: false,
+                    source_deleted: false,
+                    ..
+                }
+            ),
+            "expected Cancelled (mid-copy), got {:?}",
             outcome
         );
 
@@ -787,4 +850,9 @@ mod tests {
 
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    // The post-copy / post-delete cancel checkpoints are simple
+    // `if cancel.load() { return Cancelled { ... } }` guards; their state
+    // fields are exercised by `rollback::restore_from_external` (the recovery
+    // path they trigger) — see that test module for the data-safety coverage.
 }

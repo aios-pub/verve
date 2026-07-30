@@ -857,11 +857,46 @@ impl RelocateEngine {
                                 &format!("（已跳过 {}）", item.source.display()),
                             );
                         }
-                        MigrateOutcome::Cancelled => {
-                            this.log(
-                                LogLevel::Warn,
-                                &format!("🚫 已取消迁移：{}", item.source.display()),
-                            );
+                        MigrateOutcome::Cancelled {
+                            copy_completed,
+                            source_deleted,
+                            dest,
+                            source,
+                        } => {
+                            // The current item was cancelled. Recover it right
+                            // here (state-aware) so the original is never left
+                            // missing, then stop the queue. The remaining
+                            // already-completed tasks are rolled back by
+                            // cancel_and_rollback (which also drove this cancel).
+                            if source_deleted {
+                                // Original was deleted; restore it from the
+                                // external copy, then remove the external copy.
+                                match rollback::restore_from_external(&source, &dest) {
+                                    Ok(()) => this.log(
+                                        LogLevel::Warn,
+                                        &format!("🚫 已取消并从外置副本恢复：{}", source.display()),
+                                    ),
+                                    Err(e) => this.log(
+                                        LogLevel::Error,
+                                        &format!("🚫 取消后恢复失败 {}: {}", source.display(), e),
+                                    ),
+                                }
+                            } else if copy_completed {
+                                // Copy finished but original intact: just drop
+                                // the external copy.
+                                let _ = std::fs::remove_dir_all(&dest);
+                                this.log(
+                                    LogLevel::Warn,
+                                    &format!("🚫 已取消（删除外置副本，原目录未受影响）：{}", source.display()),
+                                );
+                            } else {
+                                // Mid-copy cancel: migrate_one already removed
+                                // the partial external copy; original intact.
+                                this.log(
+                                    LogLevel::Warn,
+                                    &format!("🚫 已取消（原目录未受影响）：{}", source.display()),
+                                );
+                            }
                             // A cancel aborts the whole queue — stop here.
                             idx += 1;
                             cx.emit(RelocateEvent::Progress);

@@ -120,6 +120,57 @@ fn copy_back_with_progress(
     })
 }
 
+/// Restore the original local directory (`source`) from its completed external
+/// copy (`dest`), then remove the external copy.
+///
+/// Used when a migration is cancelled/fails **after** the original was deleted
+/// but **before** the symlink was created: the data only exists at `dest`, so we
+/// copy it back to `source` (the original absolute path) and clean up `dest`.
+/// `source` must not exist (it was just removed); its parent is created if
+/// missing. The external copy is removed only after a successful copy-back.
+pub fn restore_from_external(source: &Path, dest: &Path) -> Result<(), String> {
+    // The original was deleted; recreate its parent if needed.
+    if let Some(parent) = source.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("恢复：创建父目录失败 {}: {}", parent.display(), e))?;
+    }
+    // Copy the external tree back to the original path. We use the fresh-copy
+    // path (Skip policy so an unexpected leftover at `source` aborts rather
+    // than silently merging), with a never-cancel token.
+    let never_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let copy_result = super::migrate::copy_dir_with_progress(
+        dest,
+        source,
+        super::migrate::ConflictPolicy::Skip,
+        |_| {},
+        0,
+        &never_cancel,
+    );
+    let restored = match copy_result {
+        Ok(_) => true,
+        Err(e) if e == super::migrate::CANCELLED_ERR => {
+            return Err("恢复被中断".to_string());
+        }
+        Err(e) if e.starts_with("用户选择跳过") => {
+            // `source` already exists unexpectedly — treat as already restored.
+            true
+        }
+        Err(e) => {
+            return Err(format!("恢复：复制失败: {}", e));
+        }
+    };
+    if restored {
+        // Only remove the external copy once the original is safely restored.
+        // remove_dir_all on `dest` (the external data dir) is safe here: it is
+        // NOT a symlink (it's the real migrated copy), and the data is back at
+        // `source`.
+        if let Err(e) = std::fs::remove_dir_all(dest) {
+            return Err(format!("恢复：删除外置副本失败 {}: {}", dest.display(), e));
+        }
+    }
+    Ok(())
+}
+
 /// Run the rollback flow for one task (PRD §10.2). `on_progress` is fed from
 /// the copy-back step.
 pub fn rollback_one(
@@ -285,5 +336,51 @@ mod tests {
             RollbackOutcome::ExternalUnavailable { .. } => {}
             other => panic!("expected ExternalUnavailable, got {:?}", other),
         }
+    }
+
+    /// `restore_from_external` is the recovery path used when a migration is
+    /// cancelled (or the symlink step fails) AFTER the original was deleted:
+    /// it must copy the external tree back to the original path and then remove
+    /// the external copy. This is the data-safety guarantee for the
+    /// `Cancelled { source_deleted: true }` and symlink-failure branches.
+    #[test]
+    fn restore_from_external_recovers_deleted_original() {
+        let home = match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            Some(h) if !h.as_os_str().is_empty() => h,
+            _ => {
+                eprintln!("skip: HOME not set");
+                return;
+            }
+        };
+        let tmp = home.join(format!(
+            ".verve-restore-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Simulate the post-delete state: `external` holds the only copy,
+        // `source` does NOT exist (it was just removed by migrate_one step 6).
+        let external = tmp.join("external").join(".proj");
+        let source = tmp.join("home").join(".proj");
+        std::fs::create_dir_all(external.join("nested")).unwrap();
+        std::fs::write(external.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(external.join("nested").join("b.txt"), b"beta").unwrap();
+        // `source` is intentionally absent (deleted by step 6).
+
+        restore_from_external(&source, &external).expect("restore should succeed");
+
+        // Original is restored at its absolute path with all files.
+        assert!(source.is_dir(), "source must be restored");
+        assert_eq!(std::fs::read(source.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(
+            std::fs::read(source.join("nested").join("b.txt")).unwrap(),
+            b"beta"
+        );
+        // External copy was removed after the successful copy-back.
+        assert!(!external.exists(), "external copy should be removed after restore");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

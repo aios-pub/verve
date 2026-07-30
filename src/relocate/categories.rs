@@ -19,9 +19,12 @@ pub fn dev_caches() -> CategoryRule {
         group_name: "开发工具缓存".to_string(),
         description: "Xcode/Android 模拟器、编译缓存、包管理器缓存，可安全迁移到高速外置固态。"
             .to_string(),
+        // NOTE: active dev runtimes (~/.cargo, ~/.rustup, ~/.android,
+        // ~/Library/Android) are intentionally EXCLUDED — migrating them
+        // breaks the running toolchain (cargo/rustc/adb stop working). They
+        // are listed in DEV_RUNTIME_EXCLUDE below so even custom-added paths
+        // are rejected. Only pure caches (auto-rebuilt on demand) remain.
         path_patterns: vec![
-            "~/.cargo".to_string(),
-            "~/.rustup".to_string(),
             "~/.npm".to_string(),
             "~/Library/pnpm".to_string(),
             "~/.m2".to_string(),
@@ -32,8 +35,6 @@ pub fn dev_caches() -> CategoryRule {
             "~/Library/Developer/Xcode/Archives".to_string(),
             "~/Library/Developer/CoreSimulator".to_string(),
             "~/Library/Caches/com.apple.dt.Xcode".to_string(),
-            "~/Library/Android".to_string(),
-            "~/.android".to_string(),
             "~/Library/Caches/AndroidEmulator".to_string(),
             "~/.flutter".to_string(),
             "~/.dart-tool".to_string(),
@@ -41,10 +42,23 @@ pub fn dev_caches() -> CategoryRule {
         ],
         priority: 10,
         default_risk: RiskLevel::Safe,
-        hint_text: "🟢 安全 | 高速外置固态推荐迁移；机械硬盘会显著降低编译、模拟器启动速度"
+        hint_text: "🟢 安全 | 高速外置固态推荐迁移；机械硬盘会显著降低编译、模拟器启动速度。已排除 .cargo/.rustup/.android 等活跃开发运行时（迁移会破坏工具链）。"
             .to_string(),
     }
 }
+
+/// Active development-runtime directories that must NEVER be migrated.
+///
+/// These hold the running toolchain itself (binaries, proxies, SDKs) — moving
+/// them breaks `cargo`/`rustc`/`adb` etc. immediately. The scanner rejects
+/// these even if a user adds them as custom paths. Only pure caches (which
+/// tools rebuild on demand) are migratable.
+pub const DEV_RUNTIME_EXCLUDE: &[&str] = &[
+    "~/.cargo",
+    "~/.rustup",
+    "~/.android",
+    "~/Library/Android",
+];
 
 /// Group 2 — local code-project directories (PerformanceWarn).
 ///

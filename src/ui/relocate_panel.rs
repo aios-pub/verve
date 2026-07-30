@@ -918,6 +918,17 @@ impl RelocatePanel {
                             .text_size(px(12.))
                             .text_color(theme.muted_foreground)
                             .child(format!("已释放：{}", human_bytes(reclaimed))),
+                    )
+                    .child(
+                        Button::new("relocate-clear-history")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Delete)
+                            .label("清理历史")
+                            .tooltip("清空迁移历史记录，重新开始全量迁移（不会删除外置盘数据或符号链接）")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.engine.update(cx, |e, cx| e.clear_history(cx));
+                            })),
                     ),
             )
             // Rollback warning banner (PRD §10.4 fixed copy).

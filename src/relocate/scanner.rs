@@ -81,14 +81,32 @@ fn expand_pattern(pattern: &str) -> Vec<PathBuf> {
 }
 
 /// Enumerate the surviving candidate directories for one rule, tagged with the
-/// rule's index so the caller can assign them to the right group. Blacklisted
-/// and missing entries are dropped at this layer (PRD §2.1, §5.2, §5.8).
+/// rule's index so the caller can assign them to the right group. Blacklisted,
+/// dev-runtime, symlinked (already-migrated), and missing entries are dropped
+/// at this layer (PRD §2.1, §5.2, §5.8).
 fn matched_for_rule(rule: &CategoryRule, rule_index: usize) -> Vec<Matched> {
     let mut out = Vec::new();
     for pattern in &rule.path_patterns {
         for cand in expand_pattern(pattern) {
             // Skip blacklisted (scan layer — PRD §2.1).
             if is_blacklisted(&cand) {
+                continue;
+            }
+            // Skip active dev runtimes (~/.cargo, ~/.rustup, ...). Moving these
+            // breaks the running toolchain; they're excluded even if a rule or
+            // custom path matches them.
+            if is_dev_runtime(&cand) {
+                log::info!("relocate: 跳过活跃开发运行时目录 {}", cand.display());
+                continue;
+            }
+            // Skip if the candidate itself is a symlink — it's already been
+            // migrated (points at the external copy). Re-listing it would invite
+            // a duplicate migration. Use symlink_metadata so we detect the link
+            // itself rather than following it.
+            if std::fs::symlink_metadata(&cand)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
                 continue;
             }
             // Must exist and be a directory.
@@ -113,6 +131,30 @@ fn matched_for_rule(rule: &CategoryRule, rule_index: usize) -> Vec<Matched> {
     out
 }
 
+/// True if `path` is an active development-runtime directory that must never be
+/// migrated (e.g. ~/.cargo, ~/.rustup). Compares the canonical/expanded path
+/// against [`super::categories::DEV_RUNTIME_EXCLUDE`].
+fn is_dev_runtime(path: &Path) -> bool {
+    use super::categories::DEV_RUNTIME_EXCLUDE;
+    let home = match super::blacklist::home() {
+        Some(h) => h,
+        None => return false,
+    };
+    for pat in DEV_RUNTIME_EXCLUDE {
+        if let Some(expanded) = super::blacklist::expand_tilde(pat) {
+            // Match if path equals the expanded pattern or lives directly under it.
+            if &expanded == path || path.parent() == Some(expanded.as_path()) {
+                // Only exclude the exact dir itself (not its children), to keep
+                // this precise. Exact match is the common case.
+                if expanded == path {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Top-level non-rule-matched home directories, for the 【其他目录】 bucket
 /// (PRD §5.7). Only *non-empty*, *non-blacklisted* directories that no builtin
 /// rule already claimed are considered.
@@ -133,6 +175,10 @@ fn other_home_dirs(
         }
         // Scan-layer blacklist (PRD §2.1).
         if is_blacklisted(&path) {
+            continue;
+        }
+        // Skip active dev runtimes (PRD safety — breaks toolchain).
+        if is_dev_runtime(&path) {
             continue;
         }
         // Skip if already claimed by a rule (one directory, one group).
@@ -214,6 +260,21 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
     let mut custom_entries: Vec<DirEntry> = Vec::new();
     for p in custom_paths {
         if is_blacklisted(&p) {
+            continue;
+        }
+        // Reject active dev runtimes even when user-added (safety).
+        if is_dev_runtime(&p) {
+            log::warn!(
+                "relocate: 拒绝迁移活跃开发运行时目录（迁移会破坏工具链）：{}",
+                p.display()
+            );
+            continue;
+        }
+        // Skip if it's already a symlink (already migrated).
+        if std::fs::symlink_metadata(&p)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
             continue;
         }
         let md = match std::fs::metadata(&p) {
@@ -317,5 +378,71 @@ mod tests {
         for g in &result.groups {
             assert!(!g.entries.is_empty());
         }
+    }
+
+    /// A custom path that is itself a symlink (already migrated) must be skipped
+    /// — otherwise it would invite a duplicate migration.
+    #[test]
+    fn scan_skips_symlink_custom_paths() {
+        let home = super::super::blacklist::home().expect("HOME set in test env");
+        let tmp = home.join(format!(
+            ".verve-scan-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let real = tmp.join("real_dir");
+        let link = tmp.join("linked_dir");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("f.txt"), b"data").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // `link` is a symlink → scan should skip it.
+        let result = scan(vec![link.clone()]);
+        let all_paths: Vec<String> = result
+            .groups
+            .iter()
+            .flat_map(|g| g.entries.iter())
+            .map(|e| e.path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !all_paths.iter().any(|p| *p == link.to_string_lossy()),
+            "symlink custom path should be skipped, but it appeared: {:?}",
+            all_paths
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Dev-runtime directories (~/.cargo, ~/.rustup) must be rejected even when
+    /// passed as custom paths — migrating them breaks the toolchain.
+    #[test]
+    fn scan_rejects_dev_runtime_custom_paths() {
+        let home = super::super::blacklist::home().expect("HOME set in test env");
+        // If ~/.cargo is a real dir (not migrated), it should still be rejected
+        // as a dev-runtime path by the scanner.
+        let cargo = home.join(".cargo");
+        let is_real = std::fs::symlink_metadata(&cargo)
+            .map(|m| m.is_dir() && !m.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_real {
+            eprintln!("skip: ~/.cargo not a real dir in this env");
+            return;
+        }
+        let result = scan(vec![cargo.clone()]);
+        let all_paths: Vec<String> = result
+            .groups
+            .iter()
+            .flat_map(|g| g.entries.iter())
+            .map(|e| e.path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !all_paths.iter().any(|p| *p == cargo.to_string_lossy()),
+            "~/.cargo must be rejected as dev-runtime, but it appeared: {:?}",
+            all_paths
+        );
     }
 }

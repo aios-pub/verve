@@ -438,6 +438,33 @@ impl RelocateEngine {
             cx.notify();
             return;
         }
+        // Space pre-check with detailed logging (helps the "磁盘不足" failure
+        // case — the user sees exactly how much is needed vs available before
+        // the queue starts).
+        let total_bytes = items.iter().map(|i| i.size_bytes).sum::<u64>();
+        if let Some(probe) = &self.probe {
+            if probe.free_bytes < total_bytes {
+                self.log(
+                    LogLevel::Error,
+                    &format!(
+                        "外置磁盘空间不足：需要 {}，剩余 {}（差 {}）。请清理外置盘或减少迁移目录。",
+                        super::types::human_bytes(total_bytes),
+                        super::types::human_bytes(probe.free_bytes),
+                        super::types::human_bytes(total_bytes - probe.free_bytes),
+                    ),
+                );
+                cx.notify();
+                return;
+            }
+            self.log(
+                LogLevel::Info,
+                &format!(
+                    "空间检查通过：需要 {}，剩余 {}",
+                    super::types::human_bytes(total_bytes),
+                    super::types::human_bytes(probe.free_bytes),
+                ),
+            );
+        }
         self.queue = items;
         self.progress = Progress {
             total_items: self.queue.len(),
@@ -454,6 +481,24 @@ impl RelocateEngine {
         );
         cx.emit(RelocateEvent::StateChanged);
         self.spawn_driver(cx);
+    }
+
+    /// Clear all migration history (tasks.jsonl + in-memory tasks).
+    ///
+    /// Used after a failed migration (e.g. disk-full) to reset to a clean
+    /// state so the user can start a fresh full migration. Does NOT touch
+    /// the filesystem — it only clears the task records, not any symlinks or
+    /// external copies (those are handled by rollback/restore separately).
+    pub fn clear_history(&mut self, cx: &mut Context<Self>) {
+        persistence::rewrite_all(&[]);
+        self.tasks.clear();
+        self.log(
+            LogLevel::Info,
+            "已清理迁移历史记录。可重新选择目录进行全量迁移。",
+        );
+        cx.emit(RelocateEvent::TasksChanged);
+        // Re-scan so the groups reflect the current on-disk state.
+        self.scan_async(cx);
     }
 
     /// Pause the running queue (PRD §9 — queue control).

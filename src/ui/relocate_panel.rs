@@ -59,14 +59,10 @@ impl RelocatePanel {
         }
     }
 
-    /// Lazy-activate: kick off the first home-directory scan the first time the
-    /// user opens the relocate view. Called from the rail click handler so the
-    /// scan — and the TCC permission prompts it can trigger — only happen when
-    /// the user actually wants to use disk migration, never at app launch.
-    pub fn activate(&mut self, cx: &mut Context<Self>) {
-        if self.scan_started {
-            return;
-        }
+    /// Manually trigger a home-directory scan. The user clicks the "开始检测"
+    /// button — scanning (and any TCC permission prompts it triggers) never
+    /// happens automatically on view open.
+    pub fn scan_now(&mut self, cx: &mut Context<Self>) {
         self.scan_started = true;
         self.engine.update(cx, |e, cx| e.scan_async(cx));
     }
@@ -293,13 +289,36 @@ impl RelocatePanel {
         }
 
         if groups.is_empty() {
-            col = col.child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(theme.muted_foreground)
-                    .p_4()
-                    .child("暂无可迁移目录，点击下方按钮重新扫描。"),
-            );
+            if !self.scan_started {
+                // Pre-scan state: prompt the user to start detection manually.
+                col = col.child(
+                    v_flex()
+                        .gap_3()
+                        .p_4()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(theme.muted_foreground)
+                                .child("点击下方按钮扫描可迁移目录（扫描可能需要磁盘访问权限）。"),
+                        )
+                        .child(
+                            Button::new("relocate-start-scan")
+                                .primary()
+                                .small()
+                                .icon(IconName::Search)
+                                .label("开始检测")
+                                .on_click(cx.listener(|this, _, _, cx| this.scan_now(cx))),
+                        ),
+                );
+            } else {
+                col = col.child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(theme.muted_foreground)
+                        .p_4()
+                        .child("暂无可迁移目录，点击下方按钮重新扫描。"),
+                );
+            }
         }
 
         // "+ add custom" + select-all + rescan row.
@@ -331,10 +350,8 @@ impl RelocatePanel {
                 .ghost()
                 .small()
                 .icon(IconName::Redo)
-                .label("重新扫描")
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.notify();
-                })),
+                .label(if self.scan_started { "重新扫描" } else { "开始检测" })
+                .on_click(cx.listener(|this, _, _, cx| this.scan_now(cx))),
         ]);
 
         col.child(actions).into_any_element()

@@ -99,6 +99,14 @@ pub fn code_projects() -> CategoryRule {
 /// Group 3 — downloads / documents / media (Safe).
 ///
 /// Low read/write pressure — safe on either SSD or HDD.
+///
+/// NOTE: `~/Library/Application Support/*` is intentionally NOT migrated. Those
+/// subdirectories are app runtime data protected by macOS TCC; apps reading
+/// their data through a symlink that crosses into an external volume get
+/// `Operation not permitted (os error 1)` and fail to start (seen with
+/// JetBrains IDEs: "Cannot collect JVM options"). Apps also hold open file
+/// handles here while running. Treat the whole of `~/Library` as untouchable
+/// except for the explicit cache subdirs listed in [`dev_caches`].
 pub fn docs_media() -> CategoryRule {
     CategoryRule {
         group_name: "下载/文档/媒体文件".to_string(),
@@ -108,7 +116,6 @@ pub fn docs_media() -> CategoryRule {
             "~/Documents".to_string(),
             "~/Movies".to_string(),
             "~/Pictures".to_string(),
-            "~/Library/Application Support/*".to_string(),
         ],
         priority: 5,
         default_risk: RiskLevel::Safe,

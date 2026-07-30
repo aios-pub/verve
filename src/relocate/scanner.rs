@@ -272,12 +272,18 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
         if is_blacklisted(&p) {
             continue;
         }
-        // Reject ~/Library as a custom migration target — it holds app
-        // runtimes and migrating it breaks applications (JetBrains, Mail, etc.).
+        // Reject ~/Library and anything beneath it as a custom migration
+        // target. ~/Library holds app runtimes and TCC-protected data; apps
+        // reading their data through a symlink into an external volume get
+        // `Operation not permitted` and fail to start (e.g. JetBrains IDEs:
+        // "Cannot collect JVM options"). Only the explicit cache subdirs named
+        // in the dev-caches rule are migratable, and those arrive via
+        // matched_for_rule — not this user-custom path.
         if let Some(home) = super::blacklist::home() {
-            if p == home.join("Library") {
+            let lib = home.join("Library");
+            if p == lib || p.starts_with(&lib) {
                 log::warn!(
-                    "relocate: 拒绝迁移 ~/Library（包含应用运行时数据，迁移会破坏应用程序）：{}",
+                    "relocate: 拒绝迁移 ~/Library 及其子目录（应用运行时数据，TCC 保护，迁移会导致应用无法启动）：{}",
                     p.display()
                 );
                 continue;

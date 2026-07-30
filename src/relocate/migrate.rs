@@ -201,11 +201,14 @@ pub(crate) fn copy_dir_with_progress(
     source: &Path,
     dest: &Path,
     policy: ConflictPolicy,
-    mut on_progress: impl FnMut(&CopyProgress),
+    on_progress: impl FnMut(&CopyProgress) + Send,
     bytes_total: u64,
     cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<u64, String> {
-    use std::io::{Read, Write};
+    use std::sync::atomic::AtomicU64;
+
+    // Wrap the callback in a Mutex so the reporter thread can call it safely.
+    let on_progress = std::sync::Mutex::new(on_progress);
 
     // Conflict handling (dest already exists).
     if dest.exists() {
@@ -230,28 +233,25 @@ pub(crate) fn copy_dir_with_progress(
     }
 
     let overwrite = policy == ConflictPolicy::Merge;
-    let mut copied: u64 = 0;
-    // A 1 MB buffer keeps read/write syscall counts low for large files (the
-    // old 64 KB buffer issued ~16k syscalls per GB). On SSD→SSD this is close
-    // to a plain `cp` in throughput.
-    let mut buf = vec![0u8; 1024 * 1024];
-    // Progress sampling: only emit a sample when ≥100 ms have elapsed OR ≥4 MB
-    // have been copied since the last one, so the per-chunk callback (which
-    // crosses a channel + emits a GPUI event) doesn't dominate copy time.
-    // For a 1 GB file this is ~250 callbacks instead of ~16,000.
-    let mut last_progress_bytes: u64 = 0;
-    let mut last_progress_time = std::time::Instant::now();
-    let progress_min_interval = std::time::Duration::from_millis(100);
-    const PROGRESS_MIN_BYTES: u64 = 4 * 1024 * 1024;
 
-    // Walk the source tree, recreating the directory layout under dest and
-    // copying each file chunk-by-chunk.
+    // ---- Phase 1: walk the tree, create all directories, collect file tasks.
+    // Directories are created serially (they're cheap metadata ops and must
+    // exist before files land in them). Files are collected into a list for
+    // parallel copying in phase 2.
+    struct FileTask {
+        src: PathBuf,
+        dst: PathBuf,
+        size: u64,
+        perms: Option<std::fs::Permissions>,
+        name: String,
+    }
+    let mut file_tasks: Vec<FileTask> = Vec::new();
+
     for entry in walkdir::WalkDir::new(source)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        // Honour cancellation between entries.
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(CANCELLED_ERR.to_string());
         }
@@ -264,22 +264,14 @@ pub(crate) fn copy_dir_with_progress(
         if ft.is_dir() {
             std::fs::create_dir_all(&target)
                 .map_err(|e| format!("创建目录失败 {}: {}", target.display(), e))?;
-            // Preserve directory permissions where possible.
             if let Ok(meta) = entry.metadata() {
                 let _ = std::fs::set_permissions(&target, meta.permissions());
             }
             continue;
         }
         if ft.is_symlink() {
-            // Preserve symlinks as symlinks (re-create the link at the target
-            // with the same destination). This is essential for toolchain dirs
-            // like ~/.cargo/bin, where rustup's proxies (cargo, rustc, ...) are
-            // symlinks to `rustup`; copying them as regular files would break
-            // the dispatch, and skipping them would lose the binaries entirely.
-            // We read the link target and re-create it relative/absolute as-is.
             match std::fs::read_link(entry.path()) {
                 Ok(link_target) => {
-                    // Remove anything already at the target so the symlink lands.
                     let _ = std::fs::remove_file(&target);
                     #[cfg(unix)]
                     {
@@ -295,7 +287,6 @@ pub(crate) fn copy_dir_with_progress(
                     #[cfg(not(unix))]
                     {
                         let _ = link_target;
-                        // Non-unix can't carry symlinks; fall through to skip.
                     }
                 }
                 Err(e) => {
@@ -309,105 +300,169 @@ pub(crate) fn copy_dir_with_progress(
             continue;
         }
         if !ft.is_file() {
-            // Other special files (fifos, sockets, devices): skip.
             continue;
         }
-
-        let file_name = entry
-            .file_name()
-            .to_string_lossy()
-            .into_owned();
         let meta = match entry.metadata() {
             Ok(m) => m,
-            Err(e) => return Err(format!("读取文件元数据失败 {}: {}", entry.path().display(), e)),
+            Err(e) => {
+                return Err(format!(
+                    "读取文件元数据失败 {}: {}",
+                    entry.path().display(),
+                    e
+                ))
+            }
         };
-        let file_size = meta.len();
-
-        // Merge policy: skip files that already exist at the target.
-        if target.exists() && !overwrite {
-            // Still count the file as "done" for progress purposes.
-            copied = copied.saturating_add(file_size);
-            // Sample: skiped files are cheap, but avoid per-file callbacks for
-            // trees with many small files — only report if enough has accrued.
-            if copied - last_progress_bytes >= PROGRESS_MIN_BYTES
-                || last_progress_time.elapsed() >= progress_min_interval
-            {
-                last_progress_bytes = copied;
-                last_progress_time = std::time::Instant::now();
-                on_progress(&CopyProgress {
-                    bytes_done: copied,
-                    bytes_total,
-                    current_file: file_name.clone(),
-                });
-            }
-            continue;
-        }
-
-        // For small files (< buffer size), use std::fs::copy — it's a single
-        // optimized syscall (copyfile(3)/fcopyfile on macOS) and avoids the
-        // manual open+read+write+flush+close overhead that dominates when
-        // copying thousands of tiny files like .DS_Store. For large files we
-        // keep the chunk loop so cancel can interrupt mid-file.
-        if file_size <= buf.len() as u64 {
-            if let Err(e) = std::fs::copy(entry.path(), &target) {
-                return Err(format!("复制文件失败 {}: {}", entry.path().display(), e));
-            }
-            copied = copied.saturating_add(file_size);
-        } else {
-            // Large file: chunk-by-chunk with cancel checks.
-            let mut reader = match std::fs::File::open(entry.path()) {
-                Ok(f) => f,
-                Err(e) => return Err(format!("打开源文件失败 {}: {}", entry.path().display(), e)),
-            };
-            let mut writer = match std::fs::File::create(&target) {
-                Ok(f) => f,
-                Err(e) => return Err(format!("创建目标文件失败 {}: {}", target.display(), e)),
-            };
-            loop {
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(CANCELLED_ERR.to_string());
-                }
-                let n = match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(e) => {
-                        return Err(format!(
-                            "读取文件失败 {}: {}",
-                            entry.path().display(),
-                            e
-                        ))
-                    }
-                };
-                if let Err(e) = writer.write_all(&buf[..n]) {
-                    return Err(format!("写入文件失败 {}: {}", target.display(), e));
-                }
-                copied = copied.saturating_add(n as u64);
-            }
-            if let Err(e) = writer.flush() {
-                return Err(format!("写入刷新失败 {}: {}", target.display(), e));
-            }
-            drop(writer);
-        }
-        // Preserve permissions (best-effort; skip if it fails — not worth
-        // aborting a multi-GB migration over a single chmod).
-        let _ = std::fs::set_permissions(&target, meta.permissions());
-        // Sample progress strictly by time interval — do NOT emit a per-file
-        // "final report" (that fired on every small file and dominated copy
-        // time for trees with thousands of tiny files).
-        if last_progress_time.elapsed() >= progress_min_interval {
-            last_progress_bytes = copied;
-            last_progress_time = std::time::Instant::now();
-            on_progress(&CopyProgress {
-                bytes_done: copied,
-                bytes_total,
-                current_file: file_name.clone(),
-            });
-        }
-        let _ = file_size;
+        file_tasks.push(FileTask {
+            src: entry.path().to_path_buf(),
+            dst: target,
+            size: meta.len(),
+            perms: Some(meta.permissions()),
+            name: entry
+                .file_name()
+                .to_string_lossy()
+                .into_owned(),
+        });
     }
 
-    Ok(copied)
+    // ---- Phase 2: copy files in parallel.
+    // A thread pool of N workers pulls tasks from a shared queue. For trees
+    // with many small files this saturates the external SSD's IOPS; for a few
+    // large files each worker streams a different file concurrently. Progress
+    // is tracked atomically and sampled by time.
+    let copied_atomic = AtomicU64::new(0);
+    let error_slot = std::sync::Mutex::new(None::<String>);
+    let num_workers = num_copy_workers();
+    let queue = std::sync::Mutex::new(file_tasks.into_iter().collect::<Vec<_>>());
+
+    let reporter_done = std::sync::atomic::AtomicBool::new(false);
+
+    std::thread::scope(|s| {
+        // Progress reporter: runs in a dedicated thread, samples the atomic
+        // counter every 100 ms and calls on_progress. Only this thread touches
+        // the FnMut callback.
+        s.spawn(|| {
+            let interval = std::time::Duration::from_millis(100);
+            loop {
+                std::thread::sleep(interval);
+                if reporter_done.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                if let Ok(mut cb) = on_progress.lock() {
+                    cb(&CopyProgress {
+                        bytes_done: copied_atomic.load(std::sync::atomic::Ordering::Relaxed),
+                        bytes_total,
+                        current_file: String::new(),
+                    });
+                }
+            }
+        });
+
+        for _ in 0..num_workers {
+            s.spawn(|| {
+                let mut buf = vec![0u8; 1024 * 1024];
+                loop {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    if error_slot.lock().unwrap().is_some() {
+                        return;
+                    }
+                    let task = queue.lock().unwrap().pop();
+                    let Some(task) = task else {
+                        return;
+                    };
+
+                    if task.dst.exists() && !overwrite {
+                        copied_atomic.fetch_add(task.size, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
+
+                    let result = if task.size <= buf.len() as u64 {
+                        std::fs::copy(&task.src, &task.dst).map(|_| task.size)
+                    } else {
+                        copy_large_file(&task.src, &task.dst, &mut buf, cancel)
+                    };
+                    match result {
+                        Ok(n) => {
+                            copied_atomic.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                            if let Some(perms) = &task.perms {
+                                let _ = std::fs::set_permissions(&task.dst, perms.clone());
+                            }
+                        }
+                        Err(e) => {
+                            *error_slot.lock().unwrap() = Some(format!(
+                                "复制文件失败 {}: {}",
+                                task.src.display(),
+                                e
+                            ));
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+        // Signal the reporter to stop after all workers finish.
+        reporter_done.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    // Check for error.
+    if let Some(err) = error_slot.lock().unwrap().take() {
+        return Err(err);
+    }
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(CANCELLED_ERR.to_string());
+    }
+
+    // Final progress report.
+    let total = copied_atomic.load(std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut cb) = on_progress.lock() {
+        cb(&CopyProgress {
+            bytes_done: total,
+            bytes_total,
+            current_file: String::new(),
+        });
+    }
+    Ok(total)
+}
+
+/// Copy a single large file in chunks, honouring cancel between chunks.
+/// Returns the number of bytes copied.
+fn copy_large_file(
+    src: &Path,
+    dst: &Path,
+    buf: &mut [u8],
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<u64> {
+    use std::io::{Read, Write};
+    let mut reader = std::fs::File::open(src)?;
+    let mut writer = std::fs::File::create(dst)?;
+    let mut total: u64 = 0;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            writer.flush()?;
+            return Ok(total);
+        }
+        let n = match reader.read(buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        writer.write_all(&buf[..n])?;
+        total += n as u64;
+    }
+    writer.flush()?;
+    Ok(total)
+}
+
+/// Pick a sensible number of copy workers based on available CPUs.
+/// Capped at 8 — beyond that the external SSD's queue depth is the bottleneck,
+/// not CPU count, and more threads just add scheduling overhead.
+fn num_copy_workers() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    cpus.min(8).max(2)
 }
 
 /// Compute a SHA-256 digest of every file under `dir` (relative-path sorted)
@@ -539,7 +594,7 @@ pub fn migrate_one(
     conflict: ConflictPolicy,
     verify: bool,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    on_progress: impl FnMut(&CopyProgress),
+    on_progress: impl FnMut(&CopyProgress) + Send,
 ) -> MigrateOutcome {
     let mut on_progress = on_progress;
 

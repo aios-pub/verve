@@ -96,7 +96,6 @@ fn safe_unlink_symlink(symlink_path: &Path) -> Result<(), String> {
 fn copy_back_with_progress(
     external: &Path,
     local: &Path,
-    on_progress: &mut impl FnMut(&CopyProgress),
 ) -> Result<u64, String> {
     // Reuse the cancel-aware copy from migrate.rs. Rollback is never cancelled
     // mid-copy (the cancel token below stays false), but we get progress +
@@ -107,7 +106,7 @@ fn copy_back_with_progress(
         external,
         local,
         super::migrate::ConflictPolicy::Merge,
-        |cp| on_progress(cp),
+        |_| {}, // no progress callback for rollback
         0, // total unknown for rollback; progress still reports bytes_done
         &never_cancel,
     )
@@ -171,12 +170,8 @@ pub fn restore_from_external(source: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Run the rollback flow for one task (PRD §10.2). `on_progress` is fed from
-/// the copy-back step.
-pub fn rollback_one(
-    record: &TaskRecord,
-    mut on_progress: impl FnMut(&CopyProgress),
-) -> RollbackOutcome {
+/// Run the rollback flow for one task (PRD §10.2).
+pub fn rollback_one(record: &TaskRecord) -> RollbackOutcome {
     let external = Path::new(&record.target_external_path);
     let local = Path::new(&record.symlink_path);
 
@@ -229,7 +224,7 @@ pub fn rollback_one(
     }
 
     // 3. Copy the external copy back to the original local path (PRD §10.3).
-    let bytes = match copy_back_with_progress(external, local, &mut on_progress) {
+    let bytes = match copy_back_with_progress(external, local) {
         Ok(n) => n,
         Err(reason) => return RollbackOutcome::Failed { reason },
     };
@@ -332,7 +327,7 @@ mod tests {
     #[test]
     fn rollback_reports_external_unavailable() {
         let rec = fresh_record("/tmp/does-not-exist-symlink", "/tmp/does-not-exist-external");
-        match rollback_one(&rec, |_| {}) {
+        match rollback_one(&rec) {
             RollbackOutcome::ExternalUnavailable { .. } => {}
             other => panic!("expected ExternalUnavailable, got {:?}", other),
         }

@@ -590,7 +590,7 @@ impl RelocateEngine {
             for rec in records {
                 let r = Arc::new(rec);
                 let r_for_update = r.clone();
-                let outcome = smol::unblock(move || rollback::rollback_one(&r, |_| {})).await;
+                let outcome = smol::unblock(move || rollback::rollback_one(&r)).await;
                 let _ = weak.update(cx, |this, cx| {
                     this.progress.current_index = done;
                     this.progress.current_source = r_for_update.source_path.clone();
@@ -662,11 +662,7 @@ impl RelocateEngine {
         cx.spawn(async move |_this, cx| {
             let rec = record.clone();
             let outcome = smol::unblock(move || {
-                rollback::rollback_one(&rec, |_cp| {
-                    // Per-file progress can't easily cross the smol boundary
-                    // without channels; for a single-task rollback we update
-                    // at completion. (Acceptable: rollback is one dir.)
-                })
+                rollback::rollback_one(&rec)
             })
             .await;
             let _ = weak.update(cx, |this, cx| {

@@ -735,6 +735,7 @@ impl RelocatePanel {
         }
 
         v_flex()
+            .min_h_0()
             .gap_2()
             .child(
                 div()
@@ -746,7 +747,7 @@ impl RelocatePanel {
                 div()
                     .id("relocate-log-scroll")
                     .flex_1()
-                    .min_h(px(80.))
+                    .min_h_0()
                     .overflow_y_scroll()
                     .border_1()
                     .border_color(theme.border)
@@ -977,7 +978,9 @@ impl Render for RelocatePanel {
             .child(self.render_groups(cx))
             .child(self.render_migration_controls(cx));
 
-        // Right column: progress + log + tasks.
+        // Right column: progress + log + tasks. The log area takes the
+        // remaining vertical space (flex_1) so it scrolls instead of pushing
+        // the whole panel to overflow.
         let right = v_flex()
             .flex_1()
             .min_w_0()
@@ -986,7 +989,10 @@ impl Render for RelocatePanel {
             .p_4()
             .gap_4()
             .child(self.render_progress(cx))
-            .child(self.render_log(cx))
+            .child(
+                // Log fills remaining space and scrolls internally.
+                div().flex_1().min_h_0().child(self.render_log(cx)),
+            )
             .child(self.render_tasks(cx));
 
         h_flex()

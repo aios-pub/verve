@@ -161,10 +161,10 @@ pub fn restore_from_external(source: &Path, dest: &Path) -> Result<(), String> {
     };
     if restored {
         // Only remove the external copy once the original is safely restored.
-        // remove_dir_all on `dest` (the external data dir) is safe here: it is
-        // NOT a symlink (it's the real migrated copy), and the data is back at
-        // `source`.
-        if let Err(e) = std::fs::remove_dir_all(dest) {
+        // Use the robust recursive remove: `dest` is the real migrated data dir
+        // (never a symlink), and force_remove_dir_all tolerates macOS
+        // ".Directory not empty" transient re-population.
+        if let Err(e) = super::migrate::force_remove_dir_all(dest) {
             return Err(format!("恢复：删除外置副本失败 {}: {}", dest.display(), e));
         }
     }
@@ -265,7 +265,7 @@ pub fn delete_external_copy(record: &TaskRecord) -> Result<(), String> {
     if !external.is_dir() {
         return Err(format!("外置副本不是目录：{}", external.display()));
     }
-    std::fs::remove_dir_all(external)
+    super::migrate::force_remove_dir_all(external)
         .map_err(|e| format!("删除外置副本失败 {}: {}", external.display(), e))
 }
 

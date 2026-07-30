@@ -90,8 +90,14 @@ pub enum MigrateOutcome {
 /// (best-effort; the copy will still fail on a locked file with a clear error).
 #[cfg(target_os = "macos")]
 pub fn check_occupied(path: &Path) -> Result<(), String> {
+    // `+D` makes lsof descend the whole tree rooted at `path`, so it catches
+    // processes holding files *inside* the directory (e.g. a running IDE with
+    // its cache open) — not just the exact directory path. This is essential:
+    // `lsof <dir>` only reports the directory itself and would let a migration
+    // proceed, only for `remove_dir_all` to fail later with "Directory not
+    // empty" because files are still open.
     let out = std::process::Command::new("lsof")
-        .args(["-Fpcn"]) // terse output: pid, command, count
+        .args(["-Fpcn", "+D"])
         .arg(path)
         .output();
     match out {
@@ -110,8 +116,8 @@ pub fn check_occupied(path: &Path) -> Result<(), String> {
         // lsof exit 1 means "no matches" → not occupied.
         Ok(_) => Ok(()),
         Err(e) => {
-            // Couldn't run lsof — warn but don't block (copy will surface
-            // a real error if a file is actually locked).
+            // Couldn't run lsof — warn but don't block (the robust remove
+            // below + the copy's own error will still surface real problems).
             log::warn!("relocate: lsof unavailable ({e}); skipping occupancy check");
             Ok(())
         }
@@ -395,6 +401,69 @@ pub fn tree_sha256(dir: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest))
 }
 
+/// Recursively remove a directory, tolerating transient re-population.
+///
+/// `std::fs::remove_dir_all` can fail with "Directory not empty" on macOS when
+/// Spotlight/Finder recreate `.DS_Store` or other metadata between its internal
+/// walk and the rmdir, or when a process briefly touches a file mid-delete.
+/// This does a robust two-pass sweep:
+///   1. Walk the tree and delete every file (ignoring per-file errors).
+///   2. Walk again and rmdir every directory deepest-first (ignoring errors),
+///      then rmdir the root. Retry the dir pass a couple of times so files
+///      removed in pass 1 are actually settled by the time pass 2 runs.
+/// Returns Ok only once the root path no longer exists.
+pub fn force_remove_dir_all(root: &Path) -> Result<(), String> {
+    // Fast path: if it's already gone, nothing to do.
+    if !root.exists() && !std::fs::symlink_metadata(root).is_ok() {
+        return Ok(());
+    }
+
+    // Pass 1: delete every regular file + symlink in the tree.
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .contents_first(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let ft = entry.file_type();
+        if ft.is_file() || ft.is_symlink() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    // Pass 2: remove directories deepest-first (contents_first already yields
+    // children before parents), then the root. Retry a few times to let the
+    // filesystem settle any just-removed files.
+    for _attempt in 0..5 {
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .contents_first(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_dir() {
+                let _ = std::fs::remove_dir(entry.path());
+            }
+        }
+        // Also try a plain remove_dir_all on the root as a fast finisher.
+        let _ = std::fs::remove_dir_all(root);
+        if !root.exists() {
+            return Ok(());
+        }
+        // Brief pause before retrying so the OS can flush pending deletes.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    if !root.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "无法彻底删除目录（可能仍有进程占用其中的文件）：{}",
+            root.display()
+        ))
+    }
+}
+
 /// Run the full single-directory migration flow. `on_progress` is invoked from
 /// the copy step (run on a background executor by the caller). No destructive
 /// action happens before copy+verify succeed.
@@ -469,7 +538,7 @@ pub fn migrate_one(
             // User cancelled mid-copy: clean up the partial external copy and
             // report cancellation. The original local directory is untouched.
             if reason == CANCELLED_ERR {
-                let _ = std::fs::remove_dir_all(&dest);
+                let _ = force_remove_dir_all(&dest);
                 return MigrateOutcome::Cancelled {
                     copy_completed: false,
                     source_deleted: false,
@@ -518,8 +587,14 @@ pub fn migrate_one(
         };
     }
 
-    // 6. Delete the original local directory (only after copy+verify).
-    if let Err(e) = std::fs::remove_dir_all(source) {
+    // 6. Delete the original local directory (only after copy+verify). Use a
+    //    robust recursive remove: `std::fs::remove_dir_all` can fail with
+    //    "Directory not empty" on macOS when Spotlight/Finder recreate
+    //    `.DS_Store`/metadata between the internal walk and the rmdir, or when
+    //    a process briefly touches a file. force_remove_dir_all does a
+    //    two-pass sweep (files first, then dirs deepest-first) and retries,
+    //    so transient re-population doesn't abort the migration.
+    if let Err(e) = force_remove_dir_all(source) {
         return MigrateOutcome::Failed {
             reason: format!("删除本地原目录失败 {}: {}", source.display(), e),
         };
@@ -639,6 +714,34 @@ mod tests {
         std::fs::write(b.join("f.txt"), b"hello").unwrap();
         assert_eq!(tree_sha256(&a).unwrap(), tree_sha256(&b).unwrap());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `force_remove_dir_all` removes a populated directory tree even with
+    /// nested files/subdirs, and is a no-op for an already-absent path. This
+    /// guards the source-deletion step that was failing with "Directory not
+    /// empty" on macOS.
+    #[test]
+    fn force_remove_dir_all_clears_tree_and_handles_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-force-rm-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Nested files + a subdirectory.
+        std::fs::create_dir_all(tmp.join("nested/deeper")).unwrap();
+        std::fs::write(tmp.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(tmp.join("nested/b.txt"), b"beta").unwrap();
+        std::fs::write(tmp.join("nested/deeper/c.txt"), b"gamma").unwrap();
+
+        force_remove_dir_all(&tmp).expect("should remove the populated tree");
+        assert!(!tmp.exists(), "tree should be gone after force_remove_dir_all");
+
+        // No-op on a path that no longer exists.
+        force_remove_dir_all(&tmp).expect("should be a no-op for missing path");
+        assert!(!tmp.exists());
     }
 
     /// End-to-end check that after migration the original path is an

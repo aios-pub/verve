@@ -760,10 +760,12 @@ impl RelocatePanel {
         }
 
         v_flex()
+            .flex_1()
             .min_h_0()
             .gap_2()
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("日志"),

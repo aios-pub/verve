@@ -177,6 +177,16 @@ fn other_home_dirs(
         if is_blacklisted(&path) {
             continue;
         }
+        // ~/Library itself must never appear in 【其他目录】 — it holds app
+        // runtimes (Application Support, Preferences, etc.) and migrating the
+        // whole dir breaks apps. Specific cache subdirs under ~/Library are
+        // still matched by the dev-caches rule's explicit patterns, which are
+        // handled separately in matched_for_rule (not here).
+        if path.file_name().map(|n| n == "Library").unwrap_or(false)
+            && path.parent() == Some(home)
+        {
+            continue;
+        }
         // Skip active dev runtimes (PRD safety — breaks toolchain).
         if is_dev_runtime(&path) {
             continue;
@@ -261,6 +271,17 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
     for p in custom_paths {
         if is_blacklisted(&p) {
             continue;
+        }
+        // Reject ~/Library as a custom migration target — it holds app
+        // runtimes and migrating it breaks applications (JetBrains, Mail, etc.).
+        if let Some(home) = super::blacklist::home() {
+            if p == home.join("Library") {
+                log::warn!(
+                    "relocate: 拒绝迁移 ~/Library（包含应用运行时数据，迁移会破坏应用程序）：{}",
+                    p.display()
+                );
+                continue;
+            }
         }
         // Reject active dev runtimes even when user-added (safety).
         if is_dev_runtime(&p) {

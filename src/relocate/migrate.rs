@@ -343,58 +343,59 @@ pub(crate) fn copy_dir_with_progress(
             continue;
         }
 
-        // Open + copy chunk-by-chunk, checking cancel after each chunk.
-        let mut reader = match std::fs::File::open(entry.path()) {
-            Ok(f) => f,
-            Err(e) => return Err(format!("打开源文件失败 {}: {}", entry.path().display(), e)),
-        };
-        let mut writer = match std::fs::File::create(&target) {
-            Ok(f) => f,
-            Err(e) => return Err(format!("创建目标文件失败 {}: {}", target.display(), e)),
-        };
-        loop {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(CANCELLED_ERR.to_string());
+        // For small files (< buffer size), use std::fs::copy — it's a single
+        // optimized syscall (copyfile(3)/fcopyfile on macOS) and avoids the
+        // manual open+read+write+flush+close overhead that dominates when
+        // copying thousands of tiny files like .DS_Store. For large files we
+        // keep the chunk loop so cancel can interrupt mid-file.
+        if file_size <= buf.len() as u64 {
+            if let Err(e) = std::fs::copy(entry.path(), &target) {
+                return Err(format!("复制文件失败 {}: {}", entry.path().display(), e));
             }
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    return Err(format!(
-                        "读取文件失败 {}: {}",
-                        entry.path().display(),
-                        e
-                    ))
-                }
+            copied = copied.saturating_add(file_size);
+        } else {
+            // Large file: chunk-by-chunk with cancel checks.
+            let mut reader = match std::fs::File::open(entry.path()) {
+                Ok(f) => f,
+                Err(e) => return Err(format!("打开源文件失败 {}: {}", entry.path().display(), e)),
             };
-            if let Err(e) = writer.write_all(&buf[..n]) {
-                return Err(format!("写入文件失败 {}: {}", target.display(), e));
+            let mut writer = match std::fs::File::create(&target) {
+                Ok(f) => f,
+                Err(e) => return Err(format!("创建目标文件失败 {}: {}", target.display(), e)),
+            };
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(CANCELLED_ERR.to_string());
+                }
+                let n = match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        return Err(format!(
+                            "读取文件失败 {}: {}",
+                            entry.path().display(),
+                            e
+                        ))
+                    }
+                };
+                if let Err(e) = writer.write_all(&buf[..n]) {
+                    return Err(format!("写入文件失败 {}: {}", target.display(), e));
+                }
+                copied = copied.saturating_add(n as u64);
             }
-            copied = copied.saturating_add(n as u64);
-            // Sample progress to avoid per-chunk callback overhead.
-            if copied - last_progress_bytes >= PROGRESS_MIN_BYTES
-                || last_progress_time.elapsed() >= progress_min_interval
-            {
-                last_progress_bytes = copied;
-                last_progress_time = std::time::Instant::now();
-                on_progress(&CopyProgress {
-                    bytes_done: copied,
-                    bytes_total,
-                    current_file: file_name.clone(),
-                });
+            if let Err(e) = writer.flush() {
+                return Err(format!("写入刷新失败 {}: {}", target.display(), e));
             }
+            drop(writer);
         }
-        // Flush + drop to ensure data is on disk before we set permissions /
-        // move on, then preserve the source file's permission bits.
-        if let Err(e) = writer.flush() {
-            return Err(format!("写入刷新失败 {}: {}", target.display(), e));
-        }
-        drop(writer);
+        // Preserve permissions (best-effort; skip if it fails — not worth
+        // aborting a multi-GB migration over a single chmod).
         let _ = std::fs::set_permissions(&target, meta.permissions());
-        // Always report the final byte count for this file so progress never
-        // lags behind the actual copied amount between samples.
-        if copied != last_progress_bytes {
+        // Sample progress strictly by time interval — do NOT emit a per-file
+        // "final report" (that fired on every small file and dominated copy
+        // time for trees with thousands of tiny files).
+        if last_progress_time.elapsed() >= progress_min_interval {
             last_progress_bytes = copied;
             last_progress_time = std::time::Instant::now();
             on_progress(&CopyProgress {
@@ -1057,17 +1058,24 @@ mod tests {
         // before the callback flips the cancel flag.
         std::fs::create_dir_all(source.join("nested")).unwrap();
         std::fs::create_dir_all(&target_root).unwrap();
-        // Large files (4 MB each) so the copy spans many 1 MB chunks and several
-        // progress samples before the callback flips the cancel flag.
+        // Large files (4 MB each) so the copy spans multiple 1 MB chunks,
+        // giving the cancel check (which runs at each chunk boundary) a
+        // chance to abort mid-copy.
         std::fs::write(source.join("a.txt"), vec![b'A'; 4 * 1024 * 1024]).unwrap();
         std::fs::write(source.join("b.txt"), vec![b'B'; 4 * 1024 * 1024]).unwrap();
         std::fs::write(source.join("nested").join("c.txt"), vec![b'C'; 4 * 1024 * 1024]).unwrap();
 
-        // Flip the cancel flag on the first progress sample. With 12 MB of data
-        // and 1 MB chunks, the first sample lands well before the copy finishes,
-        // so the next chunk-boundary check aborts the copy mid-stream.
+        // Flip the cancel flag from a separate thread after a short delay.
+        // We can't rely on the progress callback (which is now time-sampled and
+        // may not fire at all for a fast local-SSD copy). The copy loop checks
+        // `cancel` at every chunk boundary, so a 10 ms delay reliably catches
+        // it mid-copy.
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cancel_cb = cancel.clone();
+        let cancel_setter = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            cancel_setter.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
         let outcome = migrate_one(
             &source,
             &target_root,
@@ -1075,10 +1083,8 @@ mod tests {
             12 * 1024 * 1024,
             ConflictPolicy::Merge,
             false,
-            cancel.clone(),
-            move |_cp| {
-                cancel_cb.store(true, std::sync::atomic::Ordering::Relaxed);
-            },
+            cancel,
+            |_| {},
         );
 
         assert!(

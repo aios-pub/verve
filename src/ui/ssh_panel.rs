@@ -56,7 +56,13 @@ enum PumpMsg {
     /// A connection has been established (used to make Sftp available on demand).
     Connected(crate::ssh::client::SshConnection),
     Closed(Option<u32>),
-    Error(String),
+    /// Connection error. `retryable == false` means it's a configuration
+    /// problem (bad credentials / wrong port / host-key mismatch) that the UI
+    /// should not retry.
+    Error {
+        message: String,
+        retryable: bool,
+    },
     Disconnected,
     /// ZMODEM UI event (started/progress/completed/error). Carries the
     /// originating session's uid so multi-tab events are routed correctly.
@@ -120,6 +126,27 @@ pub enum SessionStatus {
     Reconnecting(usize), // attempt number
     Error(String),
     Closed,
+}
+
+/// Derive a short status-bar label (shown as "✕ <label>") from a detailed
+/// SSH error message. Keeps the status bar compact while the terminal shows
+/// the full explanation.
+fn ssh_error_short_label(message: &str) -> String {
+    if message.contains("认证失败") {
+        "认证失败".to_string()
+    } else if message.contains("连接被拒绝") {
+        "端口不通".to_string()
+    } else if message.contains("超时") {
+        "连接超时".to_string()
+    } else if message.contains("主机密钥") {
+        "主机密钥异常".to_string()
+    } else if message.contains("无法解析主机") || message.contains("网络不可达") {
+        "主机不可达".to_string()
+    } else if message.contains("跳板机") {
+        "跳板机错误".to_string()
+    } else {
+        "连接失败".to_string()
+    }
 }
 
 /// Active ZMODEM transfer state (GPUI UI-side mirror of what the pump actor reports).
@@ -644,13 +671,19 @@ impl SshPanel {
                                     }
                                     Err(e) => {
                                         log::error!("SSH open_shell attempt {}: {e}", attempt);
-                                        let _ = tx.send(crate::ssh::client::SshOutput::Error(e));
+                                        let _ = tx.send(crate::ssh::client::SshOutput::Error {
+                                            message: e.message,
+                                            retryable: e.retryable,
+                                        });
                                     }
                                 }
                             }
                             Err(e) => {
                                 log::error!("SSH connect attempt {}: {e}", attempt);
-                                let _ = tx.send(crate::ssh::client::SshOutput::Error(e));
+                                let _ = tx.send(crate::ssh::client::SshOutput::Error {
+                                    message: e.message,
+                                    retryable: e.retryable,
+                                });
                             }
                         }
                     });
@@ -827,8 +860,15 @@ impl SshPanel {
                                             disconnected = false;
                                             break;
                                         }
-                                        crate::ssh::client::SshOutput::Error(e) => {
-                                            let _ = pump_tx_clone.send(PumpMsg::Error(e));
+                                        crate::ssh::client::SshOutput::Error {
+                                            message,
+                                            retryable,
+                                        } => {
+                                            let _ =
+                                                pump_tx_clone.send(PumpMsg::Error {
+                                                    message,
+                                                    retryable,
+                                                });
                                             disconnected = true;
                                             break;
                                         }
@@ -844,6 +884,10 @@ impl SshPanel {
 
                 // Receive pump messages on GPUI's executor and update the terminal.
                 let mut got_disconnected = false;
+                // Whether the last error is worth retrying. Authentication /
+                // config errors set this false so we stop after one attempt.
+                // `Disconnected` (no explicit error) defaults to retryable.
+                let mut last_error_retryable = true;
                 let session_uid = session_uid_for_task;
                 while let Some(msg) = pump_rx.recv().await {
                     match msg {
@@ -912,17 +956,50 @@ impl SshPanel {
                             got_disconnected = false;
                             break;
                         }
-                        PumpMsg::Error(e) => {
-                            log::warn!("SSH session error (attempt {}): {}", attempt, e);
-                            let m = format!("\r\n连接错误: {}\r\n", e);
+                        PumpMsg::Error { message, retryable } => {
+                            log::warn!(
+                                "SSH session error (attempt {}, retryable={}): {}",
+                                attempt,
+                                retryable,
+                                message
+                            );
+                            // Surface the full, specific reason to the user.
+                            let m = if retryable {
+                                format!("\r\n✕ 连接错误：{message}\r\n")
+                            } else {
+                                // Non-retryable: make it crystal clear this is a
+                                // configuration problem and we won't retry.
+                                format!(
+                                    "\r\n✕ 连接错误：{message}\r\n（已停止重试，请修改连接配置后重试）\r\n"
+                                )
+                            };
                             let _ = terminal_clone.update(cx, |tv, cx| {
                                 tv.feed(m.as_bytes());
                                 cx.notify();
                             });
+                            // Reflect the failure in the status bar.
+                            let short = ssh_error_short_label(&message);
+                            if let Some(panel) = panel_for_task.upgrade() {
+                                let uid = session_uid;
+                                let _ = panel.update(cx, move |this, cx| {
+                                    if let Some(s) = this
+                                        .sessions
+                                        .iter_mut()
+                                        .find(|s| s.session_uid == uid)
+                                    {
+                                        s.status = SessionStatus::Error(short);
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                            last_error_retryable = retryable;
                             got_disconnected = true;
                             break;
                         }
                         PumpMsg::Disconnected => {
+                            // Generic disconnect with no explicit error — treat
+                            // as transient and retry.
+                            last_error_retryable = true;
                             got_disconnected = true;
                             break;
                         }
@@ -977,16 +1054,53 @@ impl SshPanel {
                     break;
                 }
 
+                // Non-retryable error (bad credentials / wrong port / host-key
+                // mismatch): retrying won't help, so stop now. The error status
+                // was already set on the session in the PumpMsg::Error branch.
+                if !last_error_retryable {
+                    break;
+                }
+
                 if attempt >= max_attempts {
                     let msg = format!(
-                        "\r\n✕ 重连失败（已尝试 {} 次）。请检查网络后重新连接。\r\n",
+                        "\r\n✕ 重连失败（已尝试 {} 次）。请检查网络/主机地址/端口后重新连接。\r\n",
                         max_attempts
                     );
                     let _ = terminal_for_task.update(cx, |tv, cx| {
                         tv.feed(msg.as_bytes());
                         cx.notify();
                     });
+                    // Mark the session as failed in the status bar.
+                    if let Some(panel) = panel_for_task.upgrade() {
+                        let uid = session_uid;
+                        let _ = panel.update(cx, move |this, cx| {
+                            if let Some(s) = this
+                                .sessions
+                                .iter_mut()
+                                .find(|s| s.session_uid == uid)
+                            {
+                                s.status = SessionStatus::Error("连接失败".to_string());
+                                cx.notify();
+                            }
+                        });
+                    }
                     break;
+                }
+
+                // Reflect the reconnecting attempt in the status bar.
+                if let Some(panel) = panel_for_task.upgrade() {
+                    let uid = session_uid;
+                    let next_attempt = attempt + 1;
+                    let _ = panel.update(cx, move |this, cx| {
+                        if let Some(s) = this
+                            .sessions
+                            .iter_mut()
+                            .find(|s| s.session_uid == uid)
+                        {
+                            s.status = SessionStatus::Reconnecting(next_attempt);
+                            cx.notify();
+                        }
+                    });
                 }
 
                 // Exponential backoff: 1s, 2s, 4s, 8s, 16s.

@@ -199,10 +199,22 @@ pub fn Features() -> impl IntoView {
 #[component]
 fn PageHeader(eyebrow: &'static str, children: Children) -> impl IntoView {
     view! {
-        <section class="relative border-b border-ink-700 bg-grid">
-            <div class="mx-auto max-w-6xl px-4 pb-14 pt-10 text-center sm:px-6 lg:px-8">
-                <span class="text-xs font-semibold uppercase tracking-[0.2em] text-bolt-400">{eyebrow}</span>
-                <h1 class="mt-2 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">{children()}</h1>
+        <section class="relative isolate z-0 overflow-hidden">
+            // 网格层：独立高度，可以比内容高，超出部分被 overflow-hidden 裁掉
+            <div
+                class="bg-grid pointer-events-none absolute inset-x-0 top-0 -z-10"
+                style="height: 260px;"
+                aria-hidden="true"
+            ></div>
+
+            // 内容：紧凑 padding，不再用固定高度
+            <div class="relative z-10 mx-auto max-w-6xl px-4 pb-8 pt-8 text-center sm:px-6 lg:px-8">
+                <span class="text-xs font-semibold uppercase tracking-[0.2em] text-bolt-400">
+                    {eyebrow}
+                </span>
+                <h1 class="mt-2 text-4xl font-extrabold leading-[1.3] tracking-tight text-ink-50 sm:text-5xl">
+                    {children()}
+                </h1>
             </div>
         </section>
     }

@@ -34,9 +34,87 @@ pub enum SshOutput {
     Data(Vec<u8>),
     /// The session ended (with optional exit code).
     Closed(Option<u32>),
-    /// Connection error.
-    Error(String),
+    /// Connection error, with a flag telling the UI whether it is worth
+    /// auto-retrying. Authentication / configuration errors set
+    /// `retryable = false` so the UI can stop retrying and prompt the user to
+    /// fix their settings instead of hammering the server 5 times.
+    Error { message: String, retryable: bool },
 }
+
+/// A classified SSH error: a human-readable `message` plus a `retryable` hint.
+///
+/// `retryable == false` means the error is a configuration problem (bad
+/// credentials, wrong port, host-key mismatch, …) that will not resolve by
+/// retrying, so the caller should surface it to the user and stop.
+#[derive(Clone, Debug)]
+pub struct SshError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl SshError {
+    fn new(message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            message: message.into(),
+            retryable,
+        }
+    }
+
+    /// Build an [`SshError`] from a low-level [`russh::Error`], classifying it
+    /// into a friendly Chinese message and a retryable hint. `where_` is a
+    /// short description of where the error happened (e.g. `"连接"`, `"跳板机"`).
+    fn from_russh(e: russh::Error, where_: &str) -> Self {
+        match e {
+            // Host key mismatch (check_server_key returned false).
+            russh::Error::UnknownKey => Self::new(
+                "服务器主机密钥与本地已保存的不一致，可能存在中间人攻击，已拒绝连接",
+                false,
+            ),
+            // TCP / IO level errors — classify by io::ErrorKind.
+            russh::Error::IO(io) => Self::from_io(io, where_),
+            russh::Error::ConnectionTimeout
+            | russh::Error::KeepaliveTimeout
+            | russh::Error::InactivityTimeout => {
+                Self::new(format!("{where_}超时，请检查网络或主机地址是否可达"), true)
+            }
+            russh::Error::HUP | russh::Error::Disconnect => {
+                Self::new(format!("{where_}被对端关闭"), true)
+            }
+            other => Self::new(format!("{where_}失败: {other}"), true),
+        }
+    }
+
+    /// Classify a [`std::io::Error`] from the connection dial.
+    fn from_io(io: std::io::Error, where_: &str) -> Self {
+        use std::io::ErrorKind;
+        match io.kind() {
+            // A refused connection almost always means "nothing is listening
+            // on that port" — i.e. the port is wrong. Not retryable.
+            ErrorKind::ConnectionRefused => Self::new(
+                "连接被拒绝：目标端口上没有服务，请确认端口号是否正确、SSH 服务是否已启动",
+                false,
+            ),
+            // Network unreachable / no route: wrong host or network problem.
+            ErrorKind::NetworkUnreachable | ErrorKind::HostUnreachable => {
+                Self::new("网络不可达，请检查主机地址或网络连接", true)
+            }
+            ErrorKind::TimedOut => {
+                Self::new("连接超时，请检查主机地址是否正确、网络是否可达", true)
+            }
+            ErrorKind::NotFound => Self::new("无法解析主机地址，请检查主机名是否正确", false),
+            ErrorKind::PermissionDenied => Self::new(format!("{where_}被拒绝（权限不足）"), false),
+            other => Self::new(format!("{where_}失败: {other}"), true),
+        }
+    }
+}
+
+impl std::fmt::Display for SshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SshError {}
 
 /// A resize command sent to the background task.
 #[derive(Clone, Debug)]
@@ -111,11 +189,12 @@ impl SshConnection {
     ///
     /// If the host has a `bastion_id`, the connection tunnels through the
     /// bastion via `direct-tcpip` + `connect_stream`.
-    pub async fn connect(host: &SshHost) -> Result<Self, String> {
+    pub async fn connect(host: &SshHost) -> Result<Self, SshError> {
         let config = Arc::new(client::Config::default());
 
         // Resolve the jump chain (bastions from outermost to target).
-        let chain = host_store::jump_chain(host).map_err(|e| format!("跳板机配置错误: {e}"))?;
+        let chain = host_store::jump_chain(host)
+            .map_err(|e| SshError::new(format!("跳板机配置错误: {e}"), false))?;
 
         // Connect through the chain.
         let handle = if chain.len() == 1 {
@@ -127,7 +206,7 @@ impl SshConnection {
             };
             client::connect(config.clone(), addr, handler)
                 .await
-                .map_err(|e| format!("连接失败: {e}"))?
+                .map_err(|e| SshError::from_russh(e, "连接"))?
         } else {
             // Multi-hop: connect to first bastion, then tunnel.
             //
@@ -142,7 +221,7 @@ impl SshConnection {
             };
             let mut bastion_handle = client::connect(config.clone(), bastion_addr, bastion_handler)
                 .await
-                .map_err(|e| format!("连接跳板机失败: {e}"))?;
+                .map_err(|e| SshError::from_russh(e, "连接跳板机"))?;
             authenticate(&mut bastion_handle, bastion).await?;
 
             // Tunnel through to the target.
@@ -154,7 +233,7 @@ impl SshConnection {
             let tunnel = bastion_handle
                 .channel_open_direct_tcpip(&target_host, target.port as u32, "127.0.0.1", 0)
                 .await
-                .map_err(|e| format!("跳板机隧道失败: {e}"))?;
+                .map_err(|e| SshError::from_russh(e, "跳板机隧道"))?;
             let stream = tunnel.into_stream();
             let target_handler = SshHandler {
                 host: target_host.clone(),
@@ -162,7 +241,7 @@ impl SshConnection {
             };
             client::connect_stream(config.clone(), stream, target_handler)
                 .await
-                .map_err(|e| format!("通过跳板机连接失败: {e}"))?
+                .map_err(|e| SshError::from_russh(e, "通过跳板机连接"))?
         };
 
         let mut handle = handle;
@@ -178,22 +257,22 @@ impl SshConnection {
     /// Returns an [`SshSession`] whose I/O loop runs on a background Tokio
     /// task. Keystrokes are sent via `input_tx`, resize events via `resize_tx`,
     /// and shell output arrives on `output_rx`.
-    pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshSession, String> {
+    pub async fn open_shell(&self, cols: u32, rows: u32) -> Result<SshSession, SshError> {
         let handle = self.handle.lock().await;
         let channel = handle
             .channel_open_session()
             .await
-            .map_err(|e| format!("打开会话失败: {e}"))?;
+            .map_err(|e| SshError::from_russh(e, "打开会话"))?;
 
         let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into());
         channel
             .request_pty(false, &term, cols, rows, 0, 0, &[])
             .await
-            .map_err(|e| format!("请求 PTY 失败: {e}"))?;
+            .map_err(|e| SshError::from_russh(e, "请求 PTY"))?;
         channel
             .request_shell(true)
             .await
-            .map_err(|e| format!("请求 shell 失败: {e}"))?;
+            .map_err(|e| SshError::from_russh(e, "请求 shell"))?;
 
         // Set up I/O channels.
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -315,48 +394,65 @@ pub struct SshSession {
 /// Convenience wrapper: equivalent to `SshConnection::connect(host).await?.open_shell(cols, rows)`.
 /// Preserved for backward compatibility with existing callers.
 pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession, String> {
-    let conn = SshConnection::connect(host).await?;
-    conn.open_shell(cols, rows).await
+    let conn = SshConnection::connect(host).await.map_err(|e| e.message)?;
+    conn.open_shell(cols, rows).await.map_err(|e| e.message)
 }
 
 /// Authenticate on a russh handle using the host's configured method.
-async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result<(), String> {
+async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result<(), SshError> {
     let ok = match host.auth_type {
         SshAuthType::Password => {
             let password = credentials::load_keychain(&host.id, "password").unwrap_or_default();
-            handle
+            let res = handle
                 .authenticate_password(&host.username, password)
                 .await
-                .map_err(|e| format!("认证失败: {e}"))?
-                .success()
+                .map_err(|e| SshError::from_russh(e, "认证"))?;
+            if !res.success() {
+                // Server reached, but credentials rejected — not retryable.
+                return Err(SshError::new(
+                    "认证失败：用户名或密码错误，请检查账号配置",
+                    false,
+                ));
+            }
+            true
         }
         SshAuthType::PrivateKey => {
-            let key_path = host.key_path.as_deref().ok_or("未配置密钥路径")?;
+            let key_path = host
+                .key_path
+                .as_deref()
+                .ok_or_else(|| SshError::new("未配置密钥路径", false))?;
             let passphrase = credentials::load_keychain(&host.id, "key_passphrase").ok();
-            let key = load_secret_key(key_path, passphrase.as_deref())
-                .map_err(|e| format!("加载密钥失败: {e}"))?;
+            let key = load_secret_key(key_path, passphrase.as_deref()).map_err(|e| {
+                SshError::new(format!("加载私钥失败（路径 {key_path}）: {e}"), false)
+            })?;
             let hash_alg = handle
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|e| format!("RSA hash: {e}"))?
+                .map_err(|e| SshError::from_russh(e, "RSA 哈希协商"))?
                 .flatten();
-            handle
+            let res = handle
                 .authenticate_publickey(
                     &host.username,
                     PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
                 )
                 .await
-                .map_err(|e| format!("密钥认证失败: {e}"))?
-                .success()
+                .map_err(|e| SshError::from_russh(e, "密钥认证"))?;
+            if !res.success() {
+                return Err(SshError::new(
+                    "认证失败：密钥被服务器拒绝，请检查用户名或私钥是否正确",
+                    false,
+                ));
+            }
+            true
         }
         SshAuthType::Agent => {
             // Agent auth not yet implemented.
-            return Err("Agent 认证暂不支持".into());
+            return Err(SshError::new("Agent 认证暂不支持", false));
         }
     };
 
     if !ok {
-        return Err("认证失败：用户名/密码/密钥错误".into());
+        return Err(SshError::new("认证失败：用户名/密码/密钥错误", false));
     }
     Ok(())
 }

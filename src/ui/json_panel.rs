@@ -2,12 +2,14 @@
 //! Supports expand/collapse per node, all expand/collapse, copy result, and compact mode.
 //!
 //! # Performance note
-//! The output view is a directly-virtualized `uniform_list` over a flat `Vec<FlatRow>`.
-//! We deliberately avoid `gpui_component::tree` here: its `TreeItem` is `#[derive(Clone)]`
-//! with `children: Vec<TreeItem>`, so every `set_items`/`rebuild_entries` deep-clones each
-//! node's entire subtree — O(N·depth) regardless of virtualization. By flattening the JSON
-//! into a one-dimensional row list ourselves and rendering only the visible range, we get
-//! true O(visible) rendering with O(N) flattening and zero deep cloning.
+//! The output view is a directly-virtualized, variable-height `list` over a flat
+//! `Vec<FlatRow>`. We deliberately avoid `gpui_component::tree` here: its `TreeItem` is
+//! `#[derive(Clone)]` with `children: Vec<TreeItem>`, so every `set_items`/`rebuild_entries`
+//! deep-clones each node's entire subtree — O(N·depth) regardless of virtualization. By
+//! flattening the JSON into a one-dimensional row list ourselves and rendering only the
+//! visible range, we get true O(visible) rendering with O(N) flattening and zero deep
+//! cloning. We use a variable-height list (not `uniform_list`) so a primitive value that
+//! overflows the width wraps onto multiple lines instead of being clipped to a single row.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -56,9 +58,15 @@ enum RowKind {
     },
     /// A primitive value: `key: value` (or just `value` for root/array elements).
     /// `needs_comma` appends a trailing comma.
+    ///
+    /// - `value`: the JSON-literal text shown on screen (properly escaped, so a multi-line
+    ///   string renders as `"...\n..."` on one wrapped line instead of leaking real newlines).
+    /// - `raw`: the underlying scalar text copied to the clipboard when the user clicks the
+    ///   value (unquoted for strings, plain text for numbers/bools).
     Primitive {
         key: String,
         value: String,
+        raw: String,
         ty: ValueTy,
         needs_comma: bool,
     },
@@ -97,6 +105,11 @@ pub struct JsonPanel {
     /// rendering never deep-clones them (only an atomic refcount bump per frame).
     /// Recomputed from `value` + `expanded` in `rebuild_rows`.
     rows: Arc<Vec<FlatRow>>,
+    /// Variable-height list state for the output view. Unlike `uniform_list` (which forces
+    /// every row to the same fixed height and clips long values), this lets a primitive row
+    /// grow as tall as its wrapped text needs, so a multi-line value stays readable and
+    /// aligned with its key.
+    list_state: ListState,
     /// Set of object/array paths whose children are currently shown. A container not in
     /// this set is collapsed.
     expanded: HashSet<NodePath>,
@@ -142,6 +155,8 @@ impl JsonPanel {
             notice: None,
             compact: false,
             rows: Arc::new(Vec::new()),
+            // Top-aligned, 200px overdraw so fast scrolls don't pop in unmeasured rows.
+            list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             expanded: HashSet::new(),
             format_timer: None,
             _subs: vec![input_sub],
@@ -209,6 +224,16 @@ impl JsonPanel {
         }
     }
 
+    /// Copy a single primitive value to the clipboard. `raw` is the *unquoted* scalar text
+    /// (the underlying string/number/bool), so pasting it elsewhere yields the value itself,
+    /// not a JSON-literal. Strings are copied verbatim (with their real newlines), numbers
+    /// and bools as their text form. Shows a short confirmation notice.
+    pub fn copy_value(&mut self, raw: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(raw));
+        self.notice = Some(rust_i18n::t!("json.copy_value_success").to_string());
+        cx.notify();
+    }
+
     /// Debounce the input-driven format by 300ms. Re-assigning the timer cancels
     /// any pending run, so rapid keystrokes coalesce into a single parse pass.
     fn schedule_format(&mut self, raw: String, cx: &mut Context<Self>) {
@@ -237,6 +262,9 @@ impl JsonPanel {
             self.value = None;
             self.parsing = false;
             self.rows = Arc::new(Vec::new());
+            // Keep the list's item count in sync with the (now empty) rows, otherwise it
+            // may still ask the render closure for a stale index → index out of bounds.
+            self.list_state.reset(0);
             self.expanded.clear();
             cx.notify();
             return;
@@ -249,6 +277,7 @@ impl JsonPanel {
         self.parsing = true;
         self.value = None;
         self.rows = Arc::new(Vec::new());
+        self.list_state.reset(0);
         cx.notify();
 
         // Parse + simplify off the UI thread. We intentionally do NOT `to_string_pretty`
@@ -301,6 +330,7 @@ impl JsonPanel {
                 self.value = None;
                 self.parsing = false;
                 self.rows = Arc::new(Vec::new());
+                self.list_state.reset(0);
             }
         }
         self.notice = None;
@@ -322,6 +352,8 @@ impl JsonPanel {
     fn rebuild_rows(&mut self) {
         let Some(value) = &self.value else {
             self.rows = Arc::new(Vec::new());
+            // Reset the list to empty so its cached heights/scroll don't linger.
+            self.list_state.reset(0);
             return;
         };
         let mut rows = Vec::new();
@@ -336,6 +368,10 @@ impl JsonPanel {
         );
         // Wrap once in an Arc; the render closure only bumps the refcount per frame.
         self.rows = Arc::new(rows);
+        // Tell the variable-height list that the item set changed: it drops any cached
+        // heights for rows that no longer exist and re-measures the new ones. This is what
+        // makes expand/collapse (which change the visible row count) stay correct.
+        self.list_state.reset(self.rows.len());
     }
 }
 
@@ -433,7 +469,12 @@ fn flatten(
             path: path.clone(),
             kind: RowKind::Primitive {
                 key: key_prefix.clone(),
-                value: format!("\"{}\"", s),
+                // Use the real JSON serializer so embedded newlines / quotes / backslashes
+                // are escaped. Without this a multi-line value would leak across rendered
+                // rows (and look truncated). Falls back to naive quoting if the serializer
+                // ever fails (it shouldn't for a valid String).
+                value: serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s)),
+                raw: s.clone(),
                 ty: ValueTy::String,
                 needs_comma: !is_last,
             },
@@ -444,6 +485,7 @@ fn flatten(
             kind: RowKind::Primitive {
                 key: key_prefix.clone(),
                 value: n.to_string(),
+                raw: n.to_string(),
                 ty: ValueTy::Number,
                 needs_comma: !is_last,
             },
@@ -454,6 +496,7 @@ fn flatten(
             kind: RowKind::Primitive {
                 key: key_prefix.clone(),
                 value: b.to_string(),
+                raw: b.to_string(),
                 ty: ValueTy::Bool,
                 needs_comma: !is_last,
             },
@@ -464,6 +507,7 @@ fn flatten(
             kind: RowKind::Primitive {
                 key: key_prefix.clone(),
                 value: "null".to_string(),
+                raw: "null".to_string(),
                 ty: ValueTy::Null,
                 needs_comma: !is_last,
             },
@@ -596,14 +640,13 @@ impl Render for JsonPanel {
         let muted_fg = theme.muted_foreground;
         let success = theme.success;
         let info = theme.info;
-        // Captured into the (per-frame) uniform_list closure so visible-row clicks can
+        // Captured into the (per-frame) list render closure so visible-row clicks can
         // toggle expansion on this panel via its weak handle.
         let weak = cx.weak_entity();
 
-        // Snapshot rows for the render closure (it must be 'static for uniform_list).
+        // Snapshot rows for the render closure (it must be 'static for the list element).
         let rows = self.rows.clone();
-        let row_count = rows.len();
-        let has_output = row_count > 0;
+        let has_output = !rows.is_empty();
         let parsing = self.parsing;
 
         let output_el = v_flex()
@@ -639,26 +682,29 @@ impl Render for JsonPanel {
                     .rounded(px(4.))
                     .p_1()
                     .bg(theme.muted.opacity(0.3))
-                    // Virtualized list: only the visible range of `rows` is ever rendered,
-                    // so a 100k-row array scrolls as smoothly as a 50-row one.
+                    // Variable-height virtualized list. Only visible rows are rendered, but
+                    // unlike `uniform_list` each row measures its own height — so a primitive
+                    // value wraps onto multiple lines instead of being clipped to one.
                     .child(
-                        uniform_list("json-rows", row_count, move |visible_range, _window, cx| {
-                            let mono_font = mono_font.clone();
-                            visible_range
-                                .map(|ix| {
-                                    render_row(
-                                        ix,
-                                        &rows[ix],
-                                        &mono_font,
-                                        fg,
-                                        warn,
-                                        muted_fg,
-                                        success,
-                                        info,
-                                        weak.clone(),
-                                    )
-                                })
-                                .collect()
+                        list(self.list_state.clone(), move |ix, _window, _cx| {
+                            // The list may briefly ask for a row index that no longer exists
+                            // (rows were just cleared while the list hasn't been reset yet in
+                            // the same frame). Guard with `get` and emit a zero-height spacer
+                            // instead of indexing into a possibly-empty Vec.
+                            let Some(row) = rows.get(ix) else {
+                                return div().h(px(0.)).into_any_element();
+                            };
+                            render_row(
+                                ix,
+                                row,
+                                &mono_font,
+                                fg,
+                                warn,
+                                muted_fg,
+                                success,
+                                info,
+                                weak.clone(),
+                            )
                         })
                         .flex_grow_1()
                         .size_full(),
@@ -729,10 +775,13 @@ fn render_row(
     let chevron_size = 18.;
     let row_h = 22.;
 
+    // Container shared by every row: indentation + monospace font + a stable element id
+    // (so clicks/hover keep their identity across renders). Height strategy is chosen per
+    // row kind below — structural rows stay a single line, primitive rows grow with content.
     let base = div()
         .id(ix)
-        .h(px(row_h))
         .pl(px(indent_width) * row.depth)
+        .w_full()
         .font_family(mono_font.clone())
         .text_sm();
 
@@ -747,7 +796,8 @@ fn render_row(
             } else {
                 format!("{}{{...{}}}", key, count)
             };
-            base.child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
+            base.h(px(row_h))
+                .child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -767,7 +817,8 @@ fn render_row(
             } else {
                 format!("{}[...{}]", key, count)
             };
-            base.child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
+            base.h(px(row_h))
+                .child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -780,6 +831,7 @@ fn render_row(
         RowKind::Primitive {
             key,
             value,
+            raw,
             ty,
             needs_comma,
         } => {
@@ -789,22 +841,59 @@ fn render_row(
                 ValueTy::Bool => warn,
                 ValueTy::Null => muted_fg,
             };
-            base.child(
-                h_flex()
-                    .gap_0()
-                    .items_center()
-                    .h_full()
-                    .pl(px(chevron_size))
-                    .child(div().text_color(fg).child(key.clone()))
-                    .child(
-                        div().text_color(color).child(if *needs_comma {
-                            format!("{},", value)
-                        } else {
-                            value.clone()
-                        }),
-                    ),
-            )
-            .into_any_element()
+            // A single, at-least-one-line-tall row that lets the value wrap onto extra
+            // lines instead of being clipped. The key is pinned (flex_none); the value takes
+            // the remaining width and wraps within it. `min_h` keeps short values aligned
+            // with neighbors while long ones push the row taller.
+            //
+            // Clicking the value copies its underlying scalar text (`raw`) to the clipboard.
+            let raw_owned = raw.clone();
+            let weak_for_copy = weak.clone();
+            base.min_h(px(row_h))
+                .child(
+                    h_flex()
+                        .gap_0()
+                        .items_start()
+                        .w_full()
+                        .min_w_0()
+                        .pl(px(chevron_size))
+                        // Key prefix (`"name": `). Pinned so it never shrinks or wraps.
+                        .child(
+                            div()
+                                .flex_none()
+                                .min_w_0()
+                                .text_color(fg)
+                                .child(key.clone()),
+                        )
+                        // Value column: fills the rest of the width, wraps, and is clickable
+                        // to copy. `cursor_pointer` + hover bg signal that it's copyable.
+                        .child(
+                            div()
+                                .id(("json-value", ix))
+                                .flex_1()
+                                .min_w_0()
+                                .text_color(color)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(muted_fg.opacity(0.08)))
+                                .child(if *needs_comma {
+                                    format!("{},", value)
+                                } else {
+                                    value.clone()
+                                })
+                                .tooltip(|window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(
+                                        rust_i18n::t!("json.copy_value_success").to_string(),
+                                    )
+                                    .build(window, cx)
+                                })
+                                .on_click(move |_ev, _window, cx| {
+                                    let _ = weak_for_copy.update(cx, |panel, cx| {
+                                        panel.copy_value(raw_owned.clone(), cx)
+                                    });
+                                }),
+                        ),
+                )
+                .into_any_element()
         }
         RowKind::Close {
             bracket,
@@ -815,16 +904,17 @@ fn render_row(
             } else {
                 bracket.to_string()
             };
-            base.child(
-                h_flex()
-                    .gap_0()
-                    .items_center()
-                    .h_full()
-                    .pl(px(chevron_size))
-                    .text_color(fg)
-                    .child(text),
-            )
-            .into_any_element()
+            base.h(px(row_h))
+                .child(
+                    h_flex()
+                        .gap_0()
+                        .items_center()
+                        .h_full()
+                        .pl(px(chevron_size))
+                        .text_color(fg)
+                        .child(text),
+                )
+                .into_any_element()
         }
     }
 }

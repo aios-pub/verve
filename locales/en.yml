@@ -25,6 +25,7 @@ json:
   copy_btn: Copy
   invalid_json: Invalid JSON
   copy_success: Copied to clipboard
+  copy_value_success: Value copied
   parsing: Parsing JSON…
 
 pdf:

@@ -25,6 +25,7 @@ json:
   copy_btn: 复制
   invalid_json: JSON 格式无效
   copy_success: 已复制到剪贴板
+  copy_value_success: 已复制该值
   parsing: 正在解析 JSON…
 
 pdf:

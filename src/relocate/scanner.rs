@@ -252,7 +252,7 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
             continue;
         }
         // Largest first — the UI shows the biggest space-hogs at the top.
-        entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
         let mut group = AutoGroup {
             group_name: rule.group_name.clone(),
             description: rule.description.clone(),
@@ -319,7 +319,7 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
         });
     }
     if !custom_entries.is_empty() {
-        custom_entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        custom_entries.sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
         let mut group = AutoGroup {
             group_name: CUSTOM_GROUP.to_string(),
             description: "用户手动添加的迁移目录。".to_string(),
@@ -349,7 +349,7 @@ pub fn scan(custom_paths: Vec<PathBuf>) -> ScanResult {
                 });
             }
             if !entries.is_empty() {
-                entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+                entries.sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
                 let mut group = AutoGroup {
                     group_name: OTHER_GROUP.to_string(),
                     description: "未匹配自动规则的目录，可手动选择是否迁移。".to_string(),

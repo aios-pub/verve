@@ -249,7 +249,7 @@ fn render_cursor((line, col): (usize, usize), theme: &Theme) -> AnyElement {
     let c = &theme.colors;
     let d = &theme.dimensions;
 
-    let label = format!("{} : {}", &line.to_string(), &col.to_string());
+    let label = format!("{} : {}", line, col);
 
     div()
         .text_size(px(d.status_bar_text_size))

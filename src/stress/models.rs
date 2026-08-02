@@ -159,7 +159,7 @@ where
     let opt = Option::<f64>::deserialize(deserializer)?;
     // Coerce NaN/inf to 0 as well — these are never useful latencies.
     Ok(opt
-        .and_then(|v| if v.is_finite() { Some(v) } else { None })
+        .filter(|v| v.is_finite())
         .unwrap_or(0.0))
 }
 
@@ -175,7 +175,7 @@ where
         .into_iter()
         .map(|(k, v)| {
             let v = v
-                .and_then(|x| if x.is_finite() { Some(x) } else { None })
+                .filter(|x| x.is_finite())
                 .unwrap_or(0.0);
             (k, v)
         })

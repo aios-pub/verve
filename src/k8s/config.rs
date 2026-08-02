@@ -305,7 +305,7 @@ users:
         // Seed an authoritative manual cluster named "my-cluster".
         let cluster =
             crate::k8s::clusters::ManualCluster::new("my-cluster", "https://1.2.3.4:6443");
-        crate::k8s::clusters::save_manual_clusters(&[cluster.clone()]);
+        crate::k8s::clusters::save_manual_clusters(std::slice::from_ref(&cluster));
         crate::k8s::clusters::write_verve_kubeconfig(&[cluster]);
 
         // Simulate drift: hand-write a STALE kube_config.yaml whose context

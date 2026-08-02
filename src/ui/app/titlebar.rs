@@ -754,7 +754,6 @@ impl VerveApp {
     /// and the primary "new host" action — plus the app-level update/language
     /// controls. Height, padding, and the leading rail toggle match
     /// `render_api_title_bar` exactly, so nothing shifts on view switch.
-
     pub(super) fn render_ssh_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let host_count = self.ssh.read(cx).host_count();
@@ -821,7 +820,6 @@ impl VerveApp {
     /// title-bar pattern: an icon + title + host-count badge on the left,
     /// sub-view tabs (Containers/Images/Hosts) and a refresh button in the
     /// middle, and a primary "add host" action on the right.
-
     pub(super) fn render_docker_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let docker = self.docker.clone();
@@ -947,7 +945,6 @@ impl VerveApp {
     /// title-bar pattern: an icon + title + context badge on the left, sub-view
     /// tabs (Pods/Contexts/Forwards) and a refresh button in the middle, and
     /// primary actions (import kubeconfig / add cluster) on the right.
-
     pub(super) fn render_k8s_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let k8s = self.k8s.clone();
@@ -1094,7 +1091,6 @@ impl VerveApp {
     /// The title bar shown while the Notes panel is active. Mirrors
     /// `render_ssh_title_bar`: rail toggle, identity block (icon + title + count
     /// badge), spacer, then import / export / live-source toggle / lang.
-
     pub(super) fn render_notes_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let notes = self.notes.clone();
@@ -1230,7 +1226,6 @@ impl VerveApp {
     }
 
     /// cmd-o — open a Markdown file in the markdown editor view.
-
     pub(super) fn render_json_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
@@ -1321,7 +1316,6 @@ impl VerveApp {
     /// Relocate title bar: rail toggle + disk icon + title + quick actions.
     /// The heavy controls live in the panel body; the title bar keeps a light
     /// summary (target disk + reclaimed space) and a "选择磁盘" shortcut.
-
     pub(super) fn render_relocate_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let eng = self.relocate.read(cx).engine.read(cx);
@@ -1391,7 +1385,6 @@ impl VerveApp {
     }
 
     /// PDF Editor title bar: rail toggle + file icon + title.
-
     pub(super) fn render_pdf_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
@@ -1426,7 +1419,6 @@ impl VerveApp {
 
     /// Markdown Editor title bar: rail toggle + filename (with dirty marker) +
     /// New / Open (recent-files popover) / Save / Save-As / Outline / Export.
-
     pub(super) fn render_markdown_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_component::button::ButtonVariants as _;
         use gpui_component::popover::Popover;
@@ -1808,7 +1800,6 @@ impl VerveApp {
 
     /// AutoTest title bar: rail toggle + icon/title + suite count +
     /// add-suite/add-case/run actions. The body renders no internal header.
-
     pub(super) fn render_autotest_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let at = self.autotest.clone();

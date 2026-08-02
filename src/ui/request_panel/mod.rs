@@ -1817,7 +1817,6 @@ impl Render for RequestPanel {
 }
 
 /// Build a clickable tab label with an optional count badge.
-
 pub(super) fn tab_label(
     label: &'static str,
     count: Option<usize>,

@@ -34,7 +34,6 @@ impl VerveApp {
     /// debounce). In other views this is a no-op (the editor owns file saving;
     /// there is no "workspace" to persist here). The WYSIWYG editor's own
     /// SaveDocument action is intentionally unregistered in the embedded build
-
     pub(super) fn on_save_workspace(&mut self, _: &SaveWorkspace, w: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
             SideView::MarkdownEditor => {
@@ -50,7 +49,6 @@ impl VerveApp {
 
     /// cmd-n — new file. Routes to the active editor: Markdown → new document
     /// tab; Notes → new note. In other views it switches to Markdown and opens
-
     pub(super) fn on_new_file(&mut self, _: &NewFile, w: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
             SideView::Notes => {
@@ -71,7 +69,6 @@ impl VerveApp {
     /// Markdown → save-prompt then close tab; Notes → close current note;
     /// Api → close the active request tab; Ssh → close the active terminal
     /// session; K8s → close the active pod session.
-
     pub(super) fn on_close_file(&mut self, _: &CloseFile, w: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
             SideView::MarkdownEditor => {

@@ -230,7 +230,6 @@ pub(super) fn dropdown_panel(
 }
 
 /// Show the "share created" result dialog with the given URL. Used by both
-
 pub(super) fn show_share_result_dialog(
     window: &mut Window,
     cx: &mut App,

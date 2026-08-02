@@ -455,6 +455,16 @@ Pro 版内置独立的服务端二进制，可在云端托管分享文档，并�
 
 - **预编译包**：从 [Releases](../../releases) 下载对应平台（macOS / Linux / Windows）的最新社区版安装包。
 - **源码构建**：`git clone` 本仓库，然后 `cargo build --release`。
+  - **Linux 前置依赖**：GPUI 文本栈会引入 `freetype-sys` + `fontconfig-sys`，它们通过 pkg-config 链接系统 FreeType / fontconfig，因此需先安装对应的开发头文件：
+    ```bash
+    sudo apt-get install -y \
+      build-essential pkg-config gcc g++ clang \
+      libssl-dev libfontconfig1-dev libfreetype6-dev \
+      libgtk-3-dev libwebkit2gtk-4.1-dev \
+      libxkbcommon-x11-dev libx11-xcb-dev libwayland-dev \
+      libzstd-dev libvulkan1 vulkan-validationlayers
+    ```
+    （或直接执行 `./scripts/install-deps.sh`，脚本会自动选择对应的包管理器。）
 - 首次启动会自动创建数据目录并附带演示项目，可立即上手体验。
 
 ### 💎 Pro 版

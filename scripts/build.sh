@@ -6,6 +6,12 @@
 #   ./scripts/build.sh linux    # Build .deb + .AppImage
 #   ./scripts/build.sh windows  # Build .msi (run on Windows or cross-compile)
 #   ./scripts/build.sh all      # Build for current platform
+#   ./scripts/build.sh --no-auto-install linux   # skip the dep-install prompt (CI)
+#
+# On Linux this script checks for the native build dependencies (FreeType /
+# fontconfig / pkg-config) and, in an interactive shell, offers to install them
+# via ./scripts/install-deps.sh before compiling. Pass --no-auto-install to
+# skip the check (the native deps must then already be present).
 #
 # Prerequisites:
 #   - Rust toolchain (rustup)
@@ -17,7 +23,112 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-PLATFORM="${1:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
+# ─── Argument parsing ──────────────────────────────────────────────────────
+# Allow `build.sh [--no-auto-install] <platform>`. The flag skips the native
+# dependency auto-install prompt below (useful in CI, where deps are pre-installed
+# by the workflow and an interactive sudo prompt would hang the run).
+AUTO_INSTALL=1
+PLATFORM=""
+for arg in "$@"; do
+    case "$arg" in
+        --no-auto-install) AUTO_INSTALL=0 ;;
+        -h|--help)
+            sed -n '2,14p' "$0"   # print the usage header comment
+            exit 0
+            ;;
+        *) PLATFORM="$arg" ;;
+    esac
+done
+# Default to the host platform if none given.
+PLATFORM="${PLATFORM:-$(uname -S | tr '[:upper:]' '[:lower:]')}"
+
+# ─── Native dependency check (Linux) ───────────────────────────────────────
+# verve is a single crate whose dependency graph is shared by every binary, so
+# building anything pulls in GPUI's text stack → font-kit → freetype-sys +
+# fontconfig-sys. Those resolve the system libs via pkg-config and *panic*
+# their build script if the -dev headers are absent (freetype-sys calls
+# pkg-config's `.probe("freetype2").unwrap()`). Detect that up front and offer
+# to install the headers rather than letting the user hit an opaque C compile
+# error. macOS/Windows use native text backends (core-text / dwrote), so this
+# check is Linux-only.
+ensure_linux_deps() {
+    # Build the list of missing items. Each entry is "pkg-config name|label".
+    local missing=()
+    if ! command -v pkg-config >/dev/null 2>&1; then
+        missing+=("pkg-config|pkg-config (the pkg-config tool itself)")
+    else
+        # pkg-config exists — probe each library it should expose.
+        local pc_libs=("freetype2|FreeType (libfreetype6-dev)"
+                       "fontconfig|fontconfig (libfontconfig1-dev)")
+        local entry name label
+        for entry in "${pc_libs[@]}"; do
+            name="${entry%%|*}"
+            label="${entry##*|}"
+            if ! pkg-config --exists "$name" 2>/dev/null; then
+                missing+=("$name|$label")
+            fi
+        done
+    fi
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "⚠️  Missing native build dependencies:"
+    local m
+    for m in "${missing[@]}"; do echo "     - ${m##*|}"; done
+    echo "     (GPUI's text stack needs these to compile; without them freetype-sys"
+    echo "      panics at the link step.)"
+
+    if [ "$AUTO_INSTALL" -eq 0 ]; then
+        echo "❌ --no-auto-install set, not installing. Run ./scripts/install-deps.sh manually."
+        exit 1
+    fi
+
+    # Non-interactive shell (no TTY, e.g. piped stdin) → don't prompt, just tell.
+    if [ ! -t 0 ]; then
+        echo "❌ Non-interactive shell detected. Install them, then re-run:"
+        echo "     ./scripts/install-deps.sh"
+        exit 1
+    fi
+
+    printf "Install them now via sudo? [y/N] "
+    local reply
+    read -r reply
+    case "$reply" in
+        y|Y|yes|YES)
+            echo "📦 Running ./scripts/install-deps.sh (may ask for your sudo password)..."
+            bash "$PROJECT_DIR/scripts/install-deps.sh"
+            # Re-check; if install-deps.sh couldn't satisfy a lib, fail loudly.
+            local still_missing=()
+            if ! command -v pkg-config >/dev/null 2>&1; then
+                still_missing+=("pkg-config")
+            else
+                for entry in "${pc_libs[@]}"; do
+                    name="${entry%%|*}"
+                    pkg-config --exists "$name" 2>/dev/null || still_missing+=("$name")
+                done
+            fi
+            if [ "${#still_missing[@]}" -gt 0 ]; then
+                echo "❌ Still missing after install: ${still_missing[*]}"
+                echo "   Install them manually, then re-run this script."
+                exit 1
+            fi
+            echo "✅ Dependencies installed"
+            ;;
+        *)
+            echo "❌ Skipping install. Install them manually:"
+            echo "     ./scripts/install-deps.sh"
+            exit 1
+            ;;
+    esac
+}
+
+if [ "$(uname -s)" = "Linux" ]; then
+    ensure_linux_deps
+fi
+
+
 
 # Derive the bundle version from Cargo.toml so the packaged app always matches
 # the crate version (Info.plist CFBundleShortVersionString, DMG/zip/deb names).

@@ -438,6 +438,16 @@ See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment gui
 
 - **Pre-built binaries**: download the latest Community build for your platform (macOS / Linux / Windows) from [Releases](../../releases).
 - **Build from source**: `git clone` this repo, then `cargo build --release`.
+  - **Linux prerequisite**: the GPUI text stack pulls in `freetype-sys` + `fontconfig-sys`, which link the system FreeType/fontconfig via pkg-config, so install their development headers first:
+    ```bash
+    sudo apt-get install -y \
+      build-essential pkg-config gcc g++ clang \
+      libssl-dev libfontconfig1-dev libfreetype6-dev \
+      libgtk-3-dev libwebkit2gtk-4.1-dev \
+      libxkbcommon-x11-dev libx11-xcb-dev libwayland-dev \
+      libzstd-dev libvulkan1 vulkan-validationlayers
+    ```
+    (Or run `./scripts/install-deps.sh`, which picks the right package manager.)
 - On first launch, Verve auto-creates its data directory with a demo project so you can explore right away.
 
 ### 💎 Pro Edition

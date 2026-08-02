@@ -27,8 +27,19 @@ COPY Cargo.toml Cargo.lock ./
 # publish gpui-component to a registry and drop this COPY.
 COPY . .
 
-# Build only the server binary (skips the GPUI desktop app, which needs system
-# GUI libs the slim image doesn't have).
+# Install build-time native library headers. verve is a single crate whose
+# dependency graph is shared by every binary (the desktop app, verve-server,
+# and the lib), so building verve-server still compiles the GPUI text stack —
+# `font-kit` → freetype-sys + fontconfig-sys — which resolve the system libs
+# via pkg-config. Without these -dev headers the build fails at the freetype
+# link step. (Runtime stage needs none of these: verve-server is pure HTTP.)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config libfreetype6-dev libfontconfig1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build only the server binary (skips the GPUI desktop app's link step, which
+# needs GTK/Wayland/X11 GUI libs the slim image doesn't have).
 RUN cargo build --release --bin verve-server
 
 # ---- Runtime stage --------------------------------------------------------

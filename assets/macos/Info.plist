@@ -33,6 +33,19 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright (c) 2026 Verve. All rights reserved.</string>
 
+  <!-- Local Network Privacy (macOS 15 Sequoia / iOS 14+). Required so the app
+       can connect to devices on the local network (e.g. SSH to 192.168.x.x).
+       Without this key macOS silently blocks the TCP connection and surfaces it
+       as ENETUNREACH / EHOSTUNREACH ("网络不可达"), even though `ssh` from the
+       shell works. The string below is shown in the first-run permission prompt. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Verve 需要访问本地网络以连接局域网内的 SSH 主机。</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_ssh._tcp</string>
+    <string>_sftp-ssh._tcp</string>
+  </array>
+
   <!-- File types Verve can open. Declaring these is what makes Verve appear in
        Finder's "Open With" / "Get Info → Open with" list and lets the user set
        it as the default app for .md and friends. cargo-bundle 0.9.0 does not

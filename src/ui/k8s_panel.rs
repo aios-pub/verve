@@ -351,7 +351,7 @@ impl K8sPanel {
         key
     }
 
-    fn close_session_by_key(&mut self, key: &str, cx: &mut Context<Self>) {
+    pub fn close_session_by_key(&mut self, key: &str, cx: &mut Context<Self>) {
         if let Some(pos) = self
             .sessions
             .iter()
@@ -364,6 +364,14 @@ impl K8sPanel {
                 self.active_session_key = None;
             }
             cx.notify();
+        }
+    }
+
+    /// Close the currently-active pod session. Used by the global cmd-w
+    /// (CloseFile) action. No-op if no session is active.
+    pub fn close_active_session(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.active_session_key.clone() {
+            self.close_session_by_key(&key, cx);
         }
     }
 

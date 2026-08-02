@@ -67,7 +67,10 @@ impl VerveApp {
         cx.notify();
     }
 
-    /// cmd-w — close. Markdown editor: close the active tab, prompting to save
+    /// cmd-w — close. Closes the active tab of whichever view has focus:
+    /// Markdown → save-prompt then close tab; Notes → close current note;
+    /// Api → close the active request tab; Ssh → close the active terminal
+    /// session; K8s → close the active pod session.
 
     pub(super) fn on_close_file(&mut self, _: &CloseFile, w: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
@@ -76,6 +79,24 @@ impl VerveApp {
             }
             SideView::Notes => {
                 let _ = self.notes.update(cx, |p, cx| p.close_current_note(w, cx));
+            }
+            SideView::Api => {
+                let _ = self.state.update(cx, |s, cx| {
+                    if let Some(id) = s.active_tab_id.clone() {
+                        s.close_tab(&id, cx);
+                    }
+                });
+            }
+            SideView::Ssh => {
+                let _ = self.ssh.update(cx, |p, cx| {
+                    // Read the index into a local first to avoid a borrow of
+                    // `p` across the `&mut p` close call.
+                    let idx = p.active_tab;
+                    p.close_session(idx, cx);
+                });
+            }
+            SideView::K8s => {
+                let _ = self.k8s.update(cx, |p, cx| p.close_active_session(cx));
             }
             _ => {}
         }

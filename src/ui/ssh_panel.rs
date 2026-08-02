@@ -1808,7 +1808,7 @@ impl SshPanel {
     }
 
     /// Close a terminal session by tab index.
-    fn close_session(&mut self, idx: usize, cx: &mut Context<Self>) {
+    pub fn close_session(&mut self, idx: usize, cx: &mut Context<Self>) {
         // Drop the input sender to signal the background task to stop.
         if idx < self.sessions.len() {
             self.sessions[idx].input_tx.take();

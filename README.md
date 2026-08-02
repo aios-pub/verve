@@ -68,7 +68,7 @@ Verve comes in two editions, with the same native app and the same daily API wor
 
 ### 🆍 Community Edition — Free & Open-Source
 
-The **Community Edition** is free and planned to be released under the **AGPL-3.0** license. It covers everything an individual developer needs for daily API work: full HTTP debugging (incl. multi-protocol clients), traffic capture, JSON formatting, hosts management, local mock server, local document sharing, **and Git-based cross-machine sync** — in a fast, lightweight native app. It is intentionally strong enough to stand on its own against any individual API client.
+The **Community Edition** is free and released under the **AGPL-3.0** license. It covers everything an individual developer needs for daily API work: full HTTP debugging (incl. multi-protocol clients), traffic capture, JSON formatting, hosts management, local mock server, local document sharing, **and Git-based cross-machine sync** — in a fast, lightweight native app. It is intentionally strong enough to stand on its own against any individual API client.
 
 ### 💎 Pro Edition — Sponsor to Unlock
 
@@ -90,7 +90,7 @@ The **Pro Edition** is obtained via **sponsorship** (early-bird **¥99**, regula
 | | 🆍 Community Edition | 💎 Pro Edition |
 |---|---|---|
 | **Positioning** | Individual developer's daily API toolbox | Toolbox + server triage + testing + knowledge + cloud |
-| **License** | AGPL-3.0 (planned open-source) | Proprietary (Verve Pro License) |
+| **License** | AGPL-3.0 (open-source) | Proprietary (Verve Pro License) |
 | **Source code** | Open & auditable | Closed |
 | **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
 | **Audience** | Individual devs, students, OSS community | Pro devs, ops engineers, small teams |
@@ -179,7 +179,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 | | Community | Pro |
 |---|---|---|
 | **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
-| **License type** | AGPL-3.0 (planned) | Proprietary (Verve Pro License) |
+| **License type** | AGPL-3.0 | Proprietary (Verve Pro License) |
 | **Source visible** | ✅ Open | ❌ Closed |
 | **Personal use** | ✅ | ✅ |
 | **Commercial use** | ✅ | ✅ (after sponsorship) |
@@ -518,10 +518,10 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 Verve is available in two editions under different licenses:
 
-- **Community Edition** — planned to be released under the **AGPL-3.0** open-source license. Source code will be public; you may use, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**
+- **Community Edition** — released under the **AGPL-3.0** open-source license. Source code is public; you may use, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**
 - **Pro Edition** — proprietary software under the **Verve Pro License**. Source code is **not open**. Without the author's written permission, the following are **prohibited**: reverse engineering / decompiling / disassembling; copying / modifying / redistributing the software or derivatives; using it for commercial resale or hosted services. The Pro Edition is obtained via sponsorship. For commercial licensing or team plans, contact the author via WeChat above.
 
-> **Note**: The current repository `LICENSE` file is a transitional closed-source agreement; the Community Edition will switch to AGPL-3.0 when its source is officially released.
+The full text of the AGPL-3.0 is in the [`LICENSE`](LICENSE) file at the repository root.
 
 ---
 

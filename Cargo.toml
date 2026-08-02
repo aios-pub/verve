@@ -5,8 +5,8 @@ edition = "2024"
 description = "Verve — an offline-first, one-stop developer workbench built with Rust."
 publish = false
 authors = ["Verve"]
-# Closed-source proprietary software (All Rights Reserved). Source is not distributed.
-license-file = "LICENSE"
+# Community Edition is open-sourced under the GNU AGPL v3.0.
+license = "AGPL-3.0"
 homepage = "https://github.com/lijingrs/verve"
 
 # macOS app bundle metadata (used by cargo-bundle).

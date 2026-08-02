@@ -63,7 +63,7 @@ impl SshError {
     /// Build an [`SshError`] from a low-level [`russh::Error`], classifying it
     /// into a friendly Chinese message and a retryable hint. `where_` is a
     /// short description of where the error happened (e.g. `"连接"`, `"跳板机"`).
-    fn from_russh(e: russh::Error, where_: &str) -> Self {
+    fn from_russh(e: russh::Error, where_: &str, target_host: &str) -> Self {
         match e {
             // Host key mismatch (check_server_key returned false).
             russh::Error::UnknownKey => Self::new(
@@ -71,7 +71,7 @@ impl SshError {
                 false,
             ),
             // TCP / IO level errors — classify by io::ErrorKind.
-            russh::Error::IO(io) => Self::from_io(io, where_),
+            russh::Error::IO(io) => Self::from_io(io, where_, target_host),
             russh::Error::ConnectionTimeout
             | russh::Error::KeepaliveTimeout
             | russh::Error::InactivityTimeout => {
@@ -85,7 +85,7 @@ impl SshError {
     }
 
     /// Classify a [`std::io::Error`] from the connection dial.
-    fn from_io(io: std::io::Error, where_: &str) -> Self {
+    fn from_io(io: std::io::Error, where_: &str, target_host: &str) -> Self {
         use std::io::ErrorKind;
         match io.kind() {
             // A refused connection almost always means "nothing is listening
@@ -94,9 +94,23 @@ impl SshError {
                 "连接被拒绝：目标端口上没有服务，请确认端口号是否正确、SSH 服务是否已启动",
                 false,
             ),
-            // Network unreachable / no route: wrong host or network problem.
+            // Network unreachable / no route. If the target is a local-network
+            // address (192.168/10./172.16-31/localhost), on macOS this is the
+            // signature of the Local Network privacy permission being missing
+            // or denied — the kernel surfaces the block as ENETUNREACH rather
+            // than a permission error, even though `ssh` from the shell works.
+            // Give the user the actionable hint instead of the generic message.
             ErrorKind::NetworkUnreachable | ErrorKind::HostUnreachable => {
-                Self::new("网络不可达，请检查主机地址或网络连接", true)
+                if is_local_network_host(target_host) && cfg!(target_os = "macos") {
+                    Self::new(
+                        "无法访问本地网络主机。这通常是 macOS「本地网络」隐私权限未授予：\n\
+                         请打开 系统设置 → 隐私与安全性 → 本地网络，允许 Verve 访问，然后重试。\n\
+                         （若列表中无 Verve，请使用打包后的 .app 重新启动以触发授权弹窗）",
+                        true,
+                    )
+                } else {
+                    Self::new("网络不可达，请检查主机地址或网络连接", true)
+                }
             }
             ErrorKind::TimedOut => {
                 Self::new("连接超时，请检查主机地址是否正确、网络是否可达", true)
@@ -115,6 +129,34 @@ impl std::fmt::Display for SshError {
 }
 
 impl std::error::Error for SshError {}
+
+/// Return true if `host` is a local-network address (RFC 1918 / loopback /
+/// link-local). On macOS, connecting to these requires the Local Network
+/// privacy permission; without it the kernel blocks the TCP connection and
+/// reports it as `ENETUNREACH`/`EHOSTUNREACH`.
+///
+/// Only literal IP addresses are matched — hostnames can't be classified
+/// cheaply, so they fall through to the generic message (and would normally
+/// resolve to a public address anyway).
+fn is_local_network_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('%');
+    // Strip a trailing zone id / interface on IPv6 link-local (fe80::…%en0).
+    let host = host.split('%').next().unwrap_or(host);
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        return true;
+    }
+    // Try to parse as an IPv4/IPv6 literal and check for private ranges.
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_broadcast()
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unicast_link_local(),
+        };
+    }
+    // `.local` hostnames (mDNS / Bonjour) are also local-network.
+    host.ends_with(".local") || host == "local"
+}
 
 /// A resize command sent to the background task.
 #[derive(Clone, Debug)]
@@ -206,7 +248,7 @@ impl SshConnection {
             };
             client::connect(config.clone(), addr, handler)
                 .await
-                .map_err(|e| SshError::from_russh(e, "连接"))?
+                .map_err(|e| SshError::from_russh(e, "连接", &host.host))?
         } else {
             // Multi-hop: connect to first bastion, then tunnel.
             //
@@ -221,7 +263,7 @@ impl SshConnection {
             };
             let mut bastion_handle = client::connect(config.clone(), bastion_addr, bastion_handler)
                 .await
-                .map_err(|e| SshError::from_russh(e, "连接跳板机"))?;
+                .map_err(|e| SshError::from_russh(e, "连接跳板机", &bastion.host))?;
             authenticate(&mut bastion_handle, bastion).await?;
 
             // Tunnel through to the target.
@@ -233,7 +275,7 @@ impl SshConnection {
             let tunnel = bastion_handle
                 .channel_open_direct_tcpip(&target_host, target.port as u32, "127.0.0.1", 0)
                 .await
-                .map_err(|e| SshError::from_russh(e, "跳板机隧道"))?;
+                .map_err(|e| SshError::from_russh(e, "跳板机隧道", &target_host))?;
             let stream = tunnel.into_stream();
             let target_handler = SshHandler {
                 host: target_host.clone(),
@@ -241,7 +283,7 @@ impl SshConnection {
             };
             client::connect_stream(config.clone(), stream, target_handler)
                 .await
-                .map_err(|e| SshError::from_russh(e, "通过跳板机连接"))?
+                .map_err(|e| SshError::from_russh(e, "通过跳板机连接", &target_host))?
         };
 
         let mut handle = handle;
@@ -262,17 +304,17 @@ impl SshConnection {
         let channel = handle
             .channel_open_session()
             .await
-            .map_err(|e| SshError::from_russh(e, "打开会话"))?;
+            .map_err(|e| SshError::from_russh(e, "打开会话", ""))?;
 
         let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into());
         channel
             .request_pty(false, &term, cols, rows, 0, 0, &[])
             .await
-            .map_err(|e| SshError::from_russh(e, "请求 PTY"))?;
+            .map_err(|e| SshError::from_russh(e, "请求 PTY", ""))?;
         channel
             .request_shell(true)
             .await
-            .map_err(|e| SshError::from_russh(e, "请求 shell"))?;
+            .map_err(|e| SshError::from_russh(e, "请求 shell", ""))?;
 
         // Set up I/O channels.
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -406,7 +448,7 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
             let res = handle
                 .authenticate_password(&host.username, password)
                 .await
-                .map_err(|e| SshError::from_russh(e, "认证"))?;
+                .map_err(|e| SshError::from_russh(e, "认证", &host.host))?;
             if !res.success() {
                 // Server reached, but credentials rejected — not retryable.
                 return Err(SshError::new(
@@ -428,7 +470,7 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
             let hash_alg = handle
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|e| SshError::from_russh(e, "RSA 哈希协商"))?
+                .map_err(|e| SshError::from_russh(e, "RSA 哈希协商", &host.host))?
                 .flatten();
             let res = handle
                 .authenticate_publickey(
@@ -436,7 +478,7 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
                     PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
                 )
                 .await
-                .map_err(|e| SshError::from_russh(e, "密钥认证"))?;
+                .map_err(|e| SshError::from_russh(e, "密钥认证", &host.host))?;
             if !res.success() {
                 return Err(SshError::new(
                     "认证失败：密钥被服务器拒绝，请检查用户名或私钥是否正确",
@@ -455,4 +497,50 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
         return Err(SshError::new("认证失败：用户名/密码/密钥错误", false));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_local_network_host;
+
+    #[test]
+    fn detects_rfc1918_local_addresses() {
+        // Private ranges — these require the macOS Local Network permission.
+        assert!(is_local_network_host("192.168.1.17"));
+        assert!(is_local_network_host("192.168.0.1"));
+        assert!(is_local_network_host("10.0.0.5"));
+        assert!(is_local_network_host("10.255.255.255"));
+        assert!(is_local_network_host("172.16.0.1"));
+        assert!(is_local_network_host("172.31.255.255"));
+    }
+
+    #[test]
+    fn detects_loopback_and_link_local() {
+        assert!(is_local_network_host("127.0.0.1"));
+        assert!(is_local_network_host("localhost"));
+        assert!(is_local_network_host("::1"));
+        // IPv4 link-local (APIPA).
+        assert!(is_local_network_host("169.254.1.1"));
+    }
+
+    #[test]
+    fn does_not_flag_public_addresses() {
+        assert!(!is_local_network_host("8.8.8.8"));
+        assert!(!is_local_network_host("1.1.1.1"));
+        assert!(!is_local_network_host("203.0.113.5"));
+        // 172.32.x.x is OUTSIDE the private range.
+        assert!(!is_local_network_host("172.32.0.1"));
+    }
+
+    #[test]
+    fn handles_mdns_local_suffix() {
+        assert!(is_local_network_host("myhost.local"));
+        assert!(!is_local_network_host("example.com"));
+    }
+
+    #[test]
+    fn strips_ipv6_zone_id() {
+        // fe80::… link-local with a zone id still recognised.
+        assert!(is_local_network_host("fe80::1%en0"));
+    }
 }

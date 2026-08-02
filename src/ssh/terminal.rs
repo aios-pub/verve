@@ -8,7 +8,7 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{StatefulInteractiveElement as _, *};
-use gpui_component::{ActiveTheme, h_flex};
+use gpui_component::{h_flex, ActiveTheme};
 
 /// Invisible entity used as a drag-preview for terminal text selection.
 struct EmptyDrag;
@@ -199,6 +199,15 @@ fn slice_by_cols(s: &str, start_col: usize, end_col: usize) -> &str {
     &s[start_byte..end_byte]
 }
 
+/// Return true if `haystack` contains the byte sequence `needle`. A simple
+/// sliding-window search (needle is tiny, so this is plenty fast).
+fn contains_sequence(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 /// A GPUI entity wrapping an alacritty terminal model.
 pub struct TerminalView {
     pub term: Arc<std::sync::Mutex<Term<NullListener>>>,
@@ -230,12 +239,23 @@ pub struct TerminalView {
     last_visible_rows: usize,
     /// Line height (px) used on last render — for mouse→row mapping.
     last_line_height: f32,
+    /// Monospace character cell width (px) measured on last render — keeps
+    /// mouse→column hit-testing aligned with the actual rendered glyphs.
+    last_char_width: f32,
     /// Latest bounds (window-absolute rect) of the outer terminal div,
     /// captured during canvas paint. Mouse event coords are window-absolute
     /// so we subtract bounds.origin to get local coords.
     bounds: Arc<StdMutex<Bounds<Pixels>>>,
     /// Whether we've installed the global mouse handlers (done once).
     mouse_handlers_registered: bool,
+    /// Tail of the previous feed chunk (up to 3 bytes). Used to detect the
+    /// `ESC[2J` (clear-screen) sequence even when it straddles two SSH data
+    /// chunks, so we can also purge scrollback history (alacritty only clears
+    /// the viewport on `ESC[2J`, leaving history scrollable).
+    last_feed_tail: std::sync::Mutex<Vec<u8>>,
+    /// Guard counter so we retry layout a bounded number of times while
+    /// waiting for the canvas paint hook to report the container size.
+    bounds_retry: u8,
 }
 
 impl TerminalView {
@@ -302,8 +322,11 @@ impl TerminalView {
             last_trim_top: 0,
             last_visible_rows: 0,
             last_line_height: 13.0,
+            last_char_width: 13.0 * 0.58,
             bounds,
             mouse_handlers_registered: false,
+            last_feed_tail: std::sync::Mutex::new(Vec::new()),
+            bounds_retry: 0,
         }
     }
 
@@ -350,11 +373,63 @@ impl TerminalView {
                 String::from_utf8_lossy(&data[..data.len().min(80)])
             );
         }
-        if let (Ok(mut term), Ok(mut proc_)) = (self.term.lock(), self.processor.lock()) {
-            for &byte in data {
-                proc_.advance(&mut *term, byte);
+
+        // Advance first so escape sequences are fully applied: in particular
+        // `ESC[2J` (shell `clear`) makes alacritty `clear_viewport`, which
+        // scrolls the old viewport content INTO the scrollback history. We must
+        // let that happen *before* we purge the history — purging first then
+        // advancing would just re-push the cleared lines back into history.
+        let had_clear_screen = self.scan_for_clear_screen(data);
+        {
+            if let (Ok(mut term), Ok(mut proc_)) = (self.term.lock(), self.processor.lock()) {
+                for &byte in data {
+                    proc_.advance(&mut *term, byte);
+                }
             }
         }
+
+        // After `ESC[2J` has been applied: on the PRIMARY screen, also drop the
+        // scrollback history so `clear` truly clears (otherwise the old lines
+        // just moved into history remain scrollable). On the alternate screen
+        // (vim/less/top) we leave history untouched — those apps redraw their
+        // own grid and must not wipe the primary screen's scrollback.
+        if had_clear_screen {
+            if let Ok(mut term) = self.term.lock() {
+                let is_alt = term
+                    .mode()
+                    .contains(alacritty_terminal::term::TermMode::ALT_SCREEN);
+                if !is_alt {
+                    term.grid_mut().clear_history();
+                    term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+                    log::info!("FEED: ESC[2J on primary screen — scrollback history purged");
+                }
+            }
+        }
+    }
+
+    /// Detect the `ESC[2J` (clear-screen) sequence in `data`, honouring a
+    /// possible split across two feed chunks (the previous tail is carried
+    /// forward). Returns true if the sequence is present in this chunk (joined
+    /// with the previous tail).
+    fn scan_for_clear_screen(&self, data: &[u8]) -> bool {
+        const SEQ: &[u8] = b"\x1b[2J";
+        // Build a continuous view: previous tail + this chunk.
+        let mut buf: Vec<u8> = Vec::with_capacity(SEQ.len() - 1 + data.len());
+        if let Ok(tail) = self.last_feed_tail.lock() {
+            buf.extend_from_slice(&tail);
+        }
+        buf.extend_from_slice(data);
+
+        let found = contains_sequence(&buf, SEQ);
+
+        // Save the trailing bytes for next chunk's split detection.
+        let start = buf.len().saturating_sub(SEQ.len() - 1);
+        if let Ok(mut tail) = self.last_feed_tail.lock() {
+            tail.clear();
+            tail.extend_from_slice(&buf[start..]);
+        }
+
+        found
     }
 
     /// Resize the terminal grid.
@@ -367,6 +442,82 @@ impl TerminalView {
                 rows: rows as usize,
             };
             term.resize(dims);
+        }
+    }
+
+    /// Re-fit the terminal grid to the current container bounds (captured by
+    /// the canvas paint hook on the previous frame). This makes the terminal
+    /// fill its panel instead of staying fixed at the initial 180×50 — so text
+    /// spans the full width and the remote program wraps at the right column.
+    /// Called every render; it only re-sizes (and notifies the remote via a
+    /// window-change) when the computed column/row count actually changes.
+    ///
+    /// Padding matches the content div: `.px_2()` (8px each side) and
+    /// `.pt_1()` (4px top).
+    fn resize_to_bounds(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let bounds = match self.bounds.lock() {
+            Ok(b) => *b,
+            Err(_) => return,
+        };
+        let bw: f32 = bounds.size.width.into();
+        let bh: f32 = bounds.size.height.into();
+        // bounds is zero before the first paint completes. Schedule another
+        // render so we re-check once the paint hook has filled it in (capped to
+        // avoid spinning forever if the layout never reports a size).
+        if bw < 1.0 || bh < 1.0 {
+            if self.bounds_retry < 8 {
+                self.bounds_retry += 1;
+                cx.notify();
+            }
+            return;
+        }
+        self.bounds_retry = 0;
+
+        // Measure the ACTUAL monospace cell width from the terminal's rendering
+        // font (instead of the font_size*0.58 estimate), so the column count
+        // fits the container precisely and text spans the full width with no
+        // gap. The terminal renders in the theme's monospace font (set on each
+        // row div in `render`), so we measure that exact font. Falls back to
+        // the estimate if measurement fails.
+        let mono_font = cx.theme().mono_font_family.clone();
+        let font = gpui::Font {
+            family: mono_font,
+            weight: gpui::FontWeight::NORMAL,
+            style: gpui::FontStyle::Normal,
+            features: gpui::FontFeatures::default(),
+            fallbacks: None,
+        };
+        let font_id = window.text_system().resolve_font(&font);
+        let font_size = px(self.font_size);
+        let char_w = window
+            .text_system()
+            .ch_advance(font_id, font_size)
+            .map(|w| w.into())
+            .unwrap_or_else(|_| char_cell_metrics(self.font_size, self.last_line_height).0);
+        // Cache the measured cell width so mouse hit-testing stays aligned with
+        // the rendered glyphs.
+        self.last_char_width = char_w;
+        let line_h = self.last_line_height.max(1.0);
+
+        // Horizontal padding px_2 (8px both sides); vertical pt_1 (4px top).
+        let avail_w = (bw - 16.0).max(char_w);
+        let avail_h = (bh - 4.0).max(line_h);
+        let cols = ((avail_w / char_w).floor() as u16).max(1);
+        let rows = ((avail_h / line_h).floor() as u16).max(1);
+        if cols != self.cols || rows != self.rows {
+            log::info!(
+                "RESIZE_TO_BOUNDS: {}x{} -> {}x{} (container {:.0}x{:.0}, char_w={:.2})",
+                self.cols,
+                self.rows,
+                cols,
+                rows,
+                bw,
+                bh,
+                char_w
+            );
+            self.resize(cols, rows);
+            self.send_window_change(cols, rows);
+            cx.notify();
         }
     }
 
@@ -581,9 +732,12 @@ impl Render for TerminalView {
         let line_height = font_size;
         let focus_handle = cx.focus_handle();
 
-        // Do NOT resize in render — it causes data loss and timing issues.
-        // Terminal size stays at the initial 180x50 set at creation time.
-        // Window-change was already sent when the connection was established.
+        // Fit the grid to the container's actual pixel size so text spans the
+        // full width (instead of the initial fixed 180 cols). Uses the bounds
+        // captured on the previous frame; self-corrects on the next render.
+        // Only acts when the column/row count actually changes, so it settles
+        // and won't thrash once sized.
+        self.resize_to_bounds(window, cx);
 
         // Auto-focus.
         window.focus(&focus_handle, cx);
@@ -603,13 +757,17 @@ impl Render for TerminalView {
             let num_cols = dims.columns();
             let grid = term.grid();
 
-            // Only read the VISIBLE viewport (screen_lines rows from bottom).
-            // This matches what a real terminal shows — not scrollback history.
-            // After `clear`, the visible viewport is all blank with the cursor
-            // at the top; the shell then prints the prompt there.
+            // Read the VISIBLE viewport (screen_lines rows). Normally this is
+            // the bottommost screen; but when the user scrolls back into
+            // history (mouse wheel / Shift+PgUp), alacritty's `display_offset`
+            // shifts the viewport up into the scrollback history (negative line
+            // coords). We honor it here so scrolled content actually renders.
             let screen_lines = dims.screen_lines();
+            let display_offset = grid.display_offset();
             let bottommost = grid.bottommost_line().0;
-            let viewport_top = bottommost - screen_lines as i32 + 1;
+            // display_offset=0 → newest screen; >0 → shift viewport up into
+            // history (negative line coordinates, which alacritty supports).
+            let viewport_top = bottommost - screen_lines as i32 + 1 - display_offset as i32;
 
             let mut all_text: Vec<String> = Vec::new();
             for row_idx in 0..screen_lines {
@@ -659,6 +817,10 @@ impl Render for TerminalView {
 
         // Selection highlight color (bright blue overlay for visibility).
         let sel_bg = gpui::hsla(0.60, 0.70, 0.50, 0.45);
+        // Monospace font — the terminal MUST render in a monospaced font so
+        // every grid column has the same advance width, otherwise text can't
+        // align to a column grid and the right edge looks ragged/short.
+        let mono_font = theme.mono_font_family.clone();
 
         // Build the rendered row elements up-front so we can use them in both
         // the content area and move mouse handlers into the overlay.
@@ -671,8 +833,10 @@ impl Render for TerminalView {
                 let fs = font_size;
                 let row_el = div()
                     .h(px(lh))
+                    .w_full()
                     .line_height(px(lh))
                     .text_size(px(fs))
+                    .font_family(mono_font.clone())
                     .whitespace_nowrap();
 
                 let Some((start, end)) = sel else {
@@ -688,7 +852,11 @@ impl Render for TerminalView {
                 // bytes. Convert to byte offsets so slicing CJK/`·` rows does
                 // not panic mid-character.
                 let from_col = if row_idx == start.row { start.col } else { 0 };
-                let to_col = if row_idx == end.row { end.col } else { text.chars().count() };
+                let to_col = if row_idx == end.row {
+                    end.col
+                } else {
+                    text.chars().count()
+                };
                 let from_byte = col_to_byte(&text, from_col);
                 let to_byte = col_to_byte(&text, to_col).max(from_byte);
 
@@ -698,8 +866,10 @@ impl Render for TerminalView {
 
                 h_flex()
                     .h(px(lh))
+                    .w_full()
                     .line_height(px(lh))
                     .text_size(px(fs))
+                    .font_family(mono_font.clone())
                     .whitespace_nowrap()
                     .gap_0()
                     .text_color(default_fg)
@@ -757,8 +927,40 @@ impl Render for TerminalView {
                             }
                         }
                     }
+                    // Shift+PgUp/PgDn → scroll the local scrollback history
+                    // (matches iTerm2 / VS Code). Plain PgUp/PgDn (no Shift)
+                    // keep falling through to be sent to the remote program.
+                    if event.keystroke.modifiers.shift {
+                        let scroll = match event.keystroke.key.as_str() {
+                            "pageup" => Some(alacritty_terminal::grid::Scroll::PageUp),
+                            "pagedown" => Some(alacritty_terminal::grid::Scroll::PageDown),
+                            _ => None,
+                        };
+                        if let Some(scroll) = scroll {
+                            if let Ok(mut term) = this.term.lock() {
+                                term.scroll_display(scroll);
+                            }
+                            cx.notify();
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
                     let bytes = keystroke_to_bytes(&event.keystroke);
                     if !bytes.is_empty() {
+                        // If the user is scrolled back into history, any input
+                        // key first jumps back to the newest line before sending
+                        // (standard terminal behaviour — avoids typing into the
+                        // old scrollback view).
+                        let need_reset = if let Ok(term) = this.term.lock() {
+                            term.grid().display_offset() != 0
+                        } else {
+                            false
+                        };
+                        if need_reset {
+                            if let Ok(mut term) = this.term.lock() {
+                                term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+                            }
+                        }
                         this.send_input(&bytes);
                         cx.notify();
                         cx.stop_propagation();
@@ -766,6 +968,27 @@ impl Render for TerminalView {
                     }
                 })
             })
+            // Mouse wheel → scroll the local scrollback history. We translate
+            // GPUI's scroll delta into alacritty line deltas and call
+            // `scroll_display`, which only moves the viewport offset (history is
+            // already retained by the grid). Direction: wheel up (deltaY > 0)
+            // scrolls up into history; wheel down returns toward the newest line.
+            .on_scroll_wheel(
+                cx.listener(|this, ev: &gpui::ScrollWheelEvent, _window, cx| {
+                    let lines = match &ev.delta {
+                        gpui::ScrollDelta::Pixels(p) => {
+                            (p.y.as_f32() / this.last_line_height.max(1.0)).round() as i32
+                        }
+                        gpui::ScrollDelta::Lines(l) => l.y.round() as i32,
+                    };
+                    if lines != 0 {
+                        if let Ok(mut term) = this.term.lock() {
+                            term.scroll_display(alacritty_terminal::grid::Scroll::Delta(lines));
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             // Absolutely-positioned canvas that covers the entire area so its
             // paint hook fires reliably. Only job: record bounds (for mouse coord
             // conversion) and register the keyboard input handler.
@@ -803,7 +1026,8 @@ impl Render for TerminalView {
                     };
                     let ox: f32 = bounds.origin.x.into();
                     let oy: f32 = bounds.origin.y.into();
-                    let (cw, ch) = char_cell_metrics(this.font_size, this.last_line_height);
+                    let cw = this.last_char_width.max(0.5);
+                    let ch = this.last_line_height.max(1.0);
                     let lx = (px - ox - 8.0).max(0.0);
                     let ly = (py - oy - 4.0).max(0.0);
                     let col = (lx / cw).floor() as usize;
@@ -837,7 +1061,8 @@ impl Render for TerminalView {
                 let bh: f32 = bounds.size.height.into();
                 let pxc = px.clamp(ox + 8.0, ox + bw - 1.0);
                 let pyc = py.clamp(oy + 4.0, oy + bh - 1.0);
-                let (cw, ch) = char_cell_metrics(this.font_size, this.last_line_height);
+                let cw = this.last_char_width.max(0.5);
+                let ch = this.last_line_height.max(1.0);
                 let lx = (pxc - ox - 8.0).max(0.0);
                 let ly = (pyc - oy - 4.0).max(0.0);
                 let col = (lx / cw).floor() as usize;
@@ -877,10 +1102,10 @@ fn char_cell_metrics(font_size: f32, line_height: f32) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    // Import only the two pure helpers under test — NOT `super::*`, which would
+    // Import only the pure helpers under test — NOT `super::*`, which would
     // pull in GPUI's macro-heavy prelude and blow the `#[test]` macro's
     // recursion limit.
-    use super::{col_to_byte, slice_by_cols};
+    use super::{col_to_byte, contains_sequence, slice_by_cols};
 
     /// Reproduces the exact panic from the crash report: a row containing the
     /// 2-byte `·` char where a selection column landed mid-character
@@ -896,7 +1121,7 @@ mod tests {
         assert_eq!(col_to_byte(row, 2), 2); // '·' start byte
         assert_eq!(col_to_byte(row, 3), 4); // 'c' (skips the 2nd byte of '·')
         assert_eq!(col_to_byte(row, 5), 6); // '阅' start byte
-        // Out of range clamps to end (byte length 9), never panics.
+                                            // Out of range clamps to end (byte length 9), never panics.
         assert_eq!(col_to_byte(row, 99), 9);
     }
 
@@ -917,5 +1142,42 @@ mod tests {
         assert_eq!(slice_by_cols(row, 1, 3), "读测");
         // Reversed endpoints produce the same span.
         assert_eq!(slice_by_cols(row, 3, 1), "读测");
+    }
+
+    #[test]
+    fn contains_sequence_detects_clear_screen() {
+        // ESC[2J is the "clear screen" sequence the shell `clear` command emits.
+        let esc_2j = b"\x1b[2J";
+        // Plain match.
+        assert!(contains_sequence(b"hello\x1b[2Jworld", esc_2j));
+        // `clear` typically emits cursor-home first then clear.
+        assert!(contains_sequence(b"\x1b[H\x1b[2J", esc_2j));
+        // Negative: ESC[3J (clear scrollback) must NOT match the ESC[2J detector.
+        assert!(!contains_sequence(b"\x1b[3J", esc_2j));
+        // Negative: ESC[1J / ESC[0J must not match.
+        assert!(!contains_sequence(b"\x1b[1J", esc_2j));
+        assert!(!contains_sequence(b"\x1b[0J", esc_2j));
+        // Edge: empty / too-short haystack.
+        assert!(!contains_sequence(b"", esc_2j));
+        assert!(!contains_sequence(b"\x1b", esc_2j));
+    }
+
+    /// Simulate the cross-chunk split detection used by `feed`: the tail bytes
+    /// of one chunk are carried into the next so an `ESC[2J` split across two
+    /// feed calls is still detected. We replicate just the join logic here
+    /// (the GPUI entity can't be constructed in a pure lib test).
+    #[test]
+    fn clear_screen_detected_across_chunk_split() {
+        const SEQ: &[u8] = b"\x1b[2J";
+        // Split "abc\x1b[2J" as "abc\x1b[" + "2J".
+        let chunk1 = b"abc\x1b[";
+        let chunk2 = b"2J";
+        // Tail of chunk1 (last SEQ.len()-1 bytes) + chunk2 forms the joined view.
+        let tail_len = SEQ.len() - 1;
+        let tail = &chunk1[chunk1.len().saturating_sub(tail_len)..];
+        let mut joined = Vec::new();
+        joined.extend_from_slice(tail);
+        joined.extend_from_slice(chunk2);
+        assert!(contains_sequence(&joined, SEQ));
     }
 }

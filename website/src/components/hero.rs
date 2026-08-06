@@ -1,12 +1,13 @@
-//! Hero section: aurora background, mouse spotlight, shimmer title, CTAs,
-//! performance pills.
+//! Hero section: particle constellation, aurora, mouse spotlight, shimmer
+//! title, animated stat readouts, a cycling "boot line", and CTAs.
 
-use leptos::prelude::*;
 use leptos::html::Div;
+use leptos::prelude::*;
 use leptos_use::use_mouse_in_element;
-use crate::i18n::{t, use_i18n};
 
+use crate::components::fx::{BootLine, CountUp, ParticleField, TechBadge};
 use crate::consts::RELEASES_LATEST;
+use crate::i18n::{t, use_i18n};
 use crate::utils::route;
 
 #[component]
@@ -27,12 +28,16 @@ pub fn Hero() -> impl IntoView {
     });
 
     view! {
-        <section class="relative overflow-hidden">
-            // Layer 1: drifting grid
-            <div class="absolute inset-0 bg-grid bg-grid-animated"></div>
+        <section class="relative isolate overflow-hidden">
+            // Layer 1: drifting grid (its own absolute layer — never put bg-grid
+            // on a content-bearing element, its mask would fade the content out).
+            <div class="absolute inset-0 z-0 bg-grid bg-grid-animated"></div>
 
-            // Layer 2: aurora blobs
-            <div class="pointer-events-none absolute inset-0 overflow-hidden">
+            // Layer 2: WASM particle constellation
+            <ParticleField />
+
+            // Layer 3: aurora blobs
+            <div class="pointer-events-none absolute inset-0 z-[2] overflow-hidden">
                 <div
                     class="aurora-blob left-[5%] top-[-6%] h-[360px] w-[360px] bg-bolt-500/25"
                     style="animation-delay: 0s;"
@@ -47,22 +52,23 @@ pub fn Hero() -> impl IntoView {
                 ></div>
             </div>
 
-            // Layer 3: top radial wash
-            <div class="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-[radial-gradient(ellipse_60%_50%_at_50%_0%,rgba(212,227,23,0.16),transparent_70%)]"></div>
+            // Layer 4: top radial wash + slow scanline
+            <div class="pointer-events-none absolute inset-x-0 top-0 z-[2] h-[520px] bg-[radial-gradient(ellipse_60%_50%_at_50%_0%,rgba(212,227,23,0.16),transparent_70%)]"></div>
+            <div class="scanline z-[3]" style="top:0;"></div>
 
-            // Layer 4: mouse-follow spotlight (sits above bg, below content)
+            // Layer 5: mouse-follow spotlight
             <div
-                class="pointer-events-none absolute inset-0 transition-opacity duration-500"
+                class="pointer-events-none absolute inset-0 z-[3] transition-opacity duration-500"
                 style=move || spotlight_style.get()
             ></div>
 
             <div
                 node_ref=el
-                class="relative mx-auto max-w-5xl px-4 pt-12 pb-20 sm:px-6 lg:px-8 lg:pt-16 lg:pb-24"
+                class="relative z-10 mx-auto max-w-5xl px-4 pt-12 pb-20 sm:px-6 lg:px-8 lg:pt-16 lg:pb-24"
             >
                 <div class="mx-auto max-w-3xl text-center">
-                    // Badge
-                    <div class="flex justify-center">
+                    // Badge + tech tags
+                    <div class="flex flex-col items-center gap-3">
                         <span class="inline-flex items-center gap-2 rounded-full border border-bolt-500/25 bg-bolt-500/[0.06] px-3.5 py-1.5 text-xs font-medium text-bolt-200 backdrop-blur">
                             <span class="relative flex h-1.5 w-1.5">
                                 <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-bolt-400 opacity-75"></span>
@@ -70,9 +76,14 @@ pub fn Hero() -> impl IntoView {
                             </span>
                             {move || t!(i18n, hero.badge)}
                         </span>
+                        <div class="flex items-center gap-3">
+                            <TechBadge label="rust" />
+                            <TechBadge label="wasm" />
+                            <TechBadge label="gpu" live=true />
+                        </div>
                     </div>
 
-                    // Title — short, stays on a single line on desktop.
+                    // Title
                     <h1 class="mt-8 text-4xl font-extrabold leading-tight tracking-tight sm:text-6xl lg:whitespace-nowrap lg:text-7xl">
                         {move || t!(i18n, hero.title)}
                     </h1>
@@ -102,17 +113,23 @@ pub fn Hero() -> impl IntoView {
                         </a>
                     </div>
 
-                    // Performance pills
-                    <div class="mt-16 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm">
-                        <PerfPill>{move || t!(i18n, perf.startup)}</PerfPill>
-                        <Dot />
-                        <PerfPill>{move || t!(i18n, perf.ram)}</PerfPill>
-                        <Dot />
-                        <PerfPill>{move || t!(i18n, perf.fps)}</PerfPill>
-                        <Dot />
-                        <PerfPill>{move || t!(i18n, perf.offline)}</PerfPill>
-                        <Dot />
-                        <PerfPill>{move || t!(i18n, perf.safe)}</PerfPill>
+                    // Cycling boot status line
+                    <BootLine />
+
+                    // HUD stat readouts (count up on scroll into view)
+                    <div class="mt-10 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.04] text-center sm:grid-cols-4">
+                        <Stat label=t!(i18n, hud.cold_boot)>
+                            <span class="text-bolt-300">"<" <CountUp value=1.0 decimals=1 suffix="s" /></span>
+                        </Stat>
+                        <Stat label=t!(i18n, hud.mem_baseline)>
+                            <span class="text-bolt-300">"<" <CountUp value=100.0 suffix="MB" /></span>
+                        </Stat>
+                        <Stat label=t!(i18n, hud.frame_rate)>
+                            <span class="text-bolt-300">"~" <CountUp value=60.0 suffix="fps" /></span>
+                        </Stat>
+                        <Stat label=t!(i18n, hud.mem_safe)>
+                            <span class="text-bolt-300"><CountUp value=100.0 suffix="%" /></span>
+                        </Stat>
                     </div>
                 </div>
             </div>
@@ -121,18 +138,13 @@ pub fn Hero() -> impl IntoView {
 }
 
 #[component]
-fn PerfPill(children: Children) -> impl IntoView {
+fn Stat(label: impl IntoView + 'static, children: Children) -> impl IntoView {
     view! {
-        <span class="inline-flex items-center gap-1.5 font-medium text-ink-300">
-            <svg class="h-4 w-4 text-bolt-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 6 9 17l-5-5" />
-            </svg>
-            {children()}
-        </span>
+        <div class="bg-ink-950/40 px-4 py-4 backdrop-blur-sm">
+            <div class="stat-value text-2xl sm:text-3xl">{children()}</div>
+            <div class="mt-1 text-[11px] font-medium uppercase tracking-wider text-ink-500">
+                {label}
+            </div>
+        </div>
     }
-}
-
-#[component]
-fn Dot() -> impl IntoView {
-    view! { <span class="hidden h-1 w-1 rounded-full bg-ink-600 sm:inline-block"></span> }
 }

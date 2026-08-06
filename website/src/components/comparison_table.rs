@@ -99,7 +99,7 @@ pub fn ComparisonTable() -> impl IntoView {
                 <tbody>
                     {rows.into_iter().map(|(key, community, pro)| {
                         view! {
-                            <tr class="border-t border-ink-700 transition hover:bg-ink-800/40">
+                            <tr class="row-hover-bar border-t border-ink-700 transition hover:bg-ink-800/40">
                                 <td class="px-5 py-3 text-ink-300">
                                     {move || label(key)}
                                 </td>
@@ -116,7 +116,7 @@ pub fn ComparisonTable() -> impl IntoView {
 
 fn check(present: bool) -> impl IntoView {
     if present {
-        view! { <span class="text-bolt-400">"✓"</span> }
+        view! { <span class="check-glow text-lg leading-none">"✓"</span> }
     } else {
         view! { <span class="text-ink-600">"—"</span> }
     }

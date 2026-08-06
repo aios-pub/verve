@@ -261,7 +261,300 @@ h1, h2, h3, h4 {
   .reveal-stagger.is-visible > *:nth-child(n+7){ transition-delay: .35s; }
 }
 
+/* ===========================================================================
+   Mission Control / Instrumentation design language
+   工程仪器风：等宽标签、直角括号、1px 发丝、状态点、细颗粒噪点
+   =========================================================================== */
+
+:root {
+  --grain-opacity: 0.025;
+  --spotlight: rgba(12, 15, 23, 0.04);  /* light: faint dark glow */
+  --border-hair: rgba(12, 15, 23, 0.08);
+}
+.dark {
+  --grain-opacity: 0.04;
+  --spotlight: rgba(232, 249, 63, 0.07); /* dark: faint bolt glow */
+  --border-hair: rgba(255, 255, 255, 0.08);
+}
+
+/* Tabular / mono numerals for readouts */
+.text-mono, .tabular-nums {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Technical label:  // RUST  style */
+.tech-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink-500);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.tech-label::before {
+  content: "//";
+  color: var(--color-bolt-500);
+  font-weight: 600;
+}
+
+/* Live status dot */
+.status-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-bolt-400);
+}
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  100% { transform: scale(3.2); opacity: 0;   }
+}
+
+/* Corner brackets — drawn on a DEDICATED overlay element (not ::before/::after)
+   so they never collide with the spotlight glow, which owns the parent's
+   ::before. Four L-shaped marks via background-image gradients; the overlay is
+   pointer-events-none, faint at rest, and brightens on hover. */
+.card-corners {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  --cl: 13px;   /* corner arm length */
+  --co: 9px;    /* corner inset from the card edge */
+  --ct: 1.5px;  /* arm thickness */
+  --cc: color-mix(in srgb, var(--color-bolt-400) 85%, transparent);
+  background-image:
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc)),
+    linear-gradient(var(--cc), var(--cc));
+  /* order: TL_h, TL_v, TR_h, TR_v, BL_h, BL_v, BR_h, BR_v */
+  background-size:
+    var(--cl) var(--ct), var(--ct) var(--cl),
+    var(--cl) var(--ct), var(--ct) var(--cl),
+    var(--cl) var(--ct), var(--ct) var(--cl),
+    var(--cl) var(--ct), var(--ct) var(--cl);
+  background-position:
+    left var(--co) top var(--co), left var(--co) top var(--co),
+    right var(--co) top var(--co), right var(--co) top var(--co),
+    left var(--co) bottom var(--co), left var(--co) bottom var(--co),
+    right var(--co) bottom var(--co), right var(--co) bottom var(--co);
+  background-repeat: no-repeat;
+  opacity: 0.3;
+  transition: opacity 0.3s ease;
+}
+.spotlight:hover .card-corners { opacity: 1; }
+.card-corners.is-pro {
+  --cc: color-mix(in srgb, var(--color-pro-400) 90%, transparent);
+}
+
+/* HUD panel: frosted + 1px hairline + corners */
+.hud-panel {
+  position: relative;
+  background: color-mix(in srgb, var(--color-ink-900) 72%, transparent);
+  border: 1px solid var(--border-hair);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 0.5rem;
+}
+
+/* Spotlight card — radial glow follows cursor via --mx/--my (set from Rust). */
+.spotlight {
+  position: relative;
+  --mx: 50%;
+  --my: 50%;
+}
+.spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    320px circle at var(--mx) var(--my),
+    var(--spotlight),
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.spotlight:hover::before { opacity: 1; }
+
+/* Stat readout number (hero HUD row) */
+.stat-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-bolt-300);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hairline divider with bolt center tick */
+.rule-dashed {
+  position: relative;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--border-hair) 18%,
+    var(--border-hair) 82%,
+    transparent
+  );
+}
+.rule-dashed::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--color-bolt-500);
+  box-shadow: 0 0 12px var(--color-bolt-500);
+}
+
+/* Typing caret for boot line */
+@keyframes caret-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-bolt-400);
+  animation: caret-blink 1.05s step-end infinite;
+}
+
+/* Slow scanline (hero only) */
+@keyframes scanline {
+  0%   { transform: translateY(-10%); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(110%); opacity: 0; }
+}
+.scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--color-bolt-500) 50%,
+    transparent
+  );
+  opacity: 0;
+  animation: scanline 9s linear infinite;
+  pointer-events: none;
+}
+
+/* Marquee for tech ticker */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: marquee 32s linear infinite;
+}
+
+/* Scroll progress bar (top) */
+.scroll-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(to right, var(--color-bolt-500), var(--color-pro-500));
+  box-shadow: 0 0 8px rgba(212, 227, 23, 0.5);
+  transform-origin: left;
+}
+
+/* Film grain overlay — fixed full viewport, pointer-events none */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}
+
+/* Tilt-on-hover container (no-op on touch via media query) */
+.tilt {
+  transform-style: preserve-3d;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --rx: 0deg;
+  --ry: 0deg;
+}
+.tilt:hover {
+  transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry));
+}
+
+/* Active nav link underline */
+.nav-link-active {
+  position: relative;
+  color: var(--color-bolt-200) !important;
+}
+.nav-link-active::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 4px;
+  height: 1px;
+  background: var(--color-bolt-400);
+  box-shadow: 0 0 8px var(--color-bolt-400);
+}
+
+/* Glow check for comparison table */
+.check-glow {
+  color: var(--color-bolt-400);
+  text-shadow: 0 0 10px rgba(232, 249, 63, 0.55);
+}
+.row-hover-bar {
+  box-shadow: inset 2px 0 0 transparent;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.row-hover-bar:hover {
+  box-shadow: inset 2px 0 0 var(--color-bolt-400);
+}
+
+@media (hover: none) {
+  .tilt { transform: none !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .aurora-blob, .shimmer-text, .bg-grid-animated { animation: none !important; }
-  .reveal, .reveal-stagger > * { opacity: 1 !important; transform: none !important; animation: none !important; }
+  .aurora-blob, .shimmer-text, .bg-grid-animated,
+  .scanline, .marquee-track, .status-dot::after, .caret {
+    animation: none !important;
+  }
+  .reveal, .reveal-stagger > * {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+  }
+  .grain { display: none; }
 }

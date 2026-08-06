@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 
-use crate::consts::{REPO, RELEASES_ALL};
+use crate::consts::{REPO, RELEASES_ALL, VERVE_VERSION};
 use crate::i18n::{t, use_i18n};
 use crate::utils::{asset, route};
 
@@ -79,7 +79,21 @@ pub fn Footer() -> impl IntoView {
                     </p>
                 </div>
 
-                <p class="mt-6 text-center text-xs text-ink-500">
+                // System status line
+                <div class="mt-8 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 font-mono text-[11px] tracking-wider text-ink-500">
+                    <span class="inline-flex items-center gap-1.5">
+                        <span class="status-dot"></span>
+                        <span class="uppercase text-ink-400">"all systems operational"</span>
+                    </span>
+                    <span aria-hidden="true">"·"</span>
+                    <span>"build " {VERVE_VERSION}</span>
+                    <span aria-hidden="true">"·"</span>
+                    <span>"target wasm32-unknown-unknown"</span>
+                    <span aria-hidden="true">"·"</span>
+                    <a href="#top" class="transition hover:text-bolt-300">"back to top ↑"</a>
+                </div>
+
+                <p class="mt-4 text-center text-xs text-ink-500">
                     "© 2026 Verve. "
                     {move || t!(i18n, footer.rights)}
                 </p>

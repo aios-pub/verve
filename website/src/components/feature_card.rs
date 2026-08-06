@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 
+use crate::components::fx::SpotlightCard;
 use crate::utils::asset;
 
 #[component]
@@ -16,11 +17,12 @@ pub fn FeatureCard(
 ) -> impl IntoView {
     let alt_text = title;
     view! {
-        <div class="card group relative flex flex-col overflow-hidden p-5">
+        <SpotlightCard class="card group relative flex flex-col overflow-hidden p-5"
+            corners=if pro { "pro" } else { "bolt" }>
             // Pro badge
             {pro.then(|| view! {
-                <span class="absolute right-4 top-4 rounded-full bg-pro-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/20">
-                    "Pro"
+                <span class="absolute right-4 top-4 z-10 rounded bg-pro-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
+                    "PRO"
                 </span>
             })}
 
@@ -32,7 +34,7 @@ pub fn FeatureCard(
             {screenshot.map(|s| {
                 let src = asset(&format!("screenshots/{s}"));
                 view! {
-                    <div class="mt-4 overflow-hidden rounded-lg border border-white/[0.06] bg-ink-950">
+                    <div class="relative z-[1] mt-4 overflow-hidden rounded-lg border border-white/[0.06] bg-ink-950">
                         <img
                             src=src
                             alt=alt_text
@@ -42,7 +44,7 @@ pub fn FeatureCard(
                     </div>
                 }
             })}
-        </div>
+        </SpotlightCard>
     }
 }
 
@@ -62,17 +64,18 @@ pub fn FeatureGroup(
 ) -> impl IntoView {
     let alt_text = title;
     view! {
-        <div class="card group relative flex flex-col overflow-hidden p-6">
+        <SpotlightCard class="card group relative flex flex-col overflow-hidden p-6"
+            corners=if pro { "pro" } else { "bolt" }>
             {pro.then(|| view! {
-                <span class="absolute right-5 top-5 rounded-full bg-pro-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/20">
-                    "Pro"
+                <span class="absolute right-5 top-5 z-10 rounded bg-pro-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
+                    "PRO"
                 </span>
             })}
 
-            <h3 class="text-lg font-semibold text-ink-100">{title}</h3>
-            <p class="mt-1.5 text-sm leading-relaxed text-ink-400">{description}</p>
+            <h3 class="relative z-[1] text-lg font-semibold text-ink-100">{title}</h3>
+            <p class="relative z-[1] mt-1.5 text-sm leading-relaxed text-ink-400">{description}</p>
 
-            <ul class="mt-4 grid gap-2 sm:grid-cols-2">
+            <ul class="relative z-[1] mt-4 grid gap-2 sm:grid-cols-2">
                 {specs.into_iter().map(|spec| {
                     view! {
                         <li class="flex items-start gap-2 text-sm text-ink-300">
@@ -88,7 +91,7 @@ pub fn FeatureGroup(
             {screenshot.map(|s| {
                 let src = asset(&format!("screenshots/{s}"));
                 view! {
-                    <div class="mt-5 overflow-hidden rounded-lg border border-white/[0.06] bg-ink-950">
+                    <div class="relative z-[1] mt-5 overflow-hidden rounded-lg border border-white/[0.06] bg-ink-950">
                         <img
                             src=src
                             alt=alt_text
@@ -98,6 +101,6 @@ pub fn FeatureGroup(
                     </div>
                 }
             })}
-        </div>
+        </SpotlightCard>
     }
 }

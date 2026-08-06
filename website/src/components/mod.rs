@@ -11,6 +11,8 @@ mod download_buttons;
 mod reveal;
 mod theme_toggle;
 
+pub mod fx;
+
 pub use shell::Shell;
 pub use nav::Nav;
 pub use footer::Footer;

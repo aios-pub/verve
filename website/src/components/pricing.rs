@@ -3,6 +3,7 @@
 use leptos::prelude::*;
 use crate::i18n::{t, t_string, use_i18n};
 
+use crate::components::fx::SpotlightCard;
 use crate::consts::RELEASES_LATEST;
 use crate::utils::{asset, route};
 
@@ -13,9 +14,10 @@ pub fn PricingCards() -> impl IntoView {
     view! {
         <div class="grid gap-6 md:grid-cols-2">
             // Community
-            <div class="card relative flex flex-col p-8">
-                <h3 class="text-xl font-bold">{move || t!(i18n, editions.community)}</h3>
-                <span class="mt-1.5 inline-flex w-fit items-center rounded-full bg-bolt-500/10 px-2.5 py-0.5 text-xs font-medium text-bolt-300 ring-1 ring-inset ring-bolt-500/15">
+            <SpotlightCard class="card relative flex flex-col p-8" corners="bolt">
+                <span class="tech-label">"community"</span>
+                <h3 class="mt-3 text-xl font-bold">{move || t!(i18n, editions.community)}</h3>
+                <span class="mt-1.5 inline-flex w-fit items-center rounded bg-bolt-500/10 px-2.5 py-0.5 font-mono text-[11px] font-medium text-bolt-300 ring-1 ring-inset ring-bolt-500/20">
                     {move || t!(i18n, editions.community_tag)}
                 </span>
                 <p class="mt-4 flex-1 text-sm leading-relaxed text-ink-400">
@@ -30,16 +32,17 @@ pub fn PricingCards() -> impl IntoView {
                 >
                     {move || t!(i18n, pricing.cta_community)}
                 </a>
-            </div>
+            </SpotlightCard>
 
             // Pro
-            <div class="card relative flex flex-col overflow-hidden border-pro-500/30 p-8 before:absolute before:inset-0 before:bg-gradient-to-b before:from-pro-500/[0.08] before:to-transparent before:pointer-events-none">
+            <SpotlightCard class="card relative flex flex-col overflow-hidden border-pro-500/30 p-8 before:absolute before:inset-0 before:bg-gradient-to-b before:from-pro-500/[0.08] before:to-transparent before:pointer-events-none" corners="pro">
                 <div class="relative">
-                    <span class="absolute -top-1 right-0 rounded-full bg-pro-500/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/25">
+                    <span class="absolute -top-1 right-0 rounded bg-pro-500/20 px-2.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
                         {move || t!(i18n, pricing.most_popular)}
                     </span>
-                    <h3 class="text-xl font-bold">{move || t!(i18n, editions.pro)}</h3>
-                    <span class="mt-1.5 inline-flex w-fit items-center rounded-full bg-pro-500/15 px-2.5 py-0.5 text-xs font-medium text-pro-400 ring-1 ring-inset ring-pro-500/20">
+                    <span class="tech-label text-pro-400">"pro"</span>
+                    <h3 class="mt-3 text-xl font-bold">{move || t!(i18n, editions.pro)}</h3>
+                    <span class="mt-1.5 inline-flex w-fit items-center rounded bg-pro-500/15 px-2.5 py-0.5 font-mono text-[11px] font-medium text-pro-400 ring-1 ring-inset ring-pro-500/25">
                         {move || t!(i18n, editions.pro_tag)}
                     </span>
                     <p class="mt-4 flex-1 text-sm leading-relaxed text-ink-400">
@@ -65,7 +68,7 @@ pub fn PricingCards() -> impl IntoView {
                         {move || t!(i18n, pricing.per_once)}
                     </p>
                 </div>
-            </div>
+            </SpotlightCard>
         </div>
     }
 }

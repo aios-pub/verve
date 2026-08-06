@@ -14,12 +14,14 @@ pub fn Pricing() -> impl IntoView {
         <section class="relative isolate overflow-hidden border-b border-ink-700">
             <div class="bg-grid pointer-events-none absolute inset-0" aria-hidden="true"></div>
             <div class="relative z-10 mx-auto max-w-7xl px-4 pb-14 pt-10 text-center sm:px-6 lg:px-8">
-                <h1 class="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
+                <span class="tech-label">"pricing"</span>
+                <h1 class="mt-3 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
                     {move || t!(i18n, pricing.title)}
                 </h1>
                 <p class="mx-auto mt-4 max-w-2xl text-ink-400">
                     {move || t!(i18n, pricing.subtitle)}
                 </p>
+                <div class="rule-dashed mx-auto mt-5 w-40"></div>
             </div>
         </section>
 

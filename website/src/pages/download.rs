@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use crate::i18n::{t, use_i18n};
 
 use crate::components::DownloadButtons;
+use crate::components::fx::SpotlightCard;
 use crate::consts::{REPO, VERVE_VERSION};
 
 #[component]
@@ -14,9 +15,11 @@ pub fn Download() -> impl IntoView {
         <section class="relative isolate overflow-hidden border-b border-ink-700">
             <div class="bg-grid pointer-events-none absolute inset-0" aria-hidden="true"></div>
             <div class="relative z-10 mx-auto max-w-7xl px-4 pb-14 pt-10 text-center sm:px-6 lg:px-8">
-                <h1 class="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
+                <span class="tech-label">"download"</span>
+                <h1 class="mt-3 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
                     {move || t!(i18n, download.title)}
                 </h1>
+                <div class="rule-dashed mx-auto mt-5 w-40"></div>
             </div>
         </section>
 
@@ -34,16 +37,17 @@ pub fn Download() -> impl IntoView {
             </div>
 
             // Build from source
-            <div class="mt-16 rounded-2xl border border-white/5 bg-ink-900 p-8">
-                <h2 class="text-2xl font-bold">{move || t!(i18n, download.build_title)}</h2>
+            <SpotlightCard class="mt-16 rounded-2xl border border-white/5 bg-ink-900 p-8" corners="bolt">
+                <span class="tech-label">"build from source"</span>
+                <h2 class="mt-3 text-2xl font-bold">{move || t!(i18n, download.build_title)}</h2>
                 <p class="mt-3 text-sm text-ink-400">{move || t!(i18n, download.build_d)}</p>
                 <pre class="mt-4 overflow-x-auto rounded-lg bg-ink-950 p-4 text-sm text-ink-200">
                     <code>"git clone " {REPO} "\ncd verve\ncargo build --release"</code>
                 </pre>
-                <p class="mt-3 text-xs text-ink-500">
-                    "v" {VERVE_VERSION}
+                <p class="mt-3 font-mono text-xs text-ink-500">
+                    "ver. " {VERVE_VERSION}
                 </p>
-            </div>
+            </SpotlightCard>
         </div>
     }
 }
@@ -51,7 +55,7 @@ pub fn Download() -> impl IntoView {
 #[component]
 fn InstallCard(os: &'static str, steps: Vec<&'static str>) -> impl IntoView {
     view! {
-        <div class="rounded-xl border border-white/5 bg-ink-900 p-5">
+        <SpotlightCard class="rounded-xl border border-white/5 bg-ink-900 p-5" corners="bolt">
             <h3 class="font-semibold text-ink-100">{os}</h3>
             <ol class="mt-3 space-y-2 text-sm text-ink-400">
                 {steps.into_iter().enumerate().map(|(i, step)| {
@@ -63,6 +67,6 @@ fn InstallCard(os: &'static str, steps: Vec<&'static str>) -> impl IntoView {
                     }
                 }).collect::<Vec<_>>()}
             </ol>
-        </div>
+        </SpotlightCard>
     }
 }

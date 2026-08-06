@@ -32,6 +32,13 @@ perf:
   safe: "Memory-safe"
   cross: "Cross-platform"
 
+# ---- HUD readouts ------------------------------------------------------
+hud:
+  cold_boot: "Cold boot"
+  mem_baseline: "RAM baseline"
+  frame_rate: "Frame rate"
+  mem_safe: "Memory-safe"
+
 # ---- Why Rust + GPUI ----------------------------------------------------
 why:
   title: "Built with Rust + GPUI — why it matters"

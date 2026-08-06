@@ -209,12 +209,11 @@ fn PageHeader(eyebrow: &'static str, children: Children) -> impl IntoView {
 
             // 内容：紧凑 padding，不再用固定高度
             <div class="relative z-10 mx-auto max-w-6xl px-4 pb-8 pt-8 text-center sm:px-6 lg:px-8">
-                <span class="text-xs font-semibold uppercase tracking-[0.2em] text-bolt-400">
-                    {eyebrow}
-                </span>
-                <h1 class="mt-2 text-4xl font-extrabold leading-[1.3] tracking-tight text-ink-100 sm:text-5xl">
+                <span class="tech-label">{eyebrow}</span>
+                <h1 class="mt-3 text-4xl font-extrabold leading-[1.3] tracking-tight text-ink-100 sm:text-5xl">
                     {children()}
                 </h1>
+                <div class="rule-dashed mx-auto mt-5 w-40"></div>
             </div>
         </section>
     }

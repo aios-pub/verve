@@ -3,6 +3,7 @@
 use leptos::prelude::*;
 use crate::i18n::{t, use_i18n};
 
+use crate::components::fx::SpotlightCard;
 use crate::consts::{release_tag, RELEASES_ALL};
 
 /// Known release tags. Kept static for the static build; the GitHub Releases
@@ -20,10 +21,12 @@ pub fn Blog() -> impl IntoView {
         <section class="relative isolate overflow-hidden border-b border-ink-700">
             <div class="bg-grid pointer-events-none absolute inset-0" aria-hidden="true"></div>
             <div class="relative z-10 mx-auto max-w-7xl px-4 pb-14 pt-10 text-center sm:px-6 lg:px-8">
-                <h1 class="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
+                <span class="tech-label">"changelog"</span>
+                <h1 class="mt-3 text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">
                     {move || t!(i18n, blog.title)}
                 </h1>
                 <p class="mt-4 text-ink-400">{move || t!(i18n, blog.subtitle)}</p>
+                <div class="rule-dashed mx-auto mt-5 w-40"></div>
             </div>
         </section>
 
@@ -32,17 +35,20 @@ pub fn Blog() -> impl IntoView {
                 {RELEASES.iter().map(|(tag, date)| {
                     view! {
                         <li>
-                            <a
-                                href=release_tag(tag)
-                                target="_blank"
-                                rel="noopener"
-                                class="flex items-center justify-between rounded-xl border border-white/5 bg-ink-900 p-5 transition hover:border-bolt-500/30 hover:bg-ink-850"
-                            >
-                                <div>
-                                    <span class="font-mono text-lg font-semibold text-bolt-300">{*tag}</span>
-                                </div>
-                                <span class="text-sm text-ink-500">{*date}</span>
-                            </a>
+                            <SpotlightCard class="rounded-xl" corners="bolt">
+                                <a
+                                    href=release_tag(tag)
+                                    target="_blank"
+                                    rel="noopener"
+                                    class="flex items-center justify-between rounded-xl border border-white/5 bg-ink-900 p-5 transition hover:border-bolt-500/30 hover:bg-ink-850"
+                                >
+                                    <div class="flex items-center gap-3">
+                                        <span class="status-dot"></span>
+                                        <span class="font-mono text-lg font-semibold text-bolt-300">{*tag}</span>
+                                    </div>
+                                    <span class="font-mono text-sm text-ink-500">{*date}</span>
+                                </a>
+                            </SpotlightCard>
                         </li>
                     }
                 }).collect::<Vec<_>>()}

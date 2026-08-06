@@ -3,6 +3,7 @@
 use leptos::prelude::*;
 use crate::i18n::{t, t_string, use_i18n};
 
+use crate::components::fx::SpotlightCard;
 use crate::components::{ComparisonTable, DownloadButtons, FeatureCard, Hero, PricingCards, Reveal};
 
 #[component]
@@ -26,21 +27,25 @@ pub fn Home() -> impl IntoView {
             <Reveal stagger=true>
                 <div class="grid gap-4 sm:grid-cols-2">
                     <WhyCard
+                        index="01"
                         label=t_string!(i18n, why.row_startup)
                         v=t_string!(i18n, why.row_startup_v)
                         e=t_string!(i18n, why.row_startup_e)
                     />
                     <WhyCard
+                        index="02"
                         label=t_string!(i18n, why.row_ram)
                         v=t_string!(i18n, why.row_ram_v)
                         e=t_string!(i18n, why.row_ram_e)
                     />
                     <WhyCard
+                        index="03"
                         label=t_string!(i18n, why.row_render)
                         v=t_string!(i18n, why.row_render_v)
                         e=t_string!(i18n, why.row_render_e)
                     />
                     <WhyCard
+                        index="04"
                         label=t_string!(i18n, why.row_safety)
                         v=t_string!(i18n, why.row_safety_v)
                         e=t_string!(i18n, why.row_safety_e)
@@ -114,30 +119,32 @@ pub fn Home() -> impl IntoView {
     }
 }
 
-/// Shared section title with an eyebrow label.
+/// Shared section title with a mono eyebrow label and a hairline rule.
 #[component]
 fn SectionTitle(eyebrow: &'static str, children: Children) -> impl IntoView {
     view! {
         <div class="text-center">
-            <span class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.25em] text-bolt-400">
-                {eyebrow}
-            </span>
+            <span class="tech-label">{eyebrow}</span>
             <h2 class="mt-3 text-3xl font-bold leading-snug tracking-tight sm:text-4xl">{children()}</h2>
+            <div class="rule-dashed mx-auto mt-5 w-40"></div>
         </div>
     }
 }
 
 /// A single Verve-vs-Electron comparison card. Strings are pre-evaluated.
 #[component]
-fn WhyCard(label: &'static str, v: &'static str, e: &'static str) -> impl IntoView {
+fn WhyCard(index: &'static str, label: &'static str, v: &'static str, e: &'static str) -> impl IntoView {
     view! {
-        <div class="card p-5">
-            <p class="text-sm font-medium text-ink-400">{label}</p>
+        <SpotlightCard class="card p-5" corners="bolt">
+            <div class="flex items-start justify-between gap-3">
+                <p class="text-sm font-medium text-ink-400">{label}</p>
+                <span class="font-mono text-[11px] tracking-wider text-ink-600">{index}</span>
+            </div>
             <p class="mt-2 text-xl font-bold text-bolt-300">{v}</p>
             <div class="mt-3 flex items-center gap-2 border-t border-white/[0.06] pt-3 text-sm text-ink-500">
-                <span class="rounded bg-white/[0.05] px-1.5 py-0.5 text-[11px] font-medium text-ink-400">"Electron"</span>
+                <span class="rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-ink-400">"Electron"</span>
                 <span>{e}</span>
             </div>
-        </div>
+        </SpotlightCard>
     }
 }

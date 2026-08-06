@@ -16,7 +16,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     popover::Popover,
@@ -1465,10 +1465,19 @@ impl Render for RequestPanel {
                         .when(protocol.uses_http_method(), |bar| {
                             // HTTP/GraphQL method selector (hidden for stream/
                             // socket protocols — those don't use HTTP methods).
+                            // Rendered as a bold, method-tinted chip so the
+                            // verb (GET/POST/…) reads at a glance, Apifox-style.
+                            let method_text = crate::ui::method_colors::badge_color(method, cx);
                             bar.child(
-                                div().w(px(110.)).child(
-                                    Select::new(&self.method_select).small().appearance(true),
-                                ),
+                                div()
+                                    .w(px(110.))
+                                    .child(
+                                        Select::new(&self.method_select)
+                                            .small()
+                                            .appearance(true)
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(method_text),
+                                    ),
                             )
                         })
                         .child(
@@ -1527,7 +1536,7 @@ impl Render for RequestPanel {
                                     }))
                                     .trigger(
                                         Button::new("req-base-trig")
-                                            .ghost()
+                                            .outline()
                                             .small()
                                             .w(px(200.))
                                             .icon(IconName::ChevronDown)
@@ -1656,9 +1665,44 @@ impl Render for RequestPanel {
                             // Path input (the part after the base URL).
                             div().flex_1().child(Input::new(&self.url).small()),
                         )
-                        .child(
+                        .child({
+                            // Send/Stop: a bold, method-colored pill that is
+                            // noticeably taller and wider than the other small
+                            // controls so it reads as the primary action. A
+                            // custom button variant supplies the fill, hover
+                            // and active colors (the base Button sets its own
+                            // hover state, so colors must go through the
+                            // variant rather than `.bg().hover()`).
+                            let (send_bg, send_hover, send_active) = if streaming {
+                                (theme.danger, theme.danger_hover, theme.danger_active)
+                            } else {
+                                let lighter = gpui::hsla(
+                                    method_fill.h,
+                                    method_fill.s,
+                                    (method_fill.l + 0.06).min(0.9),
+                                    method_fill.a,
+                                );
+                                let darker = gpui::hsla(
+                                    method_fill.h,
+                                    method_fill.s,
+                                    (method_fill.l - 0.06).max(0.0),
+                                    method_fill.a,
+                                );
+                                (method_fill, lighter, darker)
+                            };
+                            let variant = ButtonCustomVariant::new(cx)
+                                .color(send_bg)
+                                .foreground(gpui::white())
+                                .hover(send_hover)
+                                .active(send_active);
                             Button::new("send")
-                                .small()
+                                .custom(variant)
+                                .w(px(88.))
+                                .h(px(32.))
+                                .rounded(px(6.))
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::BOLD)
+                                .shadow_md()
                                 .label(if streaming { "停止" } else { "发送" })
                                 .icon(if streaming {
                                     IconName::Close
@@ -1666,9 +1710,6 @@ impl Render for RequestPanel {
                                     IconName::Play
                                 })
                                 .disabled(sending && !streaming)
-                                .when(!sending && !streaming, |btn| {
-                                    btn.bg(method_fill).text_color(gpui::white())
-                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     // Re-check streaming state at click time.
                                     let streaming_now = this
@@ -1686,8 +1727,8 @@ impl Render for RequestPanel {
                                     } else {
                                         this.send(cx);
                                     }
-                                })),
-                        ),
+                                }))
+                        }),
                 )
                 .child({
                     // Compute non-empty row counts for count badges.
@@ -1817,6 +1858,11 @@ impl Render for RequestPanel {
 }
 
 /// Build a clickable tab label with an optional count badge.
+///
+/// Apifox/Postman-style tab: inactive labels are muted gray; the active label
+/// is rendered in the theme primary color with a 2 px underline in the same
+/// color, rather than as a filled pill. The optional count badge is a small
+/// primary-tinted pill for active tabs and a neutral gray pill otherwise.
 pub(super) fn tab_label(
     label: &'static str,
     count: Option<usize>,
@@ -1826,52 +1872,63 @@ pub(super) fn tab_label(
     cx: &mut Context<RequestPanel>,
 ) -> impl IntoElement {
     let has_count = count.map(|c| c > 0).unwrap_or(false);
-    div()
+    h_flex()
         .id(label.to_string())
+        .relative()
         .px_2()
-        .py_1p5()
-        .rounded_sm()
+        .py_1()
         .gap_1()
-        .text_sm()
+        .text_size(px(13.))
         .items_center()
+        .cursor_pointer()
         .text_color(if is_active {
             theme.primary
         } else {
             theme.muted_foreground
         })
-        .when(is_active, |this| {
-            this.font_weight(FontWeight::SEMIBOLD)
-                .bg(theme.accent.opacity(0.15))
-        })
+        .when(is_active, |this| this.font_weight(FontWeight::SEMIBOLD))
         .when(!is_active, |this| {
-            this.hover(|s| s.bg(theme.accent.opacity(0.1)))
+            this.hover(|s| s.text_color(theme.foreground))
         })
-        .child(
-            h_flex()
-                .items_center()
-                .gap_1()
-                .child(label.to_string())
-                .when(has_count, |c| {
-                    c.child(
-                        div()
-                            .text_size(px(10.))
-                            .px(px(4.))
-                            .py(px(0.))
-                            .rounded_full()
-                            .bg(if is_active {
-                                theme.primary.opacity(0.2)
-                            } else {
-                                theme.muted
-                            })
-                            .text_color(if is_active {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .child(count.unwrap().to_string()),
-                    )
-                }),
-        )
+        // Active underline: a 2px primary-colored bar pinned to the bottom.
+        .when(is_active, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_2()
+                    .right_2()
+                    .bottom(px(-5.))
+                    .h(px(2.))
+                    .rounded_full()
+                    .bg(theme.primary),
+            )
+        })
+        .child(label.to_string())
+        .when(has_count, |c| {
+            c.child(
+                div()
+                    .text_size(px(10.))
+                    .min_w(px(16.))
+                    .h(px(16.))
+                    .px(px(5.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .bg(if is_active {
+                        theme.primary.opacity(0.18)
+                    } else {
+                        theme.muted
+                    })
+                    .text_color(if is_active {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(count.unwrap().to_string()),
+            )
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
             this.active_tab = tab;
             cx.notify();

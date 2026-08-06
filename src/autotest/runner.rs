@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 use crate::http;
 use crate::scripting;
 use crate::state::models::{
-    ApiRequest, KeyValue, Project, RequestBody, Response, effective_variables,
+    ApiRequest, KeyValue, Project, Response,
 };
 
 use super::models::*;
@@ -265,13 +265,18 @@ async fn execute_request_step(step: &RequestStep, ctx: &mut RunContext<'_>) {
     }
 
     // 4. Prepare + execute the HTTP call.
+    //    Merge project-global params/headers/cookies so autotest requests honor
+    //    them just like the interactive send path (per-request overrides global).
+    let merged_params = crate::state::models::merge_kv(&ctx.project.global_params, &req.params);
+    let merged_headers = crate::state::models::merge_kv(&ctx.project.global_headers, &req.headers);
+    let merged_cookies = crate::state::models::merge_kv(&ctx.project.global_cookies, &req.cookies);
     let (prepared, prepared_err) = match http::client::prepare(
         req.method,
         &req.url,
-        &req.params,
-        &req.headers,
+        &merged_params,
+        &merged_headers,
         &req.path,
-        &req.cookies,
+        &merged_cookies,
         &req.auth,
         &req.body,
         &step_scope,
@@ -834,7 +839,7 @@ fn unix_secs() -> i64 {
 mod tests {
     use super::*;
     use crate::autotest::models::{ExtractSource, RequestStep, VariableExtractor};
-    use crate::state::models::{AuthConfig, RequestBody, RequestMethod};
+    use crate::state::models::RequestMethod;
 
     use std::io::{Read, Write};
     use std::net::TcpListener;

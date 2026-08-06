@@ -224,7 +224,13 @@ impl StressPanel {
             cx.notify();
             return;
         };
-        let req = req.clone();
+        let mut req = req.clone();
+        // Merge project-global params/headers/cookies so the load test hits the
+        // same effective request the interactive send path does (per-request
+        // overrides global). globals otherwise wouldn't be applied here either.
+        req.params = crate::state::models::merge_kv(&project.global_params, &req.params);
+        req.headers = crate::state::models::merge_kv(&project.global_headers, &req.headers);
+        req.cookies = crate::state::models::merge_kv(&project.global_cookies, &req.cookies);
         let vars = crate::stress::oha::effective_vars(&project);
         let opts = crate::stress::oha::OhaOptions {
             concurrency: cfg.concurrency,

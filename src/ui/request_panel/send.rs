@@ -1,21 +1,16 @@
 //! Protocol send engine: HTTP/SSE/WebSocket/TCP/gRPC/Socket.IO dispatch,
 //! the stop-flag machinery, and error-response helpers.
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use gpui::prelude::FluentBuilder as _;
-use gpui::*;
-use gpui_component::Icon;
-use gpui_component::WindowExt as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::{ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, popover::Popover, v_flex};
+use super::folder_helpers::{apply_autosave_example, resolve_folder_base_url};
+use super::RequestPanel;
+use super::{register_stop, truncate_history_body, unregister_stop};
 use crate::http;
 use crate::state::models::*;
-use crate::state::{AppEvent, AppState};
-use crate::ui::kv_table::{self, KvRow};
-use super::folder_helpers::{resolve_folder_base_url, apply_autosave_example};
-use super::{RequestPanel, ReqTab, FolderKvSection, FolderTab};
-use super::{register_stop, unregister_stop, stop_flags, truncate_history_body};
+use crate::state::AppEvent;
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use gpui_component::WindowExt as _;
+use gpui_component::{Disableable as _, Selectable as _, Sizable as _, button::ButtonVariants as _};
+use std::collections::BTreeMap;
 
 impl RequestPanel {
     pub fn send(&mut self, cx: &mut Context<Self>) {
@@ -42,6 +37,16 @@ impl RequestPanel {
                 .flatten()
                 .cloned()
                 .collect();
+            // Merge project-global params/headers/cookies into the request's
+            // own rows (per-request overrides global) so globals actually take
+            // effect on the wire. The merge happens here on the clone, so every
+            // dispatch branch below (HTTP/SSE/gRPC/…) inherits it without each
+            // needing to know about project globals.
+            let mut merged = req.clone();
+            merged.params = crate::state::models::merge_kv(&project.global_params, &req.params);
+            merged.headers =
+                crate::state::models::merge_kv(&project.global_headers, &req.headers);
+            merged.cookies = crate::state::models::merge_kv(&project.global_cookies, &req.cookies);
             // System variables: mock_server address
             let mut system = BTreeMap::new();
             let remote_cfg = crate::state::persistence::load_remote_config();
@@ -82,7 +87,7 @@ impl RequestPanel {
             (
                 req.pre_script.clone(),
                 req.tests_script.clone(),
-                req.clone(),
+                merged,
                 vars,
             )
         };

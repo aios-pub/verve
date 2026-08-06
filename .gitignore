@@ -5,3 +5,4 @@ src/.DS_Store
 /*.png
 /.zcode
 scripts/__pycache__/
+/.claude/

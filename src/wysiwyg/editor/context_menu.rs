@@ -6,8 +6,8 @@ use gpui::*;
 
 use super::{Editor, TableAxisSelection, ViewMode};
 use crate::wysiwyg::components::{
-    DismissTransientUi, InsertHorizontalRule, InsertImage, InsertTable, TableAxisKind,
-    TableColumnAlignment, TableData,
+    DeleteTable, DismissTransientUi, InsertHorizontalRule, InsertImage, InsertTable, TableAxisKind,
+    TableCellPosition, TableColumnAlignment, TableData,
 };
 use crate::wysiwyg::i18n::I18nManager;
 use crate::wysiwyg::theme::Theme;
@@ -35,6 +35,14 @@ pub(super) enum ContextMenuState {
     TableAxis {
         position: Point<Pixels>,
         selection: TableAxisSelection,
+    },
+    /// Aggregated table context menu opened by right-clicking inside a table
+    /// cell. Carries the owning table block and the cell's position so menu
+    /// items can target the cell's row and column.
+    TableCell {
+        position: Point<Pixels>,
+        table_block_id: EntityId,
+        cell: TableCellPosition,
     },
 }
 
@@ -103,6 +111,29 @@ impl Editor {
         self.context_menu = Some(ContextMenuState::TableAxis {
             position,
             selection,
+        });
+        cx.notify();
+    }
+
+    /// Opens the aggregated table context menu anchored to a cell's row and
+    /// column. Triggered by right-clicking inside a table cell.
+    pub(super) fn open_table_cell_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        table_block_id: EntityId,
+        cell: TableCellPosition,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode != ViewMode::Rendered {
+            return;
+        }
+
+        self.close_menu_bar(cx);
+        self.context_menu_submenu_close_task = None;
+        self.context_menu = Some(ContextMenuState::TableCell {
+            position,
+            table_block_id,
+            cell,
         });
         cx.notify();
     }
@@ -492,9 +523,15 @@ impl Editor {
             return;
         }
         cx.stop_propagation();
-        // Right-clicking inside a table cell, or any block where inserting a
-        // table makes no sense (code, math, etc.), offers no insert menu.
-        if self.table_cell_binding(entity_id).is_some() {
+        // Right-clicking inside a table cell opens the aggregated table context
+        // menu (insert row/column, delete table, ...) anchored to the cell.
+        if let Some(binding) = self.table_cell_binding(entity_id) {
+            self.open_table_cell_context_menu(
+                event.position,
+                binding.table_block.entity_id(),
+                binding.position,
+                cx,
+            );
             return;
         }
         let allows_insert = self
@@ -681,6 +718,19 @@ impl Editor {
     fn active_axis_menu_selection(&self) -> Option<TableAxisSelection> {
         match self.context_menu.as_ref() {
             Some(ContextMenuState::TableAxis { selection, .. }) => Some(*selection),
+            _ => None,
+        }
+    }
+
+    /// Context for the cell context menu: the owning table block id and the
+    /// cell's position (visual row index, column index).
+    fn active_cell_menu_context(&self) -> Option<(EntityId, TableCellPosition)> {
+        match self.context_menu.as_ref() {
+            Some(ContextMenuState::TableCell {
+                table_block_id,
+                cell,
+                ..
+            }) => Some((*table_block_id, *cell)),
             _ => None,
         }
     }
@@ -909,6 +959,285 @@ impl Editor {
         }
     }
 
+    pub(super) fn on_insert_table_column_left(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Column {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.insert_table_column(&table_block, selection.index, cx);
+    }
+
+    pub(super) fn on_insert_table_column_right(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Column {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.insert_table_column(&table_block, selection.index + 1, cx);
+    }
+
+    pub(super) fn on_insert_table_row_above(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Row {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        // Visual index 0 is the header; "above" inserts the new body row
+        // directly after the header (body index 0). For other rows, the new
+        // row goes before the current body row.
+        let body_row_index = selection.index.saturating_sub(1);
+        self.insert_table_row(&table_block, body_row_index, cx);
+    }
+
+    pub(super) fn on_insert_table_row_below(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        if selection.kind != TableAxisKind::Row {
+            return;
+        }
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        // "Below" the header (visual 0) lands after body row 0; below body row
+        // `n` lands after body row `n-1`. Saturating_sub keeps the header case
+        // correct without underflow.
+        let body_row_index = selection.index.saturating_sub(1) + 1;
+        self.insert_table_row(&table_block, body_row_index, cx);
+    }
+
+    pub(super) fn on_delete_table(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self.active_axis_menu_selection() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(selection.table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.delete_table(&table_block, cx);
+    }
+
+    /// Keyboard-shortcut handler for deleting the table that owns the focused
+    /// cell. No-op when the focus is not inside a table cell.
+    pub(super) fn on_delete_table_shortcut(
+        &mut self,
+        _: &DeleteTable,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(focused_id) = self.focused_edit_target_entity_id(window, cx) else {
+            return;
+        };
+        let Some(binding) = self.table_cell_binding(focused_id) else {
+            return;
+        };
+        let table_block = binding.table_block;
+        self.prepare_undo_capture(
+            crate::wysiwyg::components::UndoCaptureKind::NonCoalescible,
+            cx,
+        );
+        self.delete_table(&table_block, cx);
+        self.finalize_pending_undo_capture(cx);
+    }
+
+    // ---- Cell context-menu handlers ----
+    // These mirror the axis-menu handlers above but resolve the target table
+    // and row/column indices from the active cell menu rather than an axis
+    // selection. `cell.row` is a visual index (0 = header, 1.. = body rows).
+
+    pub(super) fn on_cell_insert_row_above(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let body_row_index = cell.row.saturating_sub(1);
+        self.insert_table_row(&table_block, body_row_index, cx);
+    }
+
+    pub(super) fn on_cell_insert_row_below(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        let body_row_index = cell.row.saturating_sub(1) + 1;
+        self.insert_table_row(&table_block, body_row_index, cx);
+    }
+
+    pub(super) fn on_cell_insert_column_left(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.insert_table_column(&table_block, cell.column, cx);
+    }
+
+    pub(super) fn on_cell_insert_column_right(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.insert_table_column(&table_block, cell.column + 1, cx);
+    }
+
+    pub(super) fn on_cell_delete_row(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        let row_count = table_block
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .map(|table| table.rows.len());
+        self.close_context_menu(cx);
+        if cell.row == 0 {
+            if row_count == Some(0) {
+                self.delete_table(&table_block, cx);
+            } else {
+                self.delete_table_header_row(&table_block, cx);
+            }
+        } else {
+            self.delete_table_row(&table_block, cell.row - 1, cx);
+        }
+    }
+
+    pub(super) fn on_cell_delete_column(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        let column_count = table_block
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .map(|table| table.column_count());
+        self.close_context_menu(cx);
+        if column_count == Some(1) {
+            self.delete_table(&table_block, cx);
+        } else {
+            self.delete_table_column(&table_block, cell.column, cx);
+        }
+    }
+
+    pub(super) fn on_cell_delete_table(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((table_block_id, _cell)) = self.active_cell_menu_context() else {
+            return;
+        };
+        let Some(table_block) = self.table_block_by_id(table_block_id, cx) else {
+            return;
+        };
+        self.close_context_menu(cx);
+        self.delete_table(&table_block, cx);
+    }
+
+    /// Builds the horizontal divider used between groups of table axis/cell
+    /// menu items.
+    fn separator_item(theme: &Theme) -> AnyElement {
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        div()
+            .mx(px(d.menu_separator_margin_x))
+            .my(px(d.menu_separator_margin_y))
+            .h(px(d.menu_separator_height))
+            .bg(c.dialog_border)
+            .into_any_element()
+    }
+
     fn render_axis_menu_item(
         theme: &Theme,
         id: &'static str,
@@ -1131,6 +1460,30 @@ impl Editor {
                             .into_any_element(),
                         Self::render_axis_menu_item(
                             theme,
+                            "table-axis-insert-column-left",
+                            s.table_axis_insert_column_left.clone(),
+                            true,
+                            false,
+                            Self::on_insert_table_column_left,
+                            cx,
+                        ),
+                        Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-insert-column-right",
+                            s.table_axis_insert_column_right.clone(),
+                            true,
+                            false,
+                            Self::on_insert_table_column_right,
+                            cx,
+                        ),
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border)
+                            .into_any_element(),
+                        Self::render_axis_menu_item(
+                            theme,
                             "table-axis-move-column-left",
                             s.table_axis_move_column_left.clone(),
                             selection.index > 0,
@@ -1162,6 +1515,21 @@ impl Editor {
                             true,
                             true,
                             Self::on_delete_table_column,
+                            cx,
+                        ),
+                        div()
+                            .mx(px(d.menu_separator_margin_x))
+                            .my(px(d.menu_separator_margin_y))
+                            .h(px(d.menu_separator_height))
+                            .bg(c.dialog_border)
+                            .into_any_element(),
+                        Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-delete-table-column",
+                            s.table_delete.clone(),
+                            true,
+                            true,
+                            Self::on_delete_table,
                             cx,
                         ),
                     ],
@@ -1204,6 +1572,32 @@ impl Editor {
                         }
                         items.push(Self::render_axis_menu_item(
                             theme,
+                            "table-axis-insert-row-above",
+                            s.table_axis_insert_row_above.clone(),
+                            true,
+                            false,
+                            Self::on_insert_table_row_above,
+                            cx,
+                        ));
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-insert-row-below",
+                            s.table_axis_insert_row_below.clone(),
+                            true,
+                            false,
+                            Self::on_insert_table_row_below,
+                            cx,
+                        ));
+                        items.push(
+                            div()
+                                .mx(px(d.menu_separator_margin_x))
+                                .my(px(d.menu_separator_margin_y))
+                                .h(px(d.menu_separator_height))
+                                .bg(c.dialog_border)
+                                .into_any_element(),
+                        );
+                        items.push(Self::render_axis_menu_item(
+                            theme,
                             "table-axis-move-row-up",
                             s.table_axis_move_row_up.clone(),
                             selection.index > 0,
@@ -1240,6 +1634,23 @@ impl Editor {
                             Self::on_delete_table_row,
                             cx,
                         ));
+                        items.push(
+                            div()
+                                .mx(px(d.menu_separator_margin_x))
+                                .my(px(d.menu_separator_margin_y))
+                                .h(px(d.menu_separator_height))
+                                .bg(c.dialog_border)
+                                .into_any_element(),
+                        );
+                        items.push(Self::render_axis_menu_item(
+                            theme,
+                            "table-axis-delete-table-row",
+                            s.table_delete.clone(),
+                            true,
+                            true,
+                            Self::on_delete_table,
+                            cx,
+                        ));
                         items
                     }
                 };
@@ -1260,6 +1671,121 @@ impl Editor {
                         .child(
                             div()
                                 .id("table-axis-context-menu-panel")
+                                .absolute()
+                                .left(position.x)
+                                .top(position.y)
+                                .w(px(d.context_menu_axis_panel_width))
+                                .p(px(d.menu_panel_padding))
+                                .flex()
+                                .flex_col()
+                                .gap(px(d.menu_panel_gap))
+                                .bg(c.dialog_surface)
+                                .border(px(d.dialog_border_width))
+                                .border_color(c.dialog_border)
+                                .rounded(px(d.menu_panel_radius))
+                                .shadow_lg()
+                                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .children(items),
+                        )
+                        .into_any_element(),
+                )
+            }
+            ContextMenuState::TableCell {
+                position,
+                table_block_id,
+                ..
+            } => {
+                let Some(table_block) = self.table_block_by_id(*table_block_id, cx) else {
+                    return None;
+                };
+                let table = table_block.read(cx).record.table.clone();
+                let column_count = table.as_ref().map(|t| t.column_count()).unwrap_or(1);
+
+                let mut items: Vec<AnyElement> = Vec::new();
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-insert-row-above",
+                    s.table_axis_insert_row_above.clone(),
+                    true,
+                    false,
+                    Self::on_cell_insert_row_above,
+                    cx,
+                ));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-insert-row-below",
+                    s.table_axis_insert_row_below.clone(),
+                    true,
+                    false,
+                    Self::on_cell_insert_row_below,
+                    cx,
+                ));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-delete-row",
+                    s.table_axis_delete_row.clone(),
+                    true,
+                    true,
+                    Self::on_cell_delete_row,
+                    cx,
+                ));
+                items.push(Self::separator_item(theme));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-insert-column-left",
+                    s.table_axis_insert_column_left.clone(),
+                    true,
+                    false,
+                    Self::on_cell_insert_column_left,
+                    cx,
+                ));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-insert-column-right",
+                    s.table_axis_insert_column_right.clone(),
+                    true,
+                    false,
+                    Self::on_cell_insert_column_right,
+                    cx,
+                ));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-delete-column",
+                    s.table_axis_delete_column.clone(),
+                    column_count > 1,
+                    true,
+                    Self::on_cell_delete_column,
+                    cx,
+                ));
+                items.push(Self::separator_item(theme));
+                items.push(Self::render_axis_menu_item(
+                    theme,
+                    "table-cell-delete-table",
+                    s.table_delete.clone(),
+                    true,
+                    true,
+                    Self::on_cell_delete_table,
+                    cx,
+                ));
+
+                Some(
+                    div()
+                        .id("table-cell-context-menu-overlay")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(Self::on_dismiss_context_menu_overlay),
+                        )
+                        .child(
+                            div()
+                                .id("table-cell-context-menu-panel")
                                 .absolute()
                                 .left(position.x)
                                 .top(position.y)

@@ -147,6 +147,37 @@ impl TableData {
         }
     }
 
+    /// Inserts one empty body row before `body_row_index`. An index equal to the
+    /// current body-row count appends at the end. Out-of-range indices are
+    /// clamped to the end so callers never panic.
+    pub fn insert_row(&mut self, body_row_index: usize) {
+        self.normalize_shape();
+        let columns = self.column_count();
+        let new_row = (0..columns)
+            .map(|_| InlineTextTree::plain(String::new()))
+            .collect::<Vec<_>>();
+        let insert_at = body_row_index.min(self.rows.len());
+        // `Vec::insert` panics only when `insert_at > len`, which we have just
+        // clamped, so this is safe.
+        self.rows.insert(insert_at, new_row);
+    }
+
+    /// Inserts one empty column before `col_index`. An index equal to the
+    /// current column count appends at the end. Out-of-range indices are
+    /// clamped to the end. `alignment` seeds the new column's alignment slot.
+    pub fn insert_column(&mut self, col_index: usize, alignment: TableColumnAlignment) {
+        self.normalize_shape();
+        // After normalize_shape, header.len() == alignments.len() == column_count().
+        let insert_at = col_index.min(self.column_count());
+        self.header
+            .insert(insert_at, InlineTextTree::plain(String::new()));
+        self.alignments.insert(insert_at, alignment);
+        for row in &mut self.rows {
+            let at = insert_at.min(row.len());
+            row.insert(at, InlineTextTree::plain(String::new()));
+        }
+    }
+
     /// Sets the alignment of one column if it exists.
     pub fn set_column_alignment(&mut self, column: usize, alignment: TableColumnAlignment) {
         self.normalize_shape();
@@ -1147,5 +1178,67 @@ mod tests {
         assert_eq!(table.column_count(), 1);
         table.remove_column(0);
         assert_eq!(table.column_count(), 1);
+    }
+
+    #[test]
+    fn insert_row_at_middle_prepends_empty_cells() {
+        let mut table = parse_root_table_region(&[
+            "| A | B |".to_string(),
+            "| --- | --- |".to_string(),
+            "| 1 | 2 |".to_string(),
+            "| 3 | 4 |".to_string(),
+        ])
+        .expect("valid table");
+
+        // Insert before the second body row (visual row index 2 -> body index 1).
+        table.insert_row(1);
+        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows[0][0].serialize_markdown(), "1");
+        // Newly inserted row is empty and sits at body index 1.
+        assert_eq!(table.rows[1][0].serialize_markdown(), "");
+        assert_eq!(table.rows[1][1].serialize_markdown(), "");
+        assert_eq!(table.rows[2][0].serialize_markdown(), "3");
+    }
+
+    #[test]
+    fn insert_row_at_end_equivalent_to_append() {
+        let mut table = TableData::new_empty(1, 2);
+        // Appending at body_row_index == len.
+        table.insert_row(1);
+        assert_eq!(table.rows.len(), 2);
+        // Out-of-range index is clamped to the end.
+        table.insert_row(usize::MAX);
+        assert_eq!(table.rows.len(), 3);
+    }
+
+    #[test]
+    fn insert_column_at_middle_inserts_alignment_slot() {
+        let mut table = parse_root_table_region(&[
+            "| A | B |".to_string(),
+            "| --- | --- |".to_string(),
+            "| 1 | 2 |".to_string(),
+        ])
+        .expect("valid table");
+
+        table.insert_column(1, TableColumnAlignment::Center);
+        assert_eq!(table.column_count(), 3);
+        assert_eq!(table.alignments[1], TableColumnAlignment::Center);
+        // Existing content shifts right; the new column (index 1) is empty.
+        assert_eq!(table.header[0].serialize_markdown(), "A");
+        assert_eq!(table.header[1].serialize_markdown(), "");
+        assert_eq!(table.header[2].serialize_markdown(), "B");
+        assert_eq!(table.rows[0][0].serialize_markdown(), "1");
+        assert_eq!(table.rows[0][1].serialize_markdown(), "");
+        assert_eq!(table.rows[0][2].serialize_markdown(), "2");
+    }
+
+    #[test]
+    fn insert_column_at_end_equivalent_to_append() {
+        let mut table = TableData::new_empty(1, 2);
+        table.insert_column(2, TableColumnAlignment::Default);
+        assert_eq!(table.column_count(), 3);
+        // Out-of-range index is clamped to the end.
+        table.insert_column(usize::MAX, TableColumnAlignment::Default);
+        assert_eq!(table.column_count(), 4);
     }
 }

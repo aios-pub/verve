@@ -820,6 +820,10 @@ pub enum BlockEvent {
     RequestAppendTableColumn,
     /// Append one empty body row to a native table.
     RequestAppendTableRow,
+    /// Insert one empty body row below the focused table cell.
+    RequestInsertTableRowBelow,
+    /// Insert one empty column to the right of the focused table cell.
+    RequestInsertTableColumnRight,
     /// A native table axis handle was entered or left by the pointer.
     /// `hovered` distinguishes the two so the editor can ignore a leave
     /// that arrives after an adjacent handle has already taken the preview.

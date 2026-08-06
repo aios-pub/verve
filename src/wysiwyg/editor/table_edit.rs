@@ -214,6 +214,90 @@ impl Editor {
         cx.notify();
     }
 
+    /// Inserts one empty body row before `body_row_index` (visual row index
+    /// `body_row_index + 1`). Focus lands on the first cell of the new row.
+    pub(super) fn insert_table_row(
+        &mut self,
+        table_block: &Entity<Block>,
+        body_row_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        let started_local_capture = if self.pending_undo_capture.is_none() {
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            true
+        } else {
+            false
+        };
+        table.insert_row(body_row_index);
+        table_block.update(cx, move |block, _cx| {
+            block.record.table = Some(table.clone());
+        });
+        self.rebuild_table_runtimes(cx);
+        self.focus_table_cell_position(
+            table_block,
+            TableCellPosition {
+                row: body_row_index + 1,
+                column: 0,
+            },
+            cx,
+        );
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        if started_local_capture {
+            self.finalize_pending_undo_capture(cx);
+        }
+        cx.notify();
+    }
+
+    /// Inserts one empty column before `col_index`. Focus lands on the new
+    /// column's header cell. The new column inherits the alignment of the last
+    /// existing column (or `Default` when empty), matching `append_table_column`.
+    pub(super) fn insert_table_column(
+        &mut self,
+        table_block: &Entity<Block>,
+        col_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_table_record_from_runtime(table_block, cx);
+        let Some(mut table) = table_block.read(cx).record.table.clone() else {
+            return;
+        };
+        let started_local_capture = if self.pending_undo_capture.is_none() {
+            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
+            true
+        } else {
+            false
+        };
+        let alignment = table
+            .alignments
+            .last()
+            .copied()
+            .unwrap_or(TableColumnAlignment::Default);
+        table.insert_column(col_index, alignment);
+        table_block.update(cx, move |block, _cx| {
+            block.record.table = Some(table.clone());
+        });
+        self.rebuild_table_runtimes(cx);
+        self.focus_table_cell_position(
+            table_block,
+            TableCellPosition {
+                row: 0,
+                column: col_index,
+            },
+            cx,
+        );
+        self.mark_dirty(cx);
+        self.request_active_block_scroll_into_view(cx);
+        if started_local_capture {
+            self.finalize_pending_undo_capture(cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn preview_table_axis(
         &mut self,
         table_block_id: EntityId,
@@ -558,6 +642,18 @@ impl Editor {
             self.finalize_pending_undo_capture(cx);
         }
         cx.notify();
+    }
+
+    /// Explicit "delete the whole table" action surfaced from the row/column
+    /// axis menu, the cell context menu, and the `DeleteTable` keyboard
+    /// shortcut. Thin wrapper over [`remove_table_block`], kept as a named
+    /// entry point so menu/shortcut handlers stay self-documenting.
+    pub(super) fn delete_table(
+        &mut self,
+        table_block: &Entity<Block>,
+        cx: &mut Context<Self>,
+    ) {
+        self.remove_table_block(table_block, cx);
     }
 
     /// Removes the table block entirely, leaving an empty paragraph in its place

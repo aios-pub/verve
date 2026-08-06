@@ -72,6 +72,9 @@ actions!(
         InsertImage,
         InsertHorizontalRule,
         InsertTable,
+        InsertTableRowBelow,
+        InsertTableColumnRight,
+        DeleteTable,
         Find,
         FindNext,
         FindPrevious,
@@ -201,6 +204,9 @@ pub enum ShortcutCommand {
     InsertImage,
     InsertHorizontalRule,
     InsertTable,
+    InsertTableRowBelow,
+    InsertTableColumnRight,
+    DeleteTable,
     Find,
     FindNext,
     FindPrevious,
@@ -666,6 +672,30 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::InsertTableRowBelow,
+        id: "insert_table_row_below",
+        category: ShortcutCategory::Markdown,
+        // Alt-Enter mirrors the spreadsheet convention for "insert row"; kept
+        // distinct from cmd-enter (ExitCodeBlock) and ctrl-enter to avoid
+        // binding collisions inside the BlockEditor context.
+        default_keys: &["alt-enter", "ctrl-alt-enter"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::InsertTableColumnRight,
+        id: "insert_table_column_right",
+        category: ShortcutCategory::Markdown,
+        default_keys: &["alt-shift-enter", "ctrl-alt-shift-enter"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::DeleteTable,
+        id: "delete_table",
+        category: ShortcutCategory::Markdown,
+        default_keys: &["cmd-shift-backspace", "ctrl-shift-backspace"],
+        context: BLOCK_CONTEXT,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::Find,
         id: "find",
         category: ShortcutCategory::Markdown,
@@ -846,6 +876,9 @@ pub fn shortcut_label(id: &str) -> &'static str {
         "insert_image" => "Insert image",
         "insert_horizontal_rule" => "Horizontal rule",
         "insert_table" => "Insert table",
+        "insert_table_row_below" => "Insert table row",
+        "insert_table_column_right" => "Insert table column",
+        "delete_table" => "Delete table",
         "find" => "Find",
         "find_next" => "Find next",
         "find_previous" => "Find previous",
@@ -1094,6 +1127,13 @@ fn key_binding_for(
             KeyBinding::new(key, InsertHorizontalRule, context)
         }
         ShortcutCommand::InsertTable => KeyBinding::new(key, InsertTable, context),
+        ShortcutCommand::InsertTableRowBelow => {
+            KeyBinding::new(key, InsertTableRowBelow, context)
+        }
+        ShortcutCommand::InsertTableColumnRight => {
+            KeyBinding::new(key, InsertTableColumnRight, context)
+        }
+        ShortcutCommand::DeleteTable => KeyBinding::new(key, DeleteTable, context),
         ShortcutCommand::Find => KeyBinding::new(key, Find, context),
         ShortcutCommand::FindNext => KeyBinding::new(key, FindNext, context),
         ShortcutCommand::FindPrevious => KeyBinding::new(key, FindPrevious, context),

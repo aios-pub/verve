@@ -17,7 +17,7 @@ use crate::wysiwyg::components::{
     ConvertToNumberedList, ConvertToParagraph, ConvertToQuote, ConvertToTaskList, Copy, Cut,
     Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
     Heading2, Heading3, Heading4, Heading5, Heading6, HighlightSelection, Home, IndentBlock,
-    InsertLink, ItalicSelection, MoveLeft,
+    InsertLink, InsertTableColumnRight, InsertTableRowBelow, ItalicSelection, MoveLeft,
     MoveRight, Newline, OutdentBlock, Paste, PastePlainText, SelectAll, SelectEnd, SelectHome,
     SelectLeft,
     SelectRight, StrikethroughSelection, SubscriptSelection, SuperscriptSelection,
@@ -1794,6 +1794,32 @@ impl Block {
     ) {
         if self.kind() == BlockKind::Table {
             cx.emit(BlockEvent::RequestAppendTableRow);
+        }
+    }
+
+    /// Keyboard shortcut for inserting a row below the focused cell. Only
+    /// active while editing a table cell; other blocks ignore it.
+    pub(crate) fn on_insert_table_row_below(
+        &mut self,
+        _: &InsertTableRowBelow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_table_cell() {
+            cx.emit(BlockEvent::RequestInsertTableRowBelow);
+        }
+    }
+
+    /// Keyboard shortcut for inserting a column to the right of the focused
+    /// cell. Only active while editing a table cell.
+    pub(crate) fn on_insert_table_column_right(
+        &mut self,
+        _: &InsertTableColumnRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_table_cell() {
+            cx.emit(BlockEvent::RequestInsertTableColumnRight);
         }
     }
 

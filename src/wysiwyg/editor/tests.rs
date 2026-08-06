@@ -3260,3 +3260,57 @@ async fn toggle_view_mode_preserves_callout_table_cell_position(cx: &mut TestApp
         assert_eq!(editor.pending_focus, Some(restored_cell.entity_id()));
     });
 }
+
+#[gpui::test]
+async fn insert_table_row_at_position_grows_body(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        // Insert before the second body row (body index 1).
+        editor.insert_table_row(&table, 1, cx);
+
+        let record = table.read(cx).record.table.as_ref().expect("table record");
+        assert_eq!(record.rows.len(), 3);
+        // Original rows shift down; the inserted row sits at body index 1 empty.
+        assert_eq!(record.rows[0][0].serialize_markdown(), "1");
+        assert_eq!(record.rows[1][0].serialize_markdown(), "");
+        assert_eq!(record.rows[2][0].serialize_markdown(), "3");
+    });
+}
+
+#[gpui::test]
+async fn insert_table_column_at_position_grows_header_and_body(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        // Insert before column 1 (between A and B).
+        editor.insert_table_column(&table, 1, cx);
+
+        let record = table.read(cx).record.table.as_ref().expect("table record");
+        assert_eq!(record.column_count(), 3);
+        assert_eq!(record.header[0].serialize_markdown(), "A");
+        assert_eq!(record.header[1].serialize_markdown(), "");
+        assert_eq!(record.header[2].serialize_markdown(), "B");
+        assert_eq!(record.rows[0][2].serialize_markdown(), "2");
+    });
+}
+
+#[gpui::test]
+async fn delete_table_removes_block_and_leaves_paragraph(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        editor.delete_table(&table, cx);
+
+        let roots = editor.document.root_blocks();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].read(cx).kind(), BlockKind::Paragraph);
+        assert_eq!(roots[0].read(cx).display_text(), "");
+    });
+}

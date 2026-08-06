@@ -198,6 +198,8 @@ impl Editor {
                 | BlockEvent::ToggleTaskChecked
                 | BlockEvent::RequestAppendTableColumn
                 | BlockEvent::RequestAppendTableRow
+                | BlockEvent::RequestInsertTableRowBelow
+                | BlockEvent::RequestInsertTableColumnRight
                 | BlockEvent::RequestDelete
         )
     }
@@ -2423,6 +2425,32 @@ impl Editor {
                     self.append_table_row(&block, cx);
                     self.finalize_pending_undo_capture(cx);
                 }
+            }
+            BlockEvent::RequestInsertTableRowBelow => {
+                // Emitted by a focused table cell. Resolve the owning table and
+                // the cell's visual row to compute the new row's body index.
+                let Some(binding) = self.table_cell_binding(block.entity_id()) else {
+                    return;
+                };
+                let body_row_index = binding.position.row.saturating_sub(1) + 1;
+                self.prepare_undo_capture(
+                    crate::wysiwyg::components::UndoCaptureKind::NonCoalescible,
+                    cx,
+                );
+                self.insert_table_row(&binding.table_block, body_row_index, cx);
+                self.finalize_pending_undo_capture(cx);
+            }
+            BlockEvent::RequestInsertTableColumnRight => {
+                let Some(binding) = self.table_cell_binding(block.entity_id()) else {
+                    return;
+                };
+                let column = binding.position.column + 1;
+                self.prepare_undo_capture(
+                    crate::wysiwyg::components::UndoCaptureKind::NonCoalescible,
+                    cx,
+                );
+                self.insert_table_column(&binding.table_block, column, cx);
+                self.finalize_pending_undo_capture(cx);
             }
             BlockEvent::RequestTableAxisPreview {
                 kind,

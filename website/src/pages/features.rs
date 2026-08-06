@@ -212,7 +212,7 @@ fn PageHeader(eyebrow: &'static str, children: Children) -> impl IntoView {
                 <span class="text-xs font-semibold uppercase tracking-[0.2em] text-bolt-400">
                     {eyebrow}
                 </span>
-                <h1 class="mt-2 text-4xl font-extrabold leading-[1.3] tracking-tight text-ink-50 sm:text-5xl">
+                <h1 class="mt-2 text-4xl font-extrabold leading-[1.3] tracking-tight text-ink-100 sm:text-5xl">
                     {children()}
                 </h1>
             </div>

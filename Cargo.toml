@@ -60,7 +60,11 @@ mock & capture, notes, hosts, and JSON tools in a single native window."""
 name = "Verve"
 manufacturer = "Verve"
 upgrade-guid = "12345678-1234-1234-1234-123456789012"
-license = "LICENSE"
+# No `license` field: WiX requires an RTF file for the EULA dialog, but the
+# installer uses WixUI_FeatureTree (no license dialog), so the field is
+# unnecessary. Pointing it at the plain-text LICENSE file made candle fail
+# with exit code 9. AGPL-3.0 still ships in the LICENSE file alongside the
+# binary and in the .zip artifact.
 icon = "assets/icons/verve.ico"
 
 # Standalone document-sharing server binary for cloud/headless deployment.

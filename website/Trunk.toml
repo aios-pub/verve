@@ -17,7 +17,11 @@ address = "127.0.0.1"
 port = 8080
 
 [[hooks]]
-# Build Tailwind CSS before Trunk bundles.
-stage = "build"
+# Build Tailwind CSS before Trunk's asset pipeline scans index.html.
+# `pre_build` (not `build`) is required: index.html references
+# public/tailwind.css via data-trunk rel="copy-file", and Trunk canonicalizes
+# that path at pipeline startup — i.e. before `build` stage hooks run. The file
+# is gitignored, so without a pre_build hook a clean checkout fails to build.
+stage = "pre_build"
 command = "sh"
 command_arguments = ["-c", "npx @tailwindcss/cli -i style/input.css -o public/tailwind.css --minify"]

@@ -1,31 +1,38 @@
 # Verve — cross-platform release pipeline.
 #
-# Triggers on version tags (v*) or manual dispatch. Runs clippy + tests first
-# (gating), then builds native packages for macOS (universal .dmg), Linux
-# (.deb + tarball for x86_64 + aarch64), and Windows (.msi + .zip for x86_64 +
-# aarch64), then creates a GitHub Release with all artifacts, SHA256 checksums,
-# auto-generated release notes, and a latest.json update manifest for the
-# in-app auto-updater.
+# Triggers on every push to main, on pull requests to main, or via manual
+# dispatch. On push to main it auto-bumps the patch version (reads the last
+# release's tag and does patch+1; falls back to Cargo.toml's version if no
+# release exists yet) and publishes a new GitHub Release. On pull_request it
+# runs only the clippy + tests gates — no packaging or release — so PR checks
+# are cheap and never duplicate the main-branch run.
+#
+# Before publishing: clippy + tests run as hard gates; build jobs then produce
+# native packages for macOS (universal .dmg), Linux (.deb + tarball for x86_64
+# + aarch64), and Windows (.msi + .zip for x86_64 + aarch64); finally a
+# GitHub Release is created with all artifacts, SHA256 checksums, auto-generated
+# release notes, and a latest.json update manifest for the in-app auto-updater.
 #
 # Build jobs use `continue-on-error: true` so that a failure on one platform
 # (e.g. Windows ARM64) does NOT block the release of other platforms. The
 # release job runs as long as clippy + tests pass.
 #
-# Tagging a release:
-#   git tag v0.2.0 && git push origin v0.2.0
+# concurrency.cancel-in-progress: false serializes same-branch runs, which
+# guarantees the auto-increment reads the latest tag without a race.
 
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (without leading v)"
-        required: true
-        default: "0.3.0"
+        description: "Version (without leading v); 'auto' to auto-bump patch"
+        required: false
+        default: "auto"
 
 permissions:
   contents: write
@@ -34,7 +41,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
 
-# Prevent concurrent releases for the same tag.
+# Prevent concurrent releases for the same ref. cancel-in-progress: false is
+# required so the auto-increment step in `meta` reads the latest tag after the
+# previous run has created it — otherwise two near-simultaneous pushes could
+# compute the same version and collide.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -47,17 +57,47 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
+      publish: ${{ steps.ver.outputs.publish }}
     steps:
+      - uses: actions/checkout@v4
+
       - id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          EVENT="${{ github.event_name }}"
+
+          if [ "$EVENT" = "workflow_dispatch" ] && \
+             [ "${{ github.event.inputs.version }}" != "auto" ]; then
             V="${{ github.event.inputs.version }}"
+          elif [ "$EVENT" = "pull_request" ]; then
+            # PR runs never publish; the value here is unused downstream.
+            V="0.0.0"
           else
-            V="${GITHUB_REF#refs/tags/v}"
+            # push to main: auto-bump patch off the most recent release tag.
+            # Falls back to Cargo.toml's version on the very first release.
+            LATEST_TAG=$(gh release view --repo "${{ github.repository }}" \
+              --json tagName -q '.tagName' 2>/dev/null || echo "")
+            if [ -z "$LATEST_TAG" ]; then
+              V=$(grep -E '^version = "' Cargo.toml | head -1 | \
+                  sed -E 's/version = "([^"]*)".*/\1/')
+            else
+              BASE="${LATEST_TAG#v}"          # strip leading v
+              MAJOR=${BASE%%.*}; REST=${BASE#*.}
+              MINOR=${REST%%.*}
+              PATCH=${REST#*.}; PATCH=${PATCH%%-*}   # drop any -pre suffix
+              PATCH=$((PATCH + 1))
+              V="${MAJOR}.${MINOR}.${PATCH}"
+            fi
           fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "tag=v$V" >> "$GITHUB_OUTPUT"
-          echo "Release version: $V"
+
+          echo "version=$V"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$V"     >> "$GITHUB_OUTPUT"
+          # Anything that is not a pull_request publishes (push or dispatch).
+          PUBLISH="true"
+          if [ "$EVENT" = "pull_request" ]; then PUBLISH="false"; fi
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Release version: $V (publish=$PUBLISH)"
 
   # ─── Clippy (gate: no warnings before release) ─────────────────────────────
   clippy:
@@ -134,6 +174,7 @@ jobs:
   # ─── macOS (universal binary: aarch64 + x86_64) ────────────────────────────
   build-macos:
     needs: [meta, clippy, tests]
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 60
     continue-on-error: true
@@ -223,6 +264,7 @@ jobs:
   # ─── Linux x86_64 ──────────────────────────────────────────────────────────
   build-linux-x86_64:
     needs: [meta, clippy, tests]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     continue-on-error: true
@@ -314,6 +356,7 @@ jobs:
   # Label: ubuntu-24.04-arm (no `ubuntu-latest-arm` alias exists yet).
   build-linux-aarch64:
     needs: [meta, clippy, tests]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     continue-on-error: true
@@ -387,6 +430,7 @@ jobs:
   # ─── Windows x86_64 ────────────────────────────────────────────────────────
   build-windows-x86_64:
     needs: [meta, clippy, tests]
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 60
     continue-on-error: true
@@ -423,6 +467,8 @@ jobs:
         run: cargo build --release --bin verve
 
       - name: Build verve-server
+        # verve-server.exe must exist in CargoTargetBinDir before running
+        # `cargo wix`, because wix/main.wxs references it as binary1.
         run: cargo build --release --bin verve-server
 
       - name: Create .msi installer
@@ -432,7 +478,7 @@ jobs:
           if (-not (Test-Path "wix/main.wxs")) {
             cargo wix init --bin verve --install-version ${{ needs.meta.outputs.version }}
           }
-          cargo wix --no-build -o "target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi"
+          cargo wix --nocapture --no-build -o "target/Verve-${{ needs.meta.outputs.version }}-windows-x86_64.msi"
 
       - name: Create .zip
         shell: pwsh
@@ -471,6 +517,7 @@ jobs:
   # failure here does NOT block the release of other platforms.
   build-windows-aarch64:
     needs: [meta, clippy, tests]
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 60
     continue-on-error: true
@@ -535,6 +582,7 @@ jobs:
   # ─── Generate release notes from git log ───────────────────────────────────
   generate-notes:
     needs: meta
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -614,7 +662,7 @@ jobs:
       - build-linux-aarch64
       - build-windows-x86_64
       - build-windows-aarch64
-    if: always() && needs.clippy.result == 'success' && needs.tests.result == 'success'
+    if: always() && github.event_name != 'pull_request' && needs.clippy.result == 'success' && needs.tests.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -641,7 +689,7 @@ jobs:
           find artifacts -type f \
             \( -name "*.dmg" -o -name "*.deb" -o -name "*.tar.gz" \
                -o -name "*.msi" -o -name "*.zip" -o -name "*.sha256" \
-               -o -name "verve-server-macos" -o -name "verve-server-windows.exe" \) \
+               -o -name "verve-server-macos" \) \
             -exec cp {} release/ \;
           echo "=== Available release artifacts ==="
           ls -la release/ || echo "WARNING: No artifacts found!"
@@ -701,6 +749,7 @@ jobs:
   # ─── Validate release assets (non-blocking) ────────────────────────────────
   validate:
     needs: [meta, release]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true

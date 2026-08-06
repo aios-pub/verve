@@ -1,8 +1,8 @@
 //! SSH host configuration and credential data models.
 //!
 //! A [`SshHost`] describes everything needed to establish an SSH connection
-//! except the secret (password / key passphrase) — that lives in the OS
-//! keychain or encrypted vault, referenced by [`CredentialRef`]. This keeps the
+//! except the secret (password / key passphrase) — that lives in the
+//! device-key-encrypted vault (see [`super::credentials`]). This keeps the
 //! host list file (`ssh_hosts.json`) safe to share or version-control.
 
 use serde::{Deserialize, Serialize};
@@ -36,27 +36,6 @@ impl SshAuthType {
         SshAuthType::PrivateKey,
         SshAuthType::Agent,
     ];
-}
-
-/// Where a secret is stored.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum CredentialSource {
-    /// OS keychain (macOS Keychain / Windows Credential Manager / Linux libsecret).
-    #[default]
-    Keychain,
-    /// Encrypted local vault (AES-256-GCM + Argon2).
-    Vault,
-}
-
-/// A reference to a stored secret. The actual secret value is NOT stored here —
-/// only the lookup key and where to find it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialRef {
-    /// Lookup key, e.g. `"host_id:password"` or `"host_id:key_passphrase"`.
-    pub key: String,
-    /// Where the secret lives.
-    pub source: CredentialSource,
 }
 
 /// The role of an SSH host in the connection topology.
@@ -100,9 +79,6 @@ pub struct SshHost {
     /// Path to private key file (PrivateKey auth only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
-    /// Reference to the stored password or key passphrase.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<CredentialRef>,
     /// The role of this host in the topology (direct vs bastion/gateway).
     #[serde(default)]
     pub host_type: SshHostType,
@@ -209,7 +185,6 @@ impl SshHost {
             username: String::new(),
             auth_type: SshAuthType::Password,
             key_path: None,
-            credential: None,
             host_type: SshHostType::Direct,
             bastion_id: None,
             bastion_target_override: None,
@@ -238,15 +213,6 @@ impl SshHost {
     pub fn has_bastion(&self) -> bool {
         self.bastion_id.is_some()
     }
-
-    /// The credential lookup key for the password or key passphrase.
-    pub fn cred_key(&self) -> String {
-        match self.auth_type {
-            SshAuthType::Password => format!("{}:password", self.id),
-            SshAuthType::PrivateKey => format!("{}:key_passphrase", self.id),
-            SshAuthType::Agent => String::new(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -271,12 +237,6 @@ mod tests {
         h2.username = "root".into();
         h2.port = 2222;
         assert_eq!(h2.address_summary(), "root ssh");
-    }
-
-    #[test]
-    fn cred_key_for_password_auth() {
-        let h = SshHost::new("Test", "10.0.0.1");
-        assert_eq!(h.cred_key(), format!("{}:password", h.id));
     }
 
     #[test]

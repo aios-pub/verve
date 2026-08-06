@@ -141,7 +141,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 | **Zmodem** — in-terminal `rz` / `sz` file transfer | ❌ | 💎 |
 | **SSH local port forwarding** (`-L`, one-click expose an internal service) | ❌ | 💎 |
 | TOFU `known_hosts` verification (refuses host-key mismatch) | ❌ | 💎 |
-| **Secure credential storage** — OS keychain + AES-256-GCM / Argon2id encrypted vault | ❌ | 💎 |
+| **Secure credential storage** — device-key encrypted vault (AES-256-GCM), no keychain prompts | ❌ | 💎 |
 | **Docker** — list / start / stop / restart / remove containers, list & prune images | ❌ | 💎 |
 | Docker — `docker logs -f` log streaming, `docker exec -it` (real PTY, multi-tab) | ❌ | 💎 |
 | Docker — remote daemon via `DOCKER_HOST` or **SSH tunnel** (`docker system dial-stdio`) | ❌ | 💎 |
@@ -317,7 +317,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - Paste (Cmd/Ctrl+V) · terminal text copy
 - **Jump host / bastion** (ProxyJump, chained `direct-tcpip` tunnels)
 - TOFU `known_hosts` — first-seen records, re-connect compares, mismatch refused
-- Host card management with **secure credential storage** (OS keychain + AES-256-GCM / Argon2id encrypted vault)
+- Host card management with **secure credential storage** (device-key encrypted vault, AES-256-GCM — no OS keychain prompts, no master password)
 
 > *SSH Agent authentication and remote (`-R`) port forwarding are not implemented yet. This is an SSH client for triage, not a full iTerm2 replacement.*
 
@@ -522,6 +522,18 @@ Verve is available in two editions under different licenses:
 - **Pro Edition** — proprietary software under the **Verve Pro License**. Source code is **not open**. Without the author's written permission, the following are **prohibited**: reverse engineering / decompiling / disassembling; copying / modifying / redistributing the software or derivatives; using it for commercial resale or hosted services. The Pro Edition is obtained via sponsorship. For commercial licensing or team plans, contact the author via WeChat above.
 
 The full text of the AGPL-3.0 is in the [`LICENSE`](LICENSE) file at the repository root.
+
+---
+
+## 🔐 Security & Credentials
+
+Verve never stores secrets (SSH passwords, private-key passphrases) in plaintext host config files. Each secret lives in a **device-key encrypted vault** (`~/.verve/ssh_vault.bin`, AES-256-GCM), sealed with an auto-generated per-device key (`~/.verve/device.key`, mode `0600`).
+
+This design gives you a **Termius-like experience: no master password to remember, and no per-access OS keychain authorization dialog** — secrets stay encrypted at rest and isolated per OS user. (Earlier keychain-based builds prompted repeatedly because ad-hoc signatures invalidate the "Always Allow" grant on every rebuild; the vault design sidesteps the keychain entirely.)
+
+Per-module credential sources: SSH uses the encrypted vault; Docker / Kubernetes in SSH-tunnel mode reuse the SSH host's vault secret (tunnels are cached, so the vault is read at most once per host/cluster per app run); Git tokens are kept in memory only and never persisted. Kubernetes API tokens (token / client-cert / basic-auth) are currently stored as plaintext in `kube_clusters.json` and are not yet integrated with the vault.
+
+See [`docs/security.md`](docs/security.md) for the full security model, threat boundary, and migration notes.
 
 ---
 

@@ -1,7 +1,7 @@
 //! Persistence for SSH host configurations (`~/.verve/ssh_hosts.json`).
 //!
 //! Only non-secret data is stored here. Passwords and key passphrases live in
-//! the OS keychain or encrypted vault (see [`super::credentials`]).
+//! the device-key-encrypted vault (see [`super::credentials`]).
 
 use std::fs;
 

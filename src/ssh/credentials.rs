@@ -1,153 +1,148 @@
-//! Unified credential storage interface.
+//! Unified credential storage interface (device-key encrypted vault).
 //!
-//! Secrets (passwords, key passphrases) are stored via one of two backends:
+//! Secrets (passwords, key passphrases) are stored in `~/.verve/ssh_vault.bin`,
+//! an AES-256-GCM encrypted file sealed with a per-device key
+//! (`~/.verve/device.key`). This mirrors the approach used by commercial SSH
+//! clients (e.g. Termius): **no master password to remember and no OS
+//! keychain authorization prompt**, while still keeping secrets encrypted at
+//! rest and isolated per OS user via filesystem permissions.
 //!
-//! - **Keychain** (default): OS-native secure storage via the `keyring` crate.
-//!   macOS Keychain / Windows Credential Manager / Linux libsecret.
-//! - **Vault**: encrypted local file (`ssh_vault.bin`) using AES-256-GCM +
-//!   Argon2. Used when keychain is unavailable or the user explicitly chose it.
+//! The vault lookup key for a secret is `"{host_id}:{kind}"`
+//! (e.g. `"abc123:password"`, `"abc123:key_passphrase"`). Host configuration
+//! files (`ssh_hosts.json`) store only non-sensitive data.
 //!
-//! The caller decides which backend to use via [`CredentialSource`]. The
-//! keyring `Entry` key is `"{host_id}:{kind}"` (e.g. `"abc123:password"`).
+//! # Caching
+//!
+//! The decrypted [`SecretMap`] is cached in process memory after the first
+//! access (see [`VAULT_CACHE`]) so the vault file is decrypted at most once
+//! per app run.
 
 use std::sync::{Arc, Mutex};
 
-use super::models::CredentialSource;
-use super::vault;
+use super::vault::{self, SecretMap, KEY_LEN};
 
-/// The service name used for keyring entries.
-const KEYRING_SERVICE: &str = "verve.ssh";
+/// In-memory cache of the decrypted vault (populated on first access).
+/// Holding the decrypted secrets in memory avoids re-reading/decrypting the
+/// vault on every SSH connection.
+static VAULT_CACHE: Mutex<Option<Arc<SecretMap>>> = Mutex::new(None);
 
-/// In-memory cache of the decrypted vault (populated on unlock). The vault
-/// master password is NOT stored here — only the decrypted secret map.
-static VAULT_CACHE: Mutex<Option<Arc<vault::SecretMap>>> = Mutex::new(None);
-
-/// The service prefix for keyring entries.
+/// The vault lookup key for a secret: `"{host_id}:{kind}"`.
 pub fn keyring_key(host_id: &str, kind: &str) -> String {
     format!("{host_id}:{kind}")
 }
 
-/// Store a secret in the OS keychain.
-pub fn store_keychain(host_id: &str, kind: &str, secret: &str) -> Result<(), String> {
-    let key = keyring_key(host_id, kind);
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
-    entry
-        .set_password(secret)
-        .map_err(|e| format!("keyring store: {e}"))
+/// Return the cached decrypted vault, loading + decrypting it on first access.
+///
+/// This is the single entry point for reading the vault; callers should never
+/// touch `VAULT_CACHE` directly.
+fn vault_map() -> Result<Arc<SecretMap>, String> {
+    let mut guard = VAULT_CACHE.lock().map_err(|e| format!("vault cache lock: {e}"))?;
+    if let Some(map) = guard.as_ref() {
+        return Ok(Arc::clone(map));
+    }
+    let key = vault::load_or_create_device_key()?;
+    let map = Arc::new(vault::load_vault(&key)?);
+    zeroize_key(key);
+    *guard = Some(Arc::clone(&map));
+    Ok(map)
 }
 
-/// Load a secret from the OS keychain.
-pub fn load_keychain(host_id: &str, kind: &str) -> Result<String, String> {
-    let key = keyring_key(host_id, kind);
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
-    entry
-        .get_password()
-        .map_err(|e| format!("keyring load: {e}"))
-}
-
-/// Delete a secret from the OS keychain (silently succeeds if not found).
-pub fn delete_keychain(host_id: &str, kind: &str) -> Result<(), String> {
-    let key = keyring_key(host_id, kind);
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, &key).map_err(|e| format!("keyring entry: {e}"))?;
-    let _ = entry.delete_credential();
-    Ok(())
-}
-
-/// Unlock the encrypted vault with a master password, caching the decrypted
-/// secret map in memory.
-pub fn unlock_vault(master_pw: &str) -> Result<(), String> {
-    let map = vault::load_vault(master_pw)?;
-    let mut guard = VAULT_CACHE.lock().unwrap();
+/// Replace the on-disk vault and refresh the in-memory cache atomically with
+/// respect to this process.
+fn save_and_cache(map: SecretMap) -> Result<(), String> {
+    let key = vault::load_or_create_device_key()?;
+    let result = vault::save_vault(&key, &map);
+    zeroize_key(key);
+    result?;
+    let mut guard = VAULT_CACHE.lock().map_err(|e| format!("vault cache lock: {e}"))?;
     *guard = Some(Arc::new(map));
     Ok(())
 }
 
-/// Lock the vault (clear the in-memory cache).
-pub fn lock_vault() {
-    let mut guard = VAULT_CACHE.lock().unwrap();
-    *guard = None;
+/// Zeroize a device key in place.
+fn zeroize_key(mut key: [u8; KEY_LEN]) {
+    use zeroize::Zeroize as _;
+    key.zeroize();
 }
 
-/// Whether the vault is currently unlocked.
-pub fn vault_is_unlocked() -> bool {
-    VAULT_CACHE.lock().unwrap().is_some()
-}
-
-/// Store a secret in the vault (requires prior `unlock_vault`).
-pub fn store_vault(host_id: &str, kind: &str, secret: &str, master_pw: &str) -> Result<(), String> {
-    let mut map = vault::load_vault(master_pw)?;
+/// Store a secret for `host_id` / `kind`. Overwrites any existing value.
+pub fn store_secret(host_id: &str, kind: &str, secret: &str) -> Result<(), String> {
+    let mut map = match vault_map() {
+        Ok(arc) => (*arc).clone(),
+        Err(_) => SecretMap::new(),
+    };
     map.insert(keyring_key(host_id, kind), secret.to_string());
-    vault::save_vault(master_pw, &map)?;
-    // Update cache.
-    let mut guard = VAULT_CACHE.lock().unwrap();
-    *guard = Some(Arc::new(map));
-    Ok(())
+    save_and_cache(map)
 }
 
-/// Load a secret from the vault (requires prior `unlock_vault`).
-pub fn load_vault_secret(host_id: &str, kind: &str) -> Result<String, String> {
-    let guard = VAULT_CACHE.lock().unwrap();
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&keyring_key(host_id, kind)).cloned())
-        .ok_or_else(|| "vault locked or secret not found".to_string())
+/// Load a secret for `host_id` / `kind`. Returns `None` if not stored.
+pub fn load_secret(host_id: &str, kind: &str) -> Option<String> {
+    let map = vault_map().ok()?;
+    map.get(&keyring_key(host_id, kind)).cloned()
 }
 
-/// Delete a secret from the vault.
-pub fn delete_vault_secret(host_id: &str, kind: &str, master_pw: &str) -> Result<(), String> {
-    let mut map = vault::load_vault(master_pw)?;
+/// Delete a secret for `host_id` / `kind`. Silently succeeds if not found.
+pub fn delete_secret(host_id: &str, kind: &str) -> Result<(), String> {
+    let mut map = match vault_map() {
+        Ok(arc) => (*arc).clone(),
+        Err(_) => return Ok(()),
+    };
     map.remove(&keyring_key(host_id, kind));
-    vault::save_vault(master_pw, &map)?;
-    let mut guard = VAULT_CACHE.lock().unwrap();
-    *guard = Some(Arc::new(map));
-    Ok(())
+    save_and_cache(map)
 }
 
-// ---- Unified interface (source-agnostic) ----
+/// Drop the in-memory vault cache. Intended for tests; production callers do
+/// not normally need this.
+#[cfg(test)]
+pub fn clear_cache() {
+    if let Ok(mut guard) = VAULT_CACHE.lock() {
+        *guard = None;
+    }
+}
 
-/// Store a secret using the specified backend.
-pub fn store_secret(
-    host_id: &str,
-    kind: &str,
-    secret: &str,
-    source: CredentialSource,
-    master_pw: Option<&str>,
-) -> Result<(), String> {
-    match source {
-        CredentialSource::Keychain => store_keychain(host_id, kind, secret),
-        CredentialSource::Vault => {
-            let pw = master_pw.ok_or("vault requires master password")?;
-            store_vault(host_id, kind, secret, pw)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Isolate data_dir() at a unique per-thread temp dir (no HOME mutation,
+    /// no mutex) so this test can't race with sibling data-dir tests.
+    fn with_temp_data_dir<F: FnOnce()>(f: F) {
+        let tmp = std::env::temp_dir().join(format!(
+            "verve-cred-test-{}",
+            crate::state::models::new_id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let _guard = crate::state::persistence::set_thread_data_dir(tmp.clone());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
         }
     }
-}
 
-/// Load a secret from the specified backend.
-pub fn load_secret(
-    host_id: &str,
-    kind: &str,
-    source: CredentialSource,
-    _master_pw: Option<&str>,
-) -> Result<String, String> {
-    match source {
-        CredentialSource::Keychain => load_keychain(host_id, kind),
-        CredentialSource::Vault => load_vault_secret(host_id, kind),
+    #[test]
+    fn store_load_delete_round_trip() {
+        with_temp_data_dir(|| {
+            store_secret("host1", "password", "s3cret").unwrap();
+            assert_eq!(
+                load_secret("host1", "password").as_deref(),
+                Some("s3cret")
+            );
+
+            // Overwrite.
+            store_secret("host1", "password", "new_pw").unwrap();
+            assert_eq!(load_secret("host1", "password").as_deref(), Some("new_pw"));
+
+            // Delete.
+            delete_secret("host1", "password").unwrap();
+            assert!(load_secret("host1", "password").is_none());
+        });
     }
-}
 
-/// Delete a secret from both backends (best-effort).
-pub fn delete_secret(host_id: &str, kind: &str) -> Result<(), String> {
-    let _ = delete_keychain(host_id, kind);
-    // Vault deletion needs master_pw — skip here (cleanup happens on host delete).
-    Ok(())
-}
-
-/// Whether the OS keychain is available on this platform.
-pub fn keychain_available() -> bool {
-    // The keyring crate is compiled per-platform; if it links, the keychain
-    // backend is available. We do a probe entry to check at runtime.
-    keyring::Entry::new(KEYRING_SERVICE, "__probe__").is_ok()
+    #[test]
+    fn missing_secret_returns_none() {
+        with_temp_data_dir(|| {
+            assert!(load_secret("nope", "password").is_none());
+        });
+    }
 }

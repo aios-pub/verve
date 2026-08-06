@@ -140,7 +140,6 @@ portable-pty = "0.8"
 zmodem2 = "0.7"
 alacritty_terminal = "0.24"
 aes-gcm = "0.10"
-argon2 = "0.5"
 zeroize = "1"
 secrecy = "0.8"
 bincode = "1"
@@ -257,15 +256,6 @@ code-highlight-config = [
     "dep:tree-sitter-yaml",
     "dep:tree-sitter-toml",
 ]
-
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["sync-secret-service"] }
 
 [lints.clippy]
 dbg_macro = "deny"

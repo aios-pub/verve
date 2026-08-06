@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ssh::client::SshConnection;
+use crate::ssh::credentials;
 use crate::ssh::host_store;
 use crate::ssh::models::SshHost;
 use crate::ssh::port_forward::LocalForward;
@@ -370,6 +371,7 @@ impl SshPanel {
                 let panel_c = panel.clone();
                 let host_id_edit = host.id.clone();
                 let host_id_del = host.id.clone();
+                let host_id_dup = host.id.clone();
                 let jump_name = host.bastion_id.as_ref().map(|jid| host_name_of(jid));
 
                 // Card: 200px wide, auto height.
@@ -454,6 +456,16 @@ impl SshPanel {
                                     }),
                             )
                             .child(div().flex_1())
+                            .child(
+                                Button::new(("ssh-duplicate", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Copy)
+                                    .tooltip("复制（连同密码）")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.duplicate_host(&host_id_dup, cx);
+                                    })),
+                            )
                             .child(
                                 Button::new(("ssh-edit", ix))
                                     .ghost()
@@ -576,6 +588,61 @@ impl SshPanel {
                         })
                 })
         });
+    }
+
+    /// Duplicate a host (clone config + stored secret under a new id).
+    ///
+    /// Creates a new host with a fresh id and a "副本" name suffix, copies over
+    /// any stored password / key passphrase from the encrypted vault, and saves
+    /// it. The original host is left untouched.
+    fn duplicate_host(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(src) = host_store::find_host(id) else {
+            return;
+        };
+        let new_id = crate::state::models::new_id();
+        // Rebuild as a new host record with a fresh id + creation time. We
+        // construct via SshHost::new to get a new created_at, then overwrite
+        // every field with the source's values except id/name.
+        let mut dup = SshHost::new(
+            format!("{} 副本", src.name),
+            src.host.clone(),
+        );
+        dup.id = new_id.clone();
+        dup.port = src.port;
+        dup.username = src.username.clone();
+        dup.auth_type = src.auth_type;
+        dup.key_path = src.key_path.clone();
+        dup.host_type = src.host_type;
+        dup.bastion_id = src.bastion_id.clone();
+        dup.bastion_target_override = src.bastion_target_override.clone();
+        dup.color = src.color.clone();
+        // Port forwards get fresh sub-ids so they don't collide with the source.
+        dup.port_forwards = src
+            .port_forwards
+            .iter()
+            .map(|pf| crate::ssh::models::PortForward {
+                id: crate::state::models::new_id(),
+                direction: pf.direction,
+                local_host: pf.local_host.clone(),
+                local_port: pf.local_port,
+                remote_host: pf.remote_host.clone(),
+                remote_port: pf.remote_port,
+                auto_start: pf.auto_start,
+            })
+            .collect();
+
+        // Copy the stored secret (if any) to the new id. The kind depends on
+        // the auth type; copy both candidates best-effort so the duplicate is
+        // ready regardless of which auth mode it ends up using.
+        if let Some(secret) = credentials::load_secret(id, "password") {
+            let _ = credentials::store_secret(&new_id, "password", &secret);
+        }
+        if let Some(secret) = credentials::load_secret(id, "key_passphrase") {
+            let _ = credentials::store_secret(&new_id, "key_passphrase", &secret);
+        }
+
+        host_store::upsert_host(dup);
+        self.reload(cx);
     }
 
     /// Start a new SSH session.

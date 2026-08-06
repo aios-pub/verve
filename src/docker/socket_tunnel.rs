@@ -14,7 +14,7 @@
 //! `docker system dial-stdio` helper. The docker CLI (or any other client) can
 //! then talk to the remote daemon by setting `DOCKER_HOST=unix://<local_path>`
 //! — no system `ssh`, no manual `ssh -L`, and credentials come straight from
-//! Verve's keychain/vault.
+//! Verve's encrypted vault.
 //!
 //! Lifecycle:
 //! - One tunnel per active Docker+SSH host pair (managed by the caller).

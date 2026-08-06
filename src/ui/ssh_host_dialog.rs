@@ -80,7 +80,24 @@ impl SshHostDialogState {
             s
         });
         let password = cx.new(|cx| {
-            let s = InputState::new(window, cx).placeholder("密码");
+            let mut s = InputState::new(window, cx).placeholder("密码").masked(true);
+            // Editing an existing host: pre-fill the stored password so the
+            // field is not left blank. (Leaving it blank would also be fine —
+            // the save path only writes when non-empty — but pre-filling lets
+            // the user verify / edit the existing secret.)
+            if let Some(e) = &existing {
+                if let Some(stored) = credentials::load_secret(&e.id, "password") {
+                    s.set_value(&stored, window, cx);
+                }
+                if let Some(stored) = credentials::load_secret(&e.id, "key_passphrase") {
+                    // Prefer whichever matches the host's auth type, but if the
+                    // user switches modes the field will just show what we set
+                    // last; the save path re-binds kind by auth_type anyway.
+                    if s.value().is_empty() {
+                        s.set_value(&stored, window, cx);
+                    }
+                }
+            }
             s
         });
         let auth_type = existing.as_ref().map(|e| e.auth_type).unwrap_or_default();
@@ -244,7 +261,7 @@ pub fn open_dialog<F>(
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("密码"),
                                     )
-                                    .child(Input::new(&s.password).small()),
+                                    .child(Input::new(&s.password).small().mask_toggle()),
                             )
                         })
                         .when(auth_type == SshAuthType::PrivateKey, |col| {
@@ -268,7 +285,7 @@ pub fn open_dialog<F>(
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("密钥密码（可选）"),
                                     )
-                                    .child(Input::new(&s.password).small()),
+                                    .child(Input::new(&s.password).small().mask_toggle()),
                             )
                         })
                         // Jump host selection
@@ -341,11 +358,7 @@ pub fn open_dialog<F>(
                                 SshAuthType::Agent => "",
                             };
                             if !kind.is_empty() {
-                                let _ = credentials::store_keychain(&host.id, kind, &password_val);
-                                host.credential = Some(crate::ssh::models::CredentialRef {
-                                    key: credentials::keyring_key(&host.id, kind),
-                                    source: crate::ssh::models::CredentialSource::Keychain,
-                                });
+                                let _ = credentials::store_secret(&host.id, kind, &password_val);
                             }
                         }
 

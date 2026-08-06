@@ -6,7 +6,7 @@
 //!   - `tls_verify`    → DOCKER_TLS_VERIFY
 //!   - `cert_path`     → DOCKER_CERT_PATH
 //!   - `ssh_host_id`   → when set, tunnel through a Verve-managed SSH host
-//!                       (credentials come from Verve's keychain/vault)
+//!                       (credentials come from Verve's encrypted vault)
 
 use serde::{Deserialize, Serialize};
 

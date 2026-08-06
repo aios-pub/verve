@@ -444,7 +444,7 @@ pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession,
 async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result<(), SshError> {
     let ok = match host.auth_type {
         SshAuthType::Password => {
-            let password = credentials::load_keychain(&host.id, "password").unwrap_or_default();
+            let password = credentials::load_secret(&host.id, "password").unwrap_or_default();
             let res = handle
                 .authenticate_password(&host.username, password)
                 .await
@@ -463,7 +463,7 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
                 .key_path
                 .as_deref()
                 .ok_or_else(|| SshError::new("未配置密钥路径", false))?;
-            let passphrase = credentials::load_keychain(&host.id, "key_passphrase").ok();
+            let passphrase = credentials::load_secret(&host.id, "key_passphrase");
             let key = load_secret_key(key_path, passphrase.as_deref()).map_err(|e| {
                 SshError::new(format!("加载私钥失败（路径 {key_path}）: {e}"), false)
             })?;

@@ -200,7 +200,7 @@ pub fn set_active_workspace(id: &str) {
 
 /// The `.gitignore` content excluding cross-branch / non-data / machine-local files from git.
 /// layout.json is now tracked (shared settings); layout.local.json contains machine-specific panel sizes.
-const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\n.verve-askpass.sh\nexports/\nhosts.staging\n.bootstrap_done\n";
+const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\nssh_vault.bin\ndevice.key\n.verve-askpass.sh\nexports/\nhosts.staging\n.bootstrap_done\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into

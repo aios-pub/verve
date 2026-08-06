@@ -3,12 +3,12 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{StatefulInteractiveElement as _, *};
-use gpui_component::{h_flex, ActiveTheme};
+use gpui_component::ActiveTheme;
 
 /// Invisible entity used as a drag-preview for terminal text selection.
 struct EmptyDrag;
@@ -311,7 +311,7 @@ impl TerminalView {
             processor: Arc::new(std::sync::Mutex::new(Processor::new())),
             cols,
             rows,
-            font_size: 13.0,
+            font_size: 14.0,
             input_tx,
             resize_tx,
             _keystroke_sub: Some(sub),
@@ -321,8 +321,8 @@ impl TerminalView {
             selecting: false,
             last_trim_top: 0,
             last_visible_rows: 0,
-            last_line_height: 13.0,
-            last_char_width: 13.0 * 0.58,
+            last_line_height: 18.0,
+            last_char_width: 14.0 * 0.58,
             bounds,
             mouse_handlers_registered: false,
             last_feed_tail: std::sync::Mutex::new(Vec::new()),
@@ -332,33 +332,42 @@ impl TerminalView {
 
     /// Return the currently selected text (normalized from anchor/head), or
     /// None if no selection exists.
-    fn selected_text(&self, lines: &[String]) -> Option<String> {
+    ///
+    /// Column→byte mapping uses each row's `prefix` map (NOT `col_to_byte`) so
+    /// wide-char spacer columns — which contribute 0 bytes — are handled
+    /// correctly; a raw char index would drift once a CJK/emoji glyph precedes
+    /// the selection endpoint.
+    fn selected_text(&self, rows: &[RowData]) -> Option<String> {
         let (a, h) = self.selection_anchor.zip(self.selection_head)?;
         let (start, end) = if (a.row, a.col) <= (h.row, h.col) {
             (a, h)
         } else {
             (h, a)
         };
-        if start.row >= lines.len() {
+        if start.row >= rows.len() {
             return None;
         }
+        let row_bytes = |r: &RowData, col: usize| -> usize {
+            r.prefix.get(col).copied().unwrap_or(r.text.len())
+        };
         if start.row == end.row {
-            let line = &lines[start.row];
-            return Some(slice_by_cols(line, start.col, end.col).to_string());
+            let r = &rows[start.row];
+            let b0 = row_bytes(r, start.col);
+            let b1 = row_bytes(r, end.col).max(b0);
+            return Some(r.text[b0..b1].to_string());
         }
         let mut out = String::new();
-        // The start row tail: from `start.col` to end-of-line. `col_to_byte`
-        // snaps the char (column) index to a valid byte boundary.
-        let start_byte = col_to_byte(&lines[start.row], start.col);
-        out.push_str(&lines[start.row][start_byte..]);
-        for row in (start.row + 1)..end.row.min(lines.len()) {
+        // The start row tail: from `start.col` to end-of-line.
+        let r0 = &rows[start.row];
+        out.push_str(&r0.text[row_bytes(r0, start.col)..]);
+        for row in (start.row + 1)..end.row.min(rows.len()) {
             out.push('\n');
-            out.push_str(lines[row].trim_end());
+            out.push_str(rows[row].text.trim_end());
         }
-        if end.row < lines.len() {
+        if end.row < rows.len() {
             out.push('\n');
-            let end_byte = col_to_byte(&lines[end.row], end.col);
-            out.push_str(&lines[end.row][..end_byte]);
+            let rn = &rows[end.row];
+            out.push_str(&rn.text[..row_bytes(rn, end.col)]);
         }
         Some(out)
     }
@@ -473,12 +482,16 @@ impl TerminalView {
         }
         self.bounds_retry = 0;
 
-        // Measure the ACTUAL monospace cell width from the terminal's rendering
-        // font (instead of the font_size*0.58 estimate), so the column count
-        // fits the container precisely and text spans the full width with no
-        // gap. The terminal renders in the theme's monospace font (set on each
-        // row div in `render`), so we measure that exact font. Falls back to
-        // the estimate if measurement fails.
+        // Measure the ACTUAL rendered monospace cell width so the PTY column
+        // count lines up precisely with the visual width — otherwise long
+        // lines wrap at a column that doesn't match the right edge.
+        //
+        // `ch_advance('0')` returns a raw font metric that can differ by a
+        // subpixel amount from what GPUI's text shaper actually paints. Over
+        // 200+ columns that drift accumulates into a multi-char mismatch, so
+        // we shape a long run of `0`s with the same Font/TextRun the renderer
+        // uses and divide the resulting line width by the char count. This is
+        // the exact average advance StyledText will paint.
         let mono_font = cx.theme().mono_font_family.clone();
         let font = gpui::Font {
             family: mono_font,
@@ -487,12 +500,8 @@ impl TerminalView {
             features: gpui::FontFeatures::default(),
             fallbacks: None,
         };
-        let font_id = window.text_system().resolve_font(&font);
         let font_size = px(self.font_size);
-        let char_w = window
-            .text_system()
-            .ch_advance(font_id, font_size)
-            .map(|w| w.into())
+        let char_w = measure_mono_cell_width(window, &font, font_size)
             .unwrap_or_else(|_| char_cell_metrics(self.font_size, self.last_line_height).0);
         // Cache the measured cell width so mouse hit-testing stays aligned with
         // the rendered glyphs.
@@ -500,7 +509,10 @@ impl TerminalView {
         let line_h = self.last_line_height.max(1.0);
 
         // Horizontal padding px_2 (8px both sides); vertical pt_1 (4px top).
-        let avail_w = (bw - 16.0).max(char_w);
+        // char_w is the exact shaped advance, so `floor(avail / char_w)`
+        // columns are guaranteed to fit. A tiny epsilon guards against float
+        // rounding making the last column clip.
+        let avail_w = (bw - 16.0 - 0.01).max(char_w);
         let avail_h = (bh - 4.0).max(line_h);
         let cols = ((avail_w / char_w).floor() as u16).max(1);
         let rows = ((avail_h / line_h).floor() as u16).max(1);
@@ -627,13 +639,13 @@ fn keystroke_to_bytes(ks: &gpui::Keystroke) -> Vec<u8> {
 }
 
 /// Convert a VTE `Color` to a GPUI `Hsla`.
-fn color_to_hsla(color: &Color, _default_fg: Hsla) -> Hsla {
+fn color_to_hsla(color: &Color) -> Hsla {
     match color {
         Color::Named(nc) => named_color_to_hsla(*nc),
         Color::Spec(rgb) => hsla_from_rgb8(rgb.r, rgb.g, rgb.b),
         Color::Indexed(idx) => {
-            // Map basic 16 colors + 216 color cube + 24 grayscale.
-            if (*idx as usize) < 16 {
+            let i = *idx as usize;
+            if i < 16 {
                 let nc = match idx {
                     0 => NamedColor::Black,
                     1 => NamedColor::Red,
@@ -654,10 +666,24 @@ fn color_to_hsla(color: &Color, _default_fg: Hsla) -> Hsla {
                     _ => NamedColor::White,
                 };
                 named_color_to_hsla(nc)
+            } else if i <= 231 {
+                // 6×6×6 color cube (indices 16..=231).
+                let n = i - 16;
+                let r = n / 36;
+                let g = (n % 36) / 6;
+                let b = n % 6;
+                fn cube(v: usize) -> u8 {
+                    if v == 0 {
+                        0
+                    } else {
+                        (55 + 40 * v) as u8
+                    } // 0,95,135,175,215,255
+                }
+                hsla_from_rgb8(cube(r), cube(g), cube(b))
             } else {
-                // 256-color fallback: approximate as grayscale.
-                let v = *idx as f32 / 255.0;
-                gpui::hsla(0.0, 0.0, v, 1.0)
+                // 24-step grayscale ramp (indices 232..=255): 8..=238.
+                let gray = (8 + (i - 232) * 10) as u8;
+                hsla_from_rgb8(gray, gray, gray)
             }
         }
     }
@@ -723,13 +749,470 @@ fn named_color_to_hsla(c: NamedColor) -> Hsla {
     }
 }
 
+/// Fixed dark terminal surface (always dark, independent of the app theme).
+/// Matches the `Background`/`Foreground` arms in `named_color_to_hsla`.
+const TERMINAL_BG: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.12,
+    a: 1.0,
+}; // ~#1f1f1f
+const TERMINAL_FG: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.85,
+    a: 1.0,
+};
+/// Extra leading (px) added to font_size to get line height. 13 + 4 = 17px.
+const LINE_LEADING: f32 = 4.0;
+
+/// Resolved, coalesce-able visual attributes for a run of terminal cells.
+#[derive(Clone, PartialEq)]
+struct RunStyle {
+    fg: Hsla,
+    /// `None` means the terminal surface shows through (transparent bg).
+    bg: Option<Hsla>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strikeout: bool,
+}
+
+/// One fully-rendered terminal row: its text plus styled runs and a
+/// column→byte prefix map for selection/copy.
+#[derive(Clone)]
+struct RowData {
+    text: String,
+    runs: Vec<TextRun>,
+    /// `prefix[c]` is the byte offset in `text` *after* columns 0..c have been
+    /// emitted. Length is `num_cols + 1`. Wide-char spacer columns contribute 0
+    /// bytes, so `prefix[c+1] == prefix[c]` for a spacer. Every value is on a
+    /// char boundary, so it is safe to slice `text` with these offsets.
+    prefix: Vec<usize>,
+}
+
+/// Build a solid underline style colored with the run's foreground.
+fn underline_style(fg: Hsla) -> UnderlineStyle {
+    UnderlineStyle {
+        thickness: px(1.0),
+        color: Some(fg),
+        wavy: false,
+    }
+}
+
+/// Build a solid strikethrough style colored with the run's foreground.
+fn strikethrough_style(fg: Hsla) -> StrikethroughStyle {
+    StrikethroughStyle {
+        thickness: px(1.0),
+        color: Some(fg),
+    }
+}
+
+/// Resolve one alacritty `Cell` into a `RunStyle` (fg/bg colors + font flags).
+fn resolve_style(cell: &Cell) -> RunStyle {
+    let flags = cell.flags;
+
+    // INVERSE: swap fg and bg BEFORE resolving.
+    let (fg_color, bg_color) = if flags.contains(Flags::INVERSE) {
+        (&cell.bg, &cell.fg)
+    } else {
+        (&cell.fg, &cell.bg)
+    };
+
+    let mut fg = color_to_hsla(fg_color);
+
+    // DIM: reduce lightness (preserves hue/saturation); combines with bold/color.
+    if flags.contains(Flags::DIM) {
+        fg.l = (fg.l * 0.7).clamp(0.0, 1.0);
+    }
+
+    // Background: Named(Background) is the terminal surface => transparent.
+    // Anything else (including Named(Foreground), which can appear after an
+    // INVERSE swap) becomes an explicit background.
+    let bg = match bg_color {
+        Color::Named(NamedColor::Background) => None,
+        other => Some(color_to_hsla(other)),
+    };
+
+    RunStyle {
+        fg,
+        bg,
+        bold: flags.contains(Flags::BOLD),
+        italic: flags.contains(Flags::ITALIC),
+        underline: flags.intersects(
+            Flags::UNDERLINE
+                | Flags::DOUBLE_UNDERLINE
+                | Flags::UNDERCURL
+                | Flags::DOTTED_UNDERLINE
+                | Flags::DASHED_UNDERLINE,
+        ),
+        strikeout: flags.contains(Flags::STRIKEOUT),
+    }
+}
+
+/// Index into the 4-entry font cache: [regular, bold, italic, bold-italic].
+#[inline]
+fn font_index(bold: bool, italic: bool) -> usize {
+    (bold as usize) | ((italic as usize) << 1)
+}
+
+/// Build a `RowData` from one grid line of `num_cols` cells.
+///
+/// `fonts` is the 4-entry cache `[regular, bold, italic, bold-italic]`.
+fn build_row(
+    grid: &alacritty_terminal::grid::Grid<Cell>,
+    grid_line: alacritty_terminal::index::Line,
+    num_cols: usize,
+    fonts: &[Font; 4],
+) -> RowData {
+    let mut text = String::with_capacity(num_cols);
+    // prefix[0] = 0 before any column is emitted.
+    let mut prefix = Vec::with_capacity(num_cols + 1);
+    prefix.push(0);
+
+    // Coalesced style segments as (start_byte, RunStyle).
+    let mut segs: Vec<(usize, RunStyle)> = Vec::new();
+    let mut cur_style: Option<RunStyle> = None;
+    let mut cur_start: usize = 0;
+
+    for col_idx in 0..num_cols {
+        let point = alacritty_terminal::index::Point::new(
+            grid_line,
+            alacritty_terminal::index::Column(col_idx),
+        );
+        let cell: &Cell = &grid[point];
+
+        // WIDE_CHAR_SPACER: the trailing half of a CJK/emoji glyph. Skip it
+        // entirely — no char, no run break, 0 bytes. The glyph itself was
+        // emitted by the preceding (WIDE_CHAR) cell. Detect by FLAG, not by
+        // `c == '\0'`: live parsing writes `c = ' '` for spacers.
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            prefix.push(text.len());
+            continue;
+        }
+
+        let style = resolve_style(cell);
+        if cur_style.as_ref() != Some(&style) {
+            if let Some(prev) = cur_style.take() {
+                segs.push((cur_start, prev));
+            }
+            cur_start = text.len(); // byte offset BEFORE pushing this glyph
+            cur_style = Some(style);
+        }
+
+        // The character to render. HIDDEN => blank but keeps style (e.g.
+        // password masking); '\0' => defensive blank (uninitialized storage).
+        let ch = if cell.flags.contains(Flags::HIDDEN) {
+            ' '
+        } else if cell.c == '\0' {
+            ' '
+        } else {
+            cell.c
+        };
+        text.push(ch);
+
+        // Zero-width combining marks / emoji ZWJ joiners attach to this base
+        // cell and share its run/style.
+        if let Some(zw) = cell.zerowidth() {
+            for z in zw {
+                text.push(*z);
+            }
+        }
+
+        prefix.push(text.len());
+    }
+    if let Some(prev) = cur_style.take() {
+        segs.push((cur_start, prev));
+    }
+
+    // Convert segments -> TextRuns. Each run's byte length is the distance to
+    // the next segment start (or to the end of the text), which always lands
+    // on a char boundary because segments start/end only at cell boundaries.
+    let mut runs = Vec::with_capacity(segs.len());
+    for i in 0..segs.len() {
+        let (start, style) = &segs[i];
+        let end = segs
+            .get(i + 1)
+            .map(|(s, _)| *s)
+            .unwrap_or_else(|| text.len());
+        let font = &fonts[font_index(style.bold, style.italic)];
+        runs.push(TextRun {
+            len: end - start,
+            font: font.clone(),
+            color: style.fg,
+            background_color: style.bg,
+            underline: style.underline.then(|| underline_style(style.fg)),
+            strikethrough: style.strikeout.then(|| strikethrough_style(style.fg)),
+        });
+    }
+
+    debug_assert_eq!(
+        runs.iter().map(|r| r.len).sum::<usize>(),
+        text.len(),
+        "terminal row TextRun lengths must sum to the text byte length"
+    );
+
+    RowData { text, runs, prefix }
+}
+
+/// Given base runs covering `text_len` fully, return a new run list in which
+/// every byte within `[sel_start, sel_end)` has `background_color = sel_bg`
+/// (a translucent wash). Text color, font, underline and strikethrough are
+/// preserved — the selection is an overlay, exactly like a real terminal.
+///
+/// `sel_start`/`sel_end` are byte offsets that must fall on char boundaries
+/// (they come from `RowData::prefix`). Output runs still sum to `text_len`.
+fn apply_selection(
+    runs: &[TextRun],
+    text_len: usize,
+    sel_start: usize,
+    sel_end: usize,
+    sel_bg: Hsla,
+) -> Vec<TextRun> {
+    if sel_start >= sel_end || sel_start >= text_len {
+        return runs.to_vec();
+    }
+    let sel_end = sel_end.min(text_len);
+
+    let mut out = Vec::with_capacity(runs.len() + 2);
+    let mut pos = 0usize;
+    for run in runs {
+        let r_start = pos;
+        let r_end = pos + run.len;
+        pos = r_end;
+
+        // No overlap with the selection.
+        if r_end <= sel_start || r_start >= sel_end {
+            out.push(run.clone());
+            continue;
+        }
+
+        // Portion before the selection (if any).
+        if r_start < sel_start {
+            let mut r = run.clone();
+            r.len = sel_start - r_start;
+            out.push(r);
+        }
+
+        // Selected portion: override the background, keep everything else.
+        let mid_start = r_start.max(sel_start);
+        let mid_end = r_end.min(sel_end);
+        if mid_end > mid_start {
+            let mut r = run.clone();
+            r.len = mid_end - mid_start;
+            r.background_color = Some(sel_bg);
+            out.push(r);
+        }
+
+        // Portion after the selection (if any).
+        if r_end > sel_end {
+            let mut r = run.clone();
+            r.len = r_end - sel_end;
+            out.push(r);
+        }
+    }
+    out
+}
+
+// --- Log-syntax highlighting overlay ---------------------------------------
+//
+// Remote log output (journalctl, Spring Boot, logback, python logging, etc.)
+// usually prints timestamps and level keywords as PLAIN TEXT with no ANSI
+// colors — the shell does not know they are semantically special. This overlay
+// post-processes each rendered row's TextRuns to color those tokens, making
+// logs far easier to scan. It is layered ON TOP of any ANSI SGR colors the
+// remote did send (so already-colored regions still get the semantic recolor
+// for these well-known tokens), and it never changes fonts/backgrounds.
+
+/// Timestamp: `2026-08-06 06:21:18`, `2026-08-06T06:21:18.123`,
+/// `2026-08-06 06:21:18,456+08:00`, `06:21:18.123`.
+const HL_TIMESTAMP: Hsla = Hsla {
+    h: 0.52,
+    s: 0.70,
+    l: 0.72,
+    a: 1.0,
+}; // vivid cyan
+/// ERROR / FATAL / PANIC / EXCEPTION.
+const HL_ERROR: Hsla = Hsla {
+    h: 0.0,
+    s: 0.75,
+    l: 0.62,
+    a: 1.0,
+}; // bright red
+/// WARN / WARNING.
+const HL_WARN: Hsla = Hsla {
+    h: 0.11,
+    s: 0.80,
+    l: 0.62,
+    a: 1.0,
+}; // amber
+/// INFO.
+const HL_INFO: Hsla = Hsla {
+    h: 0.33,
+    s: 0.55,
+    l: 0.62,
+    a: 1.0,
+}; // green
+/// DEBUG / TRACE.
+const HL_DEBUG: Hsla = Hsla {
+    h: 0.60,
+    s: 0.55,
+    l: 0.68,
+    a: 1.0,
+}; // soft blue
+/// JSON booleans/null/numbers (when not already ANSI-colored).
+const HL_VALUE: Hsla = Hsla {
+    h: 0.78,
+    s: 0.50,
+    l: 0.72,
+    a: 1.0,
+}; // lavender
+
+fn log_highlighter() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        // Patterns are ordered most-specific first; regex's leftmost-longest
+        // alternation plus named capture groups lets us map the winning group
+        // back to its color. All patterns are ASCII and land on char boundaries.
+        regex::Regex::new(
+            r"(?x)
+            (?P<timestamp>
+                \d{4}-\d{2}-\d{2}[T\x20]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?
+              | \d{2}:\d{2}:\d{2}(?:[.,]\d+)?
+            )
+          | (?P<error>\b(?:ERROR|FATAL|PANIC|EXCEPTION|Error|Fatal|Exception)\b)
+          | (?P<warn>\b(?:WARN(?:ING)?|Warning)\b)
+          | (?P<info>\b(?:INFO|Info)\b)
+          | (?P<debug>\b(?:DEBUG|TRACE|Debug|Trace)\b)
+          | (?P<value>\b(?:true|false|null|TRUE|FALSE|NULL)\b)
+            ",
+        )
+        .expect("valid log highlight regex")
+    })
+}
+
+/// Color to use for a winning named capture group.
+fn highlight_color_for(name: &str) -> Option<Hsla> {
+    match name {
+        "timestamp" => Some(HL_TIMESTAMP),
+        "error" => Some(HL_ERROR),
+        "warn" => Some(HL_WARN),
+        "info" => Some(HL_INFO),
+        "debug" => Some(HL_DEBUG),
+        "value" | "number" => Some(HL_VALUE),
+        _ => None,
+    }
+}
+
+/// Apply log-syntax coloring on top of base runs. Returns a new run list with
+/// matches split out and recolored; everything else (font, background,
+/// underline, ANSI colors outside matches) is preserved unchanged.
+///
+/// Matches are found with a byte-oriented (ASCII) regex, so all offsets are
+/// already byte offsets. We mark every byte covered by<[PLHD82_never_used_51bce0c785ca2f68081bfa7d91973934]> by a match with its
+/// color, then walk the runs and split at marked boundaries.
+fn apply_log_highlights(text: &str, runs: &[TextRun]) -> Vec<TextRun> {
+    // Fast path: nothing matches → reuse the base runs untouched.
+    if !log_highlighter().is_match(text) {
+        return runs.to_vec();
+    }
+
+    // per-byte highlight color. 0 = no highlight; indices 1.. map to the
+    // palette. Using a u8 palette id keeps the mark array small (text is
+    // ASCII where we mark, so byte == char here).
+    const PALETTE: [Hsla; 6] =
+        [HL_TIMESTAMP, HL_ERROR, HL_WARN, HL_INFO, HL_DEBUG, HL_VALUE];
+    fn palette_id(c: Hsla) -> u8 {
+        PALETTE
+            .iter()
+            .position(|p| p.h == c.h && p.s == c.s && p.l == c.l)
+            .map(|i| (i + 1) as u8)
+            .unwrap_or(0)
+    }
+
+    let mut mark = vec![0u8; text.len()];
+    for caps in log_highlighter().captures_iter(text) {
+        let full = caps.get(0).expect("overall match");
+        // Find which named group matched.
+        let mut color = None;
+        for name in ["timestamp", "error", "warn", "info", "debug", "value"] {
+            if let Some(m) = caps.name(name) {
+                if m.start() == full.start() && m.end() == full.end() {
+                    color = highlight_color_for(name);
+                    break;
+                }
+            }
+        }
+        let Some(color) = color else { continue };
+        let id = palette_id(color);
+        let end = full.end().min(text.len());
+        for b in &mut mark[full.start()..end] {
+            *b = id;
+        }
+    }
+
+    // Walk runs and split wherever the mark changes. Each output segment keeps
+    // the original run's font/background/underline/strikethrough; only `color`
+    // is overridden when the segment is highlighted.
+    let mut out: Vec<TextRun> = Vec::with_capacity(runs.len() + 8);
+    let mut pos = 0usize;
+    for run in runs {
+        let run_start = pos;
+        let run_end = pos + run.len;
+        let mut seg_start = run_start;
+        let mut seg_id = mark.get(seg_start).copied().unwrap_or(0);
+        for off in (run_start + 1)..run_end {
+            let id = mark[off];
+            if id != seg_id {
+                let mut r = run.clone();
+                r.len = off - seg_start;
+                if seg_id != 0 {
+                    r.color = PALETTE[(seg_id - 1) as usize];
+                }
+                out.push(r);
+                seg_start = off;
+                seg_id = id;
+            }
+        }
+        // Final segment of this run.
+        let mut r = run.clone();
+        r.len = run_end - seg_start;
+        if seg_id != 0 {
+            r.color = PALETTE[(seg_id - 1) as usize];
+        }
+        out.push(r);
+        pos = run_end;
+    }
+
+    // Merge adjacent segments that ended up identical (same font, color, bg,
+    // decorations) — common when no highlight fell inside a run.
+    out.dedup_by(|a, b| {
+        a.len == 0
+            || (a.font == b.font
+                && a.color == b.color
+                && a.background_color == b.background_color
+                && a.underline == b.underline
+                && a.strikethrough == b.strikethrough
+                && {
+                    b.len += a.len;
+                    true
+                })
+    });
+    out.retain(|r| r.len > 0);
+    out
+}
+
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let bg = theme.background;
-        let default_fg = theme.foreground;
+        let bg = TERMINAL_BG;
+        let default_fg = TERMINAL_FG;
         let font_size = self.font_size;
-        let line_height = font_size;
+        let line_height = font_size + LINE_LEADING;
+
+        // Resolve the monospace family up-front (this is the only thing we need
+        // from the theme). Do it before the `&mut cx` calls below so no
+        // immutable borrow of `cx` is held across them.
+        let mono_font = cx.theme().mono_font_family.clone();
         let focus_handle = cx.focus_handle();
 
         // Fit the grid to the container's actual pixel size so text spans the
@@ -742,9 +1225,42 @@ impl Render for TerminalView {
         // Auto-focus.
         window.focus(&focus_handle, cx);
 
-        // Build renderable lines from the alacritty grid.
-        // Read ALL lines including scrollback history.
-        let lines: Vec<String> = {
+        // Build renderable lines from the alacritty grid, carrying per-cell
+        // ANSI color/style as coalesced TextRuns. Honors scrollback history.
+        // One Font per weight/style variant; shared (cheaply cloned) across
+        // every run instead of constructing a Font per cell.
+        let fonts = [
+            Font {
+                family: mono_font.clone(),
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Normal,
+                features: FontFeatures::default(),
+                fallbacks: None,
+            },
+            Font {
+                family: mono_font.clone(),
+                weight: FontWeight::BOLD,
+                style: FontStyle::Normal,
+                features: FontFeatures::default(),
+                fallbacks: None,
+            },
+            Font {
+                family: mono_font.clone(),
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Italic,
+                features: FontFeatures::default(),
+                fallbacks: None,
+            },
+            Font {
+                family: mono_font.clone(),
+                weight: FontWeight::BOLD,
+                style: FontStyle::Italic,
+                features: FontFeatures::default(),
+                fallbacks: None,
+            },
+        ];
+
+        let lines: Vec<RowData> = {
             let Ok(term) = self.term.lock() else {
                 return div()
                     .id("terminal-view")
@@ -769,31 +1285,13 @@ impl Render for TerminalView {
             // history (negative line coordinates, which alacritty supports).
             let viewport_top = bottommost - screen_lines as i32 + 1 - display_offset as i32;
 
-            let mut all_text: Vec<String> = Vec::new();
-            for row_idx in 0..screen_lines {
-                let grid_line = viewport_top + row_idx as i32;
-                let mut text = String::with_capacity(num_cols);
-                for col_idx in 0..num_cols {
-                    let point = alacritty_terminal::index::Point::new(
-                        alacritty_terminal::index::Line(grid_line),
-                        alacritty_terminal::index::Column(col_idx),
-                    );
-                    let cell: &Cell = &grid[point];
-                    let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                    text.push(ch);
-                }
-                all_text.push(text);
-            }
-
-            // Strip trailing whitespace from each row but preserve empty lines
-            // and leading whitespace — critical for log display where blank
-            // separators and indented lines are meaningful.
-            all_text
-                .into_iter()
-                .map(|mut row| {
-                    let trim_end = row.trim_end().len();
-                    row.truncate(trim_end);
-                    row
+            // Do NOT trim trailing whitespace: trailing spaces can carry a
+            // colored background (e.g. a TUI status bar), and trimming would
+            // cut that background short.
+            (0..screen_lines)
+                .map(|row_idx| {
+                    let grid_line = viewport_top + row_idx as i32;
+                    build_row(grid, alacritty_terminal::index::Line(grid_line), num_cols, &fonts)
                 })
                 .collect::<Vec<_>>()
         };
@@ -817,18 +1315,15 @@ impl Render for TerminalView {
 
         // Selection highlight color (bright blue overlay for visibility).
         let sel_bg = gpui::hsla(0.60, 0.70, 0.50, 0.45);
-        // Monospace font — the terminal MUST render in a monospaced font so
-        // every grid column has the same advance width, otherwise text can't
-        // align to a column grid and the right edge looks ragged/short.
-        let mono_font = theme.mono_font_family.clone();
+        // `mono_font` was built above (used by the per-run Font cache); set on
+        // each row div too so the monospace family cascades to StyledText.
 
         // Build the rendered row elements up-front so we can use them in both
         // the content area and move mouse handlers into the overlay.
         let lines_rendered: Vec<AnyElement> = lines
-            .clone()
-            .into_iter()
+            .iter()
             .enumerate()
-            .map(|(row_idx, text)| {
+            .map(|(row_idx, row)| {
                 let lh = line_height;
                 let fs = font_size;
                 let row_el = div()
@@ -837,46 +1332,46 @@ impl Render for TerminalView {
                     .line_height(px(lh))
                     .text_size(px(fs))
                     .font_family(mono_font.clone())
+                    .text_color(default_fg)
                     .whitespace_nowrap();
 
-                let Some((start, end)) = sel else {
-                    return row_el.text_color(default_fg).child(text).into_any_element();
+                // Layer 1: semantic log highlighting (timestamps, levels, JSON
+                // numbers/bools) on top of any ANSI SGR colors the remote sent.
+                let base_runs = apply_log_highlights(&row.text, &row.runs);
+
+                // Layer 2: selection overlay. Determine whether the selection
+                // intersects this row and, if so, the byte range
+                // [from_byte, to_byte) to highlight. Column indices map to
+                // bytes via `row.prefix` (which correctly skips wide-char
+                // spacer columns and always lands on char boundaries).
+                let final_runs = match sel {
+                    Some((start, end)) if row_idx >= start.row && row_idx <= end.row => {
+                        let from_col = if row_idx == start.row { start.col } else { 0 };
+                        let to_col = if row_idx == end.row {
+                            end.col
+                        } else {
+                            // Full row: last prefix entry == text byte length.
+                            row.prefix.len().saturating_sub(1)
+                        };
+                        let from_byte = row.prefix.get(from_col).copied().unwrap_or(row.text.len());
+                        let to_byte = row
+                            .prefix
+                            .get(to_col)
+                            .copied()
+                            .unwrap_or(row.text.len())
+                            .max(from_byte);
+                        apply_selection(&base_runs, row.text.len(), from_byte, to_byte, sel_bg)
+                    }
+                    _ => base_runs,
                 };
 
-                if row_idx < start.row || row_idx > end.row {
-                    return row_el.text_color(default_fg).child(text).into_any_element();
-                }
-
-                // `start.col`/`end.col` are terminal grid COLUMNS, which map
-                // 1:1 to chars in `text` (built one char per column), NOT to
-                // bytes. Convert to byte offsets so slicing CJK/`·` rows does
-                // not panic mid-character.
-                let from_col = if row_idx == start.row { start.col } else { 0 };
-                let to_col = if row_idx == end.row {
-                    end.col
+                if row.text.is_empty() || final_runs.is_empty() {
+                    row_el.into_any_element()
                 } else {
-                    text.chars().count()
-                };
-                let from_byte = col_to_byte(&text, from_col);
-                let to_byte = col_to_byte(&text, to_col).max(from_byte);
-
-                let before = text[..from_byte].to_string();
-                let selected = text[from_byte..to_byte].to_string();
-                let after = text[to_byte..].to_string();
-
-                h_flex()
-                    .h(px(lh))
-                    .w_full()
-                    .line_height(px(lh))
-                    .text_size(px(fs))
-                    .font_family(mono_font.clone())
-                    .whitespace_nowrap()
-                    .gap_0()
-                    .text_color(default_fg)
-                    .child(before)
-                    .child(div().bg(sel_bg).text_color(default_fg).child(selected))
-                    .child(after)
-                    .into_any_element()
+                    row_el
+                        .child(StyledText::new(row.text.clone()).with_runs(final_runs))
+                        .into_any_element()
+                }
             })
             .collect();
 
@@ -1090,6 +1585,36 @@ impl Render for TerminalView {
     }
 }
 
+/// Measure the true per-cell advance of a monospace font by shaping a long run
+/// of `0`s and dividing the painted line width by the char count. This matches
+/// what `StyledText` actually renders (unlike `ch_advance`, whose raw font
+/// metric can drift by a subpixel amount that accumulates over many columns),
+/// so the PTY column count lines up with the visual wrap width.
+fn measure_mono_cell_width(
+    window: &Window,
+    font: &gpui::Font,
+    font_size: Pixels,
+) -> Result<f32> {
+    const SAMPLE_CHARS: usize = 64;
+    let sample: String = "0".repeat(SAMPLE_CHARS);
+    let run = TextRun {
+        len: sample.len(),
+        font: font.clone(),
+        color: TERMINAL_FG,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let lines = window
+        .text_system()
+        .shape_text(sample.into(), font_size, &[run], None, None)?;
+    let w: f32 = lines
+        .first()
+        .map(|l| l.width().into())
+        .ok_or_else(|| anyhow::anyhow!("shaped empty line"))?;
+    Ok((w / SAMPLE_CHARS as f32).max(1.0))
+}
+
 /// Given font size and line height (both px), returns the monospace character
 /// cell width in pixels. Hardcoded aspect ratio calibrated for Menlo/JetBrains
 /// Mono at common UI sizes. If selection drifts, tune this value.
@@ -1105,7 +1630,12 @@ mod tests {
     // Import only the pure helpers under test — NOT `super::*`, which would
     // pull in GPUI's macro-heavy prelude and blow the `#[test]` macro's
     // recursion limit.
-    use super::{col_to_byte, contains_sequence, slice_by_cols};
+    use super::{
+        apply_log_highlights, apply_selection, col_to_byte, color_to_hsla, contains_sequence,
+        slice_by_cols,
+    };
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, TextRun};
 
     /// Reproduces the exact panic from the crash report: a row containing the
     /// 2-byte `·` char where a selection column landed mid-character
@@ -1179,5 +1709,187 @@ mod tests {
         joined.extend_from_slice(tail);
         joined.extend_from_slice(chunk2);
         assert!(contains_sequence(&joined, SEQ));
+    }
+
+    /// 256-color cube: spot-check standard xterm indices against the expected
+    /// RGB channels (0,95,135,175,215,255) and the 24-step grayscale ramp.
+    #[test]
+    fn indexed_256_color_cube_and_grayscale() {
+        fn expect_rgb(idx: u8, r: u8, g: u8, b: u8) {
+            let got = color_to_hsla(&Color::Indexed(idx));
+            let want = super::hsla_from_rgb8(r, g, b);
+            assert!(
+                (got.h - want.h).abs() < 0.02
+                    && (got.s - want.s).abs() < 0.02
+                    && (got.l - want.l).abs() < 0.02,
+                "index {idx}: got {:?}, want ~{:?}",
+                got,
+                want
+            );
+        }
+        // i=16  -> n=0   -> (0,0,0)
+        expect_rgb(16, 0, 0, 0);
+        // i=196 -> n=180 -> r=5,g=0,b=0 -> (255,0,0) pure red
+        expect_rgb(196, 255, 0, 0);
+        // i=51  -> n=35  -> r=0,g=5,b=5 -> (0,255,255) cyan
+        expect_rgb(51, 0, 255, 255);
+        // i=21  -> n=5   -> r=0,g=0,b=5 -> (0,0,255) blue
+        expect_rgb(21, 0, 0, 255);
+        // Grayscale ramp: index 232 -> gray 8, 255 -> gray 238.
+        expect_rgb(232, 8, 8, 8);
+        expect_rgb(255, 238, 238, 238);
+        // The first 16 indices map through the named palette.
+        assert_eq!(
+            color_to_hsla(&Color::Indexed(1)),
+            color_to_hsla(&Color::Named(NamedColor::Red))
+        );
+    }
+
+    /// Build a bare-bones run of `len` bytes for the selection tests.
+    fn test_run(len: usize, bg: Option<Hsla>) -> TextRun {
+        TextRun {
+            len,
+            font: Font {
+                family: "mono".into(),
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Normal,
+                features: FontFeatures::default(),
+                fallbacks: None,
+            },
+            color: super::TERMINAL_FG,
+            background_color: bg,
+            underline: None,
+            strikethrough: None,
+        }
+    }
+
+    #[test]
+    fn apply_selection_preserves_total_length_and_colors() {
+        // Two runs covering 10 bytes total ("0123456789").
+        let runs = vec![test_run(4, None), test_run(6, None)];
+        let sel_bg = gpui::hsla(0.6, 0.7, 0.5, 0.45);
+
+        // Selection spans both runs (bytes 2..8).
+        let out = apply_selection(&runs, 10, 2, 8, sel_bg);
+        let total: usize = out.iter().map(|r| r.len).sum();
+        assert_eq!(total, 10, "output runs must still cover the whole text");
+        // The selected sub-runs must carry the selection background.
+        assert!(out
+            .iter()
+            .any(|r| r.background_color == Some(sel_bg)));
+        // And the run text COLOR must be unchanged (not replaced).
+        assert!(out.iter().all(|r| r.color == super::TERMINAL_FG));
+    }
+
+    #[test]
+    fn apply_selection_wholly_inside_one_run_splits_into_three() {
+        let runs = vec![test_run(10, None)];
+        let sel_bg = gpui::hsla(0.6, 0.7, 0.5, 0.45);
+        let out = apply_selection(&runs, 10, 3, 7, sel_bg);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].len, 3);
+        assert_eq!(out[0].background_color, None);
+        assert_eq!(out[1].len, 4);
+        assert_eq!(out[1].background_color, Some(sel_bg));
+        assert_eq!(out[2].len, 3);
+        assert_eq!(out[2].background_color, None);
+    }
+
+    #[test]
+    fn apply_selection_at_boundaries_and_empty_range() {
+        let runs = vec![test_run(5, None)];
+        let sel_bg = gpui::hsla(0.6, 0.7, 0.5, 0.45);
+        // Selection covering the entire first run.
+        let out = apply_selection(&runs, 5, 0, 5, sel_bg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len, 5);
+        assert_eq!(out[0].background_color, Some(sel_bg));
+        // Empty / out-of-range selection returns the runs untouched.
+        let out = apply_selection(&runs, 5, 3, 3, sel_bg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].background_color, None);
+        let out = apply_selection(&runs, 5, 99, 100, sel_bg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].background_color, None);
+    }
+
+    #[test]
+    fn log_highlights_recolors_levels_and_timestamps() {
+        let base = || test_run(0, None);
+        // Build a base run that spans the whole line; the highlighter splits it.
+        let line = "2026-08-06 06:21:18 INFO  starting up";
+        let runs = vec![TextRun {
+            len: line.len(),
+            ..base()
+        }];
+        let out = apply_log_highlights(line, &runs);
+
+        // The output runs must still cover every byte exactly.
+        assert_eq!(out.iter().map(|r| r.len).sum::<usize>(), line.len());
+
+        let color_at = |byte_idx: usize| -> Hsla {
+            let mut pos = 0;
+            for r in &out {
+                if byte_idx < pos + r.len {
+                    return r.color;
+                }
+                pos += r.len;
+            }
+            panic!("byte {byte_idx} past end");
+        };
+
+        // Timestamp (bytes 0..19) → HL_TIMESTAMP.
+        assert_eq!(color_at(0), super::HL_TIMESTAMP);
+        assert_eq!(color_at(10), super::HL_TIMESTAMP);
+        // INFO token starts at byte 20 → HL_INFO.
+        assert_eq!(color_at(20), super::HL_INFO);
+        // The word "starting" reverts to the base fg.
+        let starting = line.find("starting").unwrap();
+        assert_eq!(color_at(starting), super::TERMINAL_FG);
+    }
+
+    #[test]
+    fn log_highlights_error_and_warn_colors() {
+        for (word, want) in [
+            ("ERROR", super::HL_ERROR),
+            ("FATAL", super::HL_ERROR),
+            ("WARN", super::HL_WARN),
+            ("WARNING", super::HL_WARN),
+            ("DEBUG", super::HL_DEBUG),
+            ("TRACE", super::HL_DEBUG),
+        ] {
+            let line = format!("2026-01-01 00:00:00 {word} something");
+            let runs = vec![TextRun {
+                len: line.len(),
+                ..test_run(0, None)
+            }];
+            let out = apply_log_highlights(&line, &runs);
+            assert_eq!(out.iter().map(|r| r.len).sum::<usize>(), line.len());
+            let start = line.find(word).unwrap();
+            let mut pos = 0;
+            let mut got = super::TERMINAL_FG;
+            for r in &out {
+                if start < pos + r.len {
+                    got = r.color;
+                    break;
+                }
+                pos += r.len;
+            }
+            assert_eq!(got, want, "wrong color for {word}");
+        }
+    }
+
+    #[test]
+    fn log_highlights_passthrough_when_no_match() {
+        // A line with nothing to highlight returns the base runs untouched.
+        let line = "plain uncolored output";
+        let runs = vec![TextRun {
+            len: line.len(),
+            ..test_run(0, None)
+        }];
+        let out = apply_log_highlights(line, &runs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len, line.len());
+        assert_eq!(out[0].color, super::TERMINAL_FG);
     }
 }

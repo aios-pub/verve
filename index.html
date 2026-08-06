@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Apply the saved/system theme BEFORE any CSS paints to avoid a flash.
+         Priority: localStorage "leptos-use-color-scheme" > system pref > light. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("leptos-use-color-scheme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark =
+            stored === "dark" ||
+            ((stored === null || stored === "auto") && prefersDark);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#07080c" media="(prefers-color-scheme: dark)" />
+    <!-- static assets, resolved relative to the public-url base -->
+    <link rel="icon" href="/verve/verve-7cb6dcd48e14be7b.png" integrity="sha384-yG9XEz2/WkJHKAmsnR7eM6XKMJpqGa6TaHP14h8hhfDvx3PeyreNGQ9gYzP5CA/s"/>
+    
+    
+    
+    
+    <!-- the WASM app; weak-refs + optimized -->
+    
+<script type="module">
+import init, * as bindings from '/verve/website-f98766a008510cb1.js';
+const wasm = await init({ module_or_path: '/verve/website-f98766a008510cb1_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <title>Verve — 原生 GPU 加速研发工作台</title>
+    <meta
+      name="description"
+      content="Verve 是基于 Rust + GPUI 构建的原生、GPU 加速研发工作台，集成接口调试、抓包、服务器排查、压测、Mock、笔记、Hosts 与 JSON 等日常开发工具。"
+    />
+  <link rel="modulepreload" href="/verve/website-f98766a008510cb1.js" crossorigin="anonymous" integrity="sha384-SoicKFNk65dsTS1GWh5E/7INV1MUTfwmYddac3oIEbmZZYBsepfgwx+diVW2zlF7"><link rel="preload" href="/verve/website-f98766a008510cb1_bg.wasm" crossorigin="anonymous" integrity="sha384-y3NOIPNxG5wADa3pkwxapMpG4jJ/ntAOw/PjL9LZ/PvSmQW7IgdtZCqfDtqFU7PG" as="fetch" type="application/wasm"></head>
+  <body></body>
+</html>

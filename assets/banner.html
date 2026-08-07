@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Verve — promotional banner</title>
+<style>
+  /* ---- Brand tokens (mirror of website/style/input.css, dark theme) ---- */
+  :root{
+    --ink-950:#07080c; --ink-900:#0c0e14; --ink-850:#11141c; --ink-800:#171b25;
+    --ink-700:#1f2433; --ink-600:#2c3346; --ink-500:#6b7798; --ink-400:#aeb8d4;
+    --ink-300:#cdd4e3; --ink-200:#eef1f8; --ink-100:#fbfcfe;
+    --bolt-200:#f8ffb4; --bolt-300:#f2ff7d; --bolt-400:#e8f93f;
+    --bolt-500:#d4e317; --bolt-600:#abc40a;
+    --pro-400:#a78bfa; --pro-500:#8b5cf6;
+    --sans:"Inter","PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:var(--ink-950)}
+  body{font-family:var(--sans);color:var(--ink-200);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+
+  /* ---- Fixed artboard: 1280 x 720 ---- */
+  .stage{
+    position:relative;width:1280px;height:720px;overflow:hidden;
+    background:
+      radial-gradient(120% 90% at 50% -10%, #0e111a 0%, var(--ink-950) 55%),
+      var(--ink-950);
+    isolation:isolate;
+  }
+
+  /* Layer: drifting grid */
+  .grid{
+    position:absolute;inset:0;z-index:1;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,.045) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,.045) 1px, transparent 1px);
+    background-size:56px 56px;
+    -webkit-mask-image:radial-gradient(ellipse 82% 70% at 50% 38%, #000 38%, transparent 100%);
+            mask-image:radial-gradient(ellipse 82% 70% at 50% 38%, #000 38%, transparent 100%);
+  }
+
+  /* Layer: aurora blobs */
+  .aurora{position:absolute;border-radius:50%;filter:blur(70px);z-index:2;pointer-events:none}
+  .a1{left:-130px;top:-160px;width:580px;height:580px;background:rgba(212,227,23,.28)}
+  .a2{right:-100px;top:-70px;width:460px;height:460px;background:rgba(139,92,246,.20)}
+  .a3{left:40%;top:50%;width:560px;height:560px;background:rgba(232,249,63,.07)}
+
+  /* Layer: top lime wash + scanline + vignette */
+  .wash{position:absolute;inset:0;z-index:3;pointer-events:none;
+    background:radial-gradient(ellipse 60% 46% at 50% -4%, rgba(212,227,23,.16), transparent 70%);}
+  .scan{position:absolute;left:0;right:0;top:0;height:2px;z-index:4;
+    background:linear-gradient(90deg,transparent,rgba(232,249,63,.55),transparent);
+    box-shadow:0 0 18px rgba(212,227,23,.45);}
+  .vignette{position:absolute;inset:0;z-index:5;pointer-events:none;
+    box-shadow:inset 0 0 220px 40px rgba(0,0,0,.55);}
+
+  /* ---- Content ---- */
+  .wrap{position:relative;z-index:6;height:100%;
+    padding:46px 72px 42px;display:flex;flex-direction:column;}
+
+  /* top strip */
+  .top{display:flex;align-items:center;justify-content:space-between}
+  .badge{display:inline-flex;align-items:center;gap:10px;
+    border:1px solid rgba(212,227,23,.28);background:rgba(212,227,23,.06);
+    border-radius:999px;padding:8px 16px;font-size:14px;font-weight:500;color:var(--bolt-200);}
+  .dot{position:relative;width:7px;height:7px}
+  .dot i{position:absolute;inset:0;border-radius:50%;background:var(--bolt-400)}
+  .dot i.ring{background:var(--bolt-400);opacity:.45;transform:scale(2.4);filter:blur(.5px)}
+
+  .techs{display:flex;gap:8px}
+  .tech{font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+    color:var(--ink-400);border:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.025);border-radius:6px;padding:6px 10px;text-transform:uppercase;}
+  .tech.live{color:var(--bolt-300);border-color:rgba(212,227,23,.30)}
+  .tech .pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--bolt-400);
+    margin-right:6px;vertical-align:1px;box-shadow:0 0 8px var(--bolt-400)}
+
+  /* hero block */
+  .hero{margin-top:30px;display:flex;align-items:center;gap:26px}
+  .logo{width:92px;height:92px;border-radius:23px;flex:none;
+    box-shadow:0 0 0 1px rgba(255,255,255,.12), 0 18px 48px rgba(0,0,0,.6),
+    0 0 70px rgba(212,227,23,.26), 0 0 110px rgba(212,227,23,.10);}
+  .titles{display:flex;flex-direction:column;gap:2px}
+  .wordmark{font-size:30px;font-weight:800;letter-spacing:-.01em;color:var(--ink-100);
+    display:flex;align-items:center;gap:8px;line-height:1}
+  .wordmark .bolt{color:var(--bolt-400);font-size:26px}
+  .wordmark .ver{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--ink-500);
+    letter-spacing:.04em;margin-left:6px;padding:3px 8px;border:1px solid rgba(255,255,255,.10);
+    border-radius:6px;background:rgba(255,255,255,.03)}
+
+  h1{font-size:58px;font-weight:800;letter-spacing:-.028em;line-height:1.07;margin-top:10px;color:var(--ink-100)}
+  .accent{
+    background:linear-gradient(108deg,var(--bolt-200),var(--bolt-400) 52%,var(--bolt-600));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 2px 24px rgba(212,227,23,.25));
+  }
+
+  .sub{margin-top:22px;max-width:980px;font-size:18px;line-height:1.65;color:var(--ink-400);font-weight:400}
+  .sub b{color:var(--ink-200);font-weight:600}
+
+  /* HUD stat strip */
+  .hud{margin-top:30px;display:grid;grid-template-columns:repeat(4,1fr);
+    border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);
+    border-radius:14px;overflow:hidden}
+  .hud .cell{padding:16px 20px;border-right:1px solid rgba(255,255,255,.07);position:relative}
+  .hud .cell:last-child{border-right:0}
+  .hud .v{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--bolt-300);line-height:1}
+  .hud .v .lt{color:var(--ink-500);font-weight:500}
+  .hud .l{margin-top:7px;font-size:12px;font-weight:500;letter-spacing:.06em;color:var(--ink-500);text-transform:uppercase}
+
+  /* feature pills */
+  .pills{margin-top:24px;display:flex;flex-wrap:wrap;gap:10px}
+  .pill{font-size:13.5px;font-weight:500;color:var(--ink-300);
+    border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.025);
+    border-radius:8px;padding:7px 13px;display:inline-flex;align-items:center;gap:7px}
+  .pill .ic{color:var(--bolt-400);font-size:13px;line-height:1}
+  .pill.pro{border-color:rgba(139,92,246,.30);color:#d8ccff}
+  .pill.pro .ic{color:var(--pro-400)}
+
+  /* bottom strip */
+  .foot{margin-top:auto;display:flex;align-items:flex-end;justify-content:space-between;padding-top:18px}
+  .links{display:flex;gap:22px;font-family:var(--mono);font-size:13px;color:var(--ink-500);letter-spacing:.01em}
+  .links span b{color:var(--ink-300);font-weight:500}
+  .tagline{font-size:13.5px;color:var(--ink-500);text-align:right}
+  .tagline b{color:var(--bolt-300);font-weight:600}
+  .lic{margin-top:6px;display:inline-flex;gap:6px;font-family:var(--mono);font-size:11px;letter-spacing:.05em}
+  .lic .o{color:var(--ink-400);border:1px solid rgba(255,255,255,.12);padding:3px 8px;border-radius:5px}
+  .lic .p{color:#d8ccff;border:1px solid rgba(139,92,246,.32);padding:3px 8px;border-radius:5px}
+
+  /* corner ticks — Mission Control flavor */
+  .corner{position:absolute;width:18px;height:18px;z-index:6;opacity:.5}
+  .corner::before,.corner::after{content:"";position:absolute;background:var(--bolt-500)}
+  .corner::before{width:18px;height:1.5px}
+  .corner::after{width:1.5px;height:18px}
+  .c-tl{left:26px;top:26px}.c-tl::before{top:0;left:0}.c-tl::after{top:0;left:0}
+  .c-tr{right:26px;top:26px}.c-tr::before{top:0;right:0}.c-tr::after{top:0;right:0}
+  .c-bl{left:26px;bottom:26px}.c-bl::before{bottom:0;left:0}.c-bl::after{bottom:0;left:0}
+  .c-br{right:26px;bottom:26px}.c-br::before{bottom:0;right:0}.c-br::after{bottom:0;right:0}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="grid"></div>
+  <div class="aurora a1"></div>
+  <div class="aurora a2"></div>
+  <div class="aurora a3"></div>
+  <div class="wash"></div>
+  <div class="scan"></div>
+  <div class="vignette"></div>
+
+  <div class="corner c-tl"></div>
+  <div class="corner c-tr"></div>
+  <div class="corner c-bl"></div>
+  <div class="corner c-br"></div>
+
+  <div class="wrap">
+    <!-- top strip -->
+    <div class="top">
+      <span class="badge">
+        <span class="dot"><i class="ring"></i><i></i></span>
+        Rust + GPUI · 原生一体化 · 非 Electron
+      </span>
+      <div class="techs">
+        <span class="tech">Rust</span>
+        <span class="tech">WASM</span>
+        <span class="tech live"><span class="pulse"></span>GPU</span>
+      </div>
+    </div>
+
+    <!-- hero -->
+    <div class="hero">
+      <img class="logo" src="icons/verve.png" alt="Verve" />
+      <div class="titles">
+        <div class="wordmark"><span class="bolt">⚡</span> Verve <span class="ver">v0.3.0</span></div>
+        <h1>开发者所需的<br><span class="accent">一体化原生工作台</span></h1>
+      </div>
+    </div>
+
+    <p class="sub">
+      把日常开发的高频操作，融为一个由 <b>GPU 渲染</b>的原生窗口 —— <b>秒级启动，内存不到 100MB</b>。
+      告别 Postman、Termius、Swagger、笔记软件与 JSON 工具的来回切换。
+    </p>
+
+    <!-- HUD -->
+    <div class="hud">
+      <div class="cell"><div class="v"><span class="lt">&lt;</span> 1<span class="lt">s</span></div><div class="l">冷启动</div></div>
+      <div class="cell"><div class="v"><span class="lt">&lt;</span> 100<span class="lt">MB</span></div><div class="l">内存基线</div></div>
+      <div class="cell"><div class="v">~60<span class="lt">fps</span></div><div class="l">GPU 渲染</div></div>
+      <div class="cell"><div class="v">100<span class="lt">%</span></div><div class="l">内存安全</div></div>
+    </div>
+
+    <!-- pills -->
+    <div class="pills">
+      <span class="pill"><span class="ic">◆</span>接口与测试</span>
+      <span class="pill pro"><span class="ic">◆</span>终端与排查</span>
+      <span class="pill pro"><span class="ic">◆</span>压测与自动化</span>
+      <span class="pill"><span class="ic">◆</span>Mock 与抓包</span>
+      <span class="pill"><span class="ic">◆</span>文档与 Git</span>
+      <span class="pill pro"><span class="ic">◆</span>笔记 · Markdown</span>
+      <span class="pill"><span class="ic">◆</span>Hosts</span>
+      <span class="pill"><span class="ic">◆</span>JSON</span>
+    </div>
+
+    <!-- foot -->
+    <div class="foot">
+      <div class="links">
+        <span>🌐 <b>verve.app</b></span>
+        <span>⌥ <b>github.com/aios-rs/verve</b></span>
+      </div>
+      <div>
+        <div class="tagline">九大支柱，一个窗口 · <b>macOS · Linux · Windows</b></div>
+        <div class="lic" style="justify-content:flex-end">
+          <span class="o">AGPL-3.0 开源</span>
+          <span class="p">Pro 版</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

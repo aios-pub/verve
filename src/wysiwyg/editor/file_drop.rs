@@ -121,7 +121,17 @@ impl Editor {
         self.pending_scroll_recheck_after_layout = true;
         self.scroll_layout_recheck_count = 0;
         self.last_scroll_viewport_size = None;
-        self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+        // 替换文档会重建所有 block（新 entity id），旧文档的滚动句柄与窗口
+        // 缓存已失效。这里必须像 `set_content` / `from_markdown` 一样重置，
+        // 否则首帧全部用估算行高算窗口，可见区间会落到行间缝隙里——只渲染
+        // 出占位 spacer（表现为黑屏），直到用户滚动触发重排才把内容带进
+        // 视口。ScrollHandle::new() 从 offset 0 开始，故无需再 set_offset。
+        self.scroll_handle = ScrollHandle::new();
+        self.click_scroll_anchor = None;
+        self.prev_visible_block_ids.clear();
+        self.row_stride_cache.clear();
+        self.row_painted_tops.clear();
+        self.prev_render_window = None;
         self.pending_focus = self.first_focusable_entity_id(cx);
         self.active_entity_id = self.pending_focus;
 

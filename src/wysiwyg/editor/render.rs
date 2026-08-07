@@ -10,12 +10,12 @@ use gpui_component::Disableable as _;
 use gpui_component::Sizable as _;
 use gpui_component::button::ButtonVariants as _;
 
-use super::{Editor, InfoDialogKind};
+use super::{Editor, InfoDialogKind, RenderWindow};
 use crate::wysiwyg::app_menu::dispatch_menu_action_for_editor;
 use crate::wysiwyg::components::CalloutVariant;
 use crate::wysiwyg::components::{
-    AddLanguageConfig, AddThemeConfig, Block, DismissTransientUi, Find, FindNext, FindPrevious,
-    NoRecentFiles, Replace, ReplaceAll,
+    AddLanguageConfig, AddThemeConfig, Block, DismissTransientUi, FindNext, FindPrevious,
+    NoRecentFiles, ReplaceAll,
 };
 use crate::wysiwyg::i18n::{I18nManager, I18nStrings};
 use crate::wysiwyg::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -1697,10 +1697,10 @@ impl Editor {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        use gpui_component::h_flex;
-        use gpui_component::v_flex;
-        use gpui_component::input::Input;
         use gpui_component::button::Button;
+        use gpui_component::h_flex;
+        use gpui_component::input::Input;
+        use gpui_component::v_flex;
 
         let state = self.find_state.as_ref()?;
         let c = &theme.colors;
@@ -2207,52 +2207,112 @@ impl Render for Editor {
             }
         }
 
-        // Unmeasured rows fall back to an estimate. A too-small estimate (the old
-        // 1.5× minimum height ≈ 42px) makes the stride accumulator run far ahead
-        // of the real content position when many consecutive rows are
-        // unmeasured — as happens during a fast scrollbar drag into fresh
-        // territory — so `rendered_window` both mounts too few rows AND places
-        // the mounted run at the wrong offset, leaving a blank gap that only
-        // closes after the next frame's re-measure.
+        // Unmeasured rows fall back to an estimate. Two failure modes, both seen
+        // in production as the "scroll into a black/blank editor" bug:
         //
-        // The best estimate for an unmeasured row is what the document's other
-        // rows actually measure, so use the median cached stride (the median is
-        // robust against a few towering code/table blocks inflating a mean).
-        // Only when nothing is measured yet do we fall back to a conservative
-        // multiple of the minimum height that covers a typical multi-line
-        // paragraph. Staying on the smaller side biases the accumulator toward
-        // over-mounting (rows mount a hair early, never late).
-        let measured_strides: Vec<f32> = row_first_ids
-            .iter()
-            .filter_map(|id| self.row_stride_cache.get(id).copied())
+        //   • Estimate too LARGE: the stride accumulator runs ahead of the real
+        //     content, so the total content height (`top_h + mounted + bottom_h`)
+        //     balloons and `max_offset` (the scroll range) inflates far beyond the
+        //     real document. Scrolling to a scrollbar position that maps into that
+        //     phantom space leaves the viewport on a spacer (editor background =
+        //     dark) with no row mounted there → black screen. The scrollbar thumb
+        //     looks normal because the offset itself is valid within the inflated
+        //     range.
+        //
+        //   • Estimate too SMALL: the accumulator lags behind real content during
+        //     a fast scroll, briefly leaving a gap between rows that re-measures
+        //     on the next frame — a transient jitter, far less severe than black.
+        //
+        // Of the two, a too-large estimate is catastrophic (persistent black until
+        // the rows in the phantom region get measured, which never happens because
+        // the window is computed against the inflated positions). So the estimate
+        // must be a strict LOWER BOUND on a typical row: never larger than what a
+        // short paragraph actually measures. We use the median of the *measured*
+        // rows, but only of those that are "short" — the document's many paragraph
+        // rows — never letting a few towering code/table blocks inflate it. When
+        // nothing is measured yet, fall back to a small multiple of the minimum
+        // block height (a guaranteed lower bound). Measured rows always keep their
+        // true stride, so the total height converges to the real value as the user
+        // scrolls and more rows are learned — the inflated range collapses as rows
+        // get measured, and the scrollbar never reaches phantom space.
+        let measured_strides: Vec<f32> = self
+            .row_stride_cache
+            .values()
+            .copied()
             .filter(|s| *s > 0.0 && s.is_finite())
             .collect();
-        let estimated_stride = match measured_strides.len() {
-            0 => (d.block_min_height.max(1.0) * 3.0).max(d.block_min_height),
-            _ => {
-                let mut sorted = measured_strides.clone();
-                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                sorted[sorted.len() / 2]
-            }
+        // A short row is one at or below ~3× the minimum block height (a typical
+        // 1-3 line paragraph). The estimate uses the median of short rows only;
+        // tall blocks (code fences, tables) are excluded so they can't inflate it.
+        let short_ceiling = d.block_min_height.max(1.0) * 3.0;
+        let short_strides: Vec<f32> = measured_strides
+            .iter()
+            .copied()
+            .filter(|s| *s <= short_ceiling)
+            .collect();
+        let estimated_stride = if short_strides.is_empty() {
+            // No short row measured yet — use the conservative lower bound. This
+            // is intentionally small: under-estimating makes the scroll range too
+            // short (content gets clipped, never black), the safe direction.
+            short_ceiling
+        } else {
+            let mut sorted = short_strides;
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted[sorted.len() / 2]
         };
         let strides: Vec<f32> = row_first_ids
             .iter()
             .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimated_stride))
             .collect();
 
-        // Bound the cache against block churn, only when it outgrows the live rows.
-        if self.row_stride_cache.len() > row_first_ids.len().saturating_mul(2) {
-            let live: std::collections::HashSet<EntityId> = row_first_ids.iter().copied().collect();
-            self.row_stride_cache.retain(|id, _| live.contains(id));
+        // Bound the cache against block churn, only when it outgrows the live
+        // document. The "live" set is *every* currently-visible block in the
+        // document (`visible_blocks`), NOT the rows in the mounted window
+        // (`row_first_ids`): the window only spans a narrow band around the
+        // viewport, so keying the eviction on it would discard every measured
+        // row the moment the viewport scrolls into fresh territory — leaving
+        // `measured_strides` (the median estimate above) empty and collapsing
+        // the estimate to `block_min_height * 3`. That drifts the stride
+        // accumulator ahead of the real content, drops the visible band into a
+        // gap between rows, and the editor goes black until several more frames
+        // re-measure the scrolled-into rows. Keeping all document rows live
+        // preserves their measured strides across the whole scroll range.
+        let live_row_ids: std::collections::HashSet<EntityId> = visible_blocks
+            .iter()
+            .map(|v| v.entity.entity_id())
+            .collect();
+        if self.row_stride_cache.len() > live_row_ids.len().saturating_mul(2) {
+            self.row_stride_cache
+                .retain(|id, _| live_row_ids.contains(id));
         }
 
-        let render_window = Self::rendered_window(
-            &strides,
-            current_scroll_y,
-            viewport_height,
-            RENDER_OVERDRAW_PX,
-            focus_row,
-        );
+        // For documents small enough to mount entirely, skip windowing and mount
+        // every row. The virtualization's row-height estimate can be wildly wrong
+        // for unmeasured rows (a document whose head is dominated by tall tables/
+        // code fences ends up with an inflated total height, so the scrollbar
+        // reaches "phantom space" past the real content and the viewport lands on
+        // a spacer — perceived as a black screen that only fills in after enough
+        // scrolling to measure those rows). Mounting all rows makes every height
+        // real, so the scroll range is exact and content always paints. The cost
+        // is layout of a few hundred blocks per frame, negligible for typical
+        // notes; very large documents still window.
+        const FULL_MOUNT_ROW_LIMIT: usize = 400;
+        let render_window = if row_first_ids.len() <= FULL_MOUNT_ROW_LIMIT {
+            RenderWindow {
+                run_start: 0,
+                run_end: row_first_ids.len(),
+                top_h: 0.0,
+                bottom_h: 0.0,
+            }
+        } else {
+            Self::rendered_window(
+                &strides,
+                current_scroll_y,
+                viewport_height,
+                RENDER_OVERDRAW_PX,
+                focus_row,
+            )
+        };
         self.prev_render_window = Some((render_window.run_start, render_window.run_end));
 
         // The first mounted row re-applies its `mt`, so drop it from the top

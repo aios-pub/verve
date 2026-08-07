@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     AnyWindowHandle, AppContext, ClickEvent, KeyDownEvent, Keystroke, TestAppContext,
-    VisualTestContext,
+    VisualTestContext, point, px,
 };
 
 use super::{Editor, ViewMode};
@@ -3313,4 +3313,109 @@ async fn delete_table_removes_block_and_leaves_paragraph(cx: &mut TestAppContext
         assert_eq!(roots[0].read(cx).kind(), BlockKind::Paragraph);
         assert_eq!(roots[0].read(cx).display_text(), "");
     });
+}
+
+/// Regression: scrolling a long mixed-height document must keep mounting rows
+/// into the viewport instead of collapsing the window to a handful of rows and
+/// leaving the rest as a giant spacer the user scrolls into (black screen).
+#[gpui::test]
+async fn scroll_keeps_mounting_rows_into_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+
+    // A document like the real one: a tall table near the top, then many short
+    // paragraphs, so the head's measured rows are much taller than the body.
+    let mut parts: Vec<String> = Vec::new();
+    parts.push("# Title\n\nintro paragraph\n".to_string());
+    // A wide, multi-row table (tall block).
+    parts.push(
+        ["| h0 | h1 | h2 |", "| --- | --- | --- |", "| a | b | c |", "| d | e | f |"]
+            .join("\n"),
+    );
+    // Many short paragraphs (the bulk of the document).
+    for i in 0..120 {
+        parts.push(format!("\nparagraph {i} line."));
+    }
+    let markdown = parts.join("\n\n");
+
+    let (editor, mut cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+
+    // Shrink the window to a small panel size (mirrors the real embedded
+    // markdown panel, ~729px tall) so the visible band is narrow — the regime
+    // where an inflated row estimate collapses the window to a few rows.
+    let window_handle: gpui::AnyWindowHandle = cx.update(|window, _cx| window.window_handle());
+    cx.simulate_window_resize(window_handle, gpui::size(px(900.0), px(729.0)));
+    redraw(&mut cx);
+
+    // Settle the initial layout so row heights get measured.
+    redraw(&mut cx);
+
+    let viewport_h = editor.update(cx, |editor, cx| {
+        f32::from(editor.scroll_handle.bounds().size.height.max(px(1.0)))
+    });
+
+    // After settling, the window must mount more than just the head's few tall
+    // rows — otherwise the body is one giant spacer and scrolling goes black.
+    let initial = editor.update(cx, |editor, _cx| {
+        let n = editor.document.visible_blocks().len();
+        let cached = editor.row_stride_cache.len();
+        (n, cached)
+    });
+    eprintln!(
+        "[scroll-test] viewport_h={viewport_h:.0} blocks={} cached={}",
+        initial.0, initial.1
+    );
+
+    // Simulate scrolling down several screens. Content must stay painted (the
+    // black-screen bug left the viewport on a spacer because unmeasured rows'
+    // inflated estimate made the scroll range reach phantom space).
+    let scroll_pos = point(px(100.0), px(viewport_h * 0.5));
+    let mut last_scroll_y = 0.0;
+    for step in 0..6 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: scroll_pos,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-viewport_h))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        redraw(&mut cx);
+
+        let cached = editor.update(cx, |editor, _cx| editor.row_stride_cache.len());
+        let scroll_y = editor.update(cx, |editor, _cx| {
+            -f32::from(editor.scroll_handle.offset().y)
+        });
+        last_scroll_y = scroll_y;
+        eprintln!(
+            "[scroll-test] step={step} scroll_y={scroll_y:.0} cached={cached}"
+        );
+    }
+
+    // Scrolling must have actually advanced the offset (proves scroll → repaint
+    // wiring works).
+    assert!(
+        last_scroll_y > viewport_h,
+        "scroll did not advance: last_scroll_y={last_scroll_y:.0}"
+    );
+
+    // The decisive assertion: the scroll range must not balloon far beyond the
+    // real content. Once rows are mounted/measured their cached strides are the
+    // real heights, so the scrollable extent should be on the order of the sum
+    // of measured strides — not many times it. A 5×+ balloon (the black-screen
+    // bug, where the scrollbar reaches phantom space past the real content)
+    // fails this.
+    let max_scroll_y = editor.update(cx, |editor, _cx| {
+        f32::from(editor.scroll_handle.max_offset().y.max(px(0.0)))
+    });
+    let sum_measured: f32 = editor.update(cx, |editor, _cx| {
+        editor.row_stride_cache.values().copied().filter(|s| *s > 0.0).sum()
+    });
+    let blocks = editor.update(cx, |editor, _cx| editor.document.visible_blocks().len());
+    eprintln!(
+        "[scroll-test] max_scroll_y={max_scroll_y:.0} sum_measured={sum_measured:.0} blocks={blocks}"
+    );
+    assert!(
+        max_scroll_y < sum_measured * 2.0 + viewport_h,
+        "scroll range ballooned to {max_scroll_y:.0} vs measured content ~{sum_measured:.0}; \
+         scrolling reaches empty space (black screen)",
+    );
 }

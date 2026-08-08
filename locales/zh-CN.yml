@@ -76,6 +76,7 @@ notes:
   export: 导出
   export_md: 导出为 Markdown
   export_pdf: 导出为 PDF
+  export_failed: 导出失败
   collapse_list: 收起笔记列表
   expand_list: 展开笔记列表
   note_count: "%{count} 篇笔记"

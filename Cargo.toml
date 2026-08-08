@@ -93,7 +93,20 @@ reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee
 http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 futures = "0.3"
 url = "2"
-# Pure-Rust ECMAScript engine for pre/post-request scripts (PRD §5.2 `apt` API).
+# http types (Uri) for the kube K8s client Config.
+http = "1"
+# secrecy 0.10 is required by the kube crate's AuthInfo secret fields (token,
+# password, client key). The project's own `secrecy = "0.8"` is used elsewhere
+# (SSH), so alias the newer version to avoid a conflict.
+secrecy_010 = { package = "secrecy", version = "0.10" }
+# PEM parsing to convert a kubeconfig's base64 CA data into the DER bytes that
+# the kube client's `Config::root_cert` expects.
+pem = "3.0"
+# rustls is used by several TLS consumers (kube, reqwest, russh). rustls 0.23
+# needs an explicit crypto provider; both `ring` and `aws-lc-rs` end up compiled
+# (ring via HTTP, aws-lc-rs via russh), so we must install one default at startup
+# to avoid the auto-detection panic. `ring` matches the HTTP TLS stack.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 boa_engine = "0.20"
 
 anyhow = "1"
@@ -149,8 +162,12 @@ secrecy = "0.8"
 bincode = "1"
 # Native file open/save dialogs for SFTP upload/download (cross-platform, async-safe).
 rfd = "0.15"
-# Low-level PDF generation (built-in Helvetica/Times/Courier fonts require no font files).
+# Low-level PDF generation. External (embedded) Noto Sans SC OTF is registered
+# so CJK glyphs render; printpdf's built-in fonts only cover WinAnsi (Latin).
 printpdf = "0.7"
+# Glyph advance-width measurement for CJK-aware line wrapping during PDF export
+# (printpdf's metrics API is pub(crate), so we measure with ab_glyph instead).
+ab_glyph = "0.2"
 # PDF rendering via Pdfium (bundled native library, extracted at build time)
 pdfium-render = "0.8"
 # Pixel-buffer / image types for handing rendered PDF pages to GPUI.
@@ -162,6 +179,12 @@ rust-embed = "8.7"
 # oha load testing library (integrated directly, no external binary needed)
 oha = { version = "1.15.0", default-features = false, features = ["rustls"] }
 clap = { version = "4", features = ["derive"] }
+# Kubernetes client (kube-rs). Native HTTP/WS client to the API server,
+# replacing subprocess calls to the external `kubectl` binary (which GUI apps
+# often can't find on PATH). `ws` enables exec/port-forward over WebSocket.
+kube = { version = "4.2.0", default-features = false, features = ["client", "rustls-tls", "ws"] }
+k8s-openapi = { version = "0.28", features = ["latest"] }
+
 # Markdown parser (CommonMark compliant) for the notepad live preview.
 pulldown-cmark = "0.12"
 # Spec-compliant HTML5 parser (servo's). Used to parse raw-HTML blocks in the
@@ -177,6 +200,8 @@ markup5ever_rcdom = "0.3"
 cssparser = "0.37"
 # Grapheme/segmentation for correct caret movement in the block text editor.
 unicode-segmentation = "1.13"
+# East-Asian character width classification for PDF export CJK line wrapping.
+unicode-width = "0.2"
 # base64 decoding for inline HTML data: URLs and embedded images.
 base64 = "0.22"
 # HTML structure validation via tree-sitter (gates semantic HTML rendering vs raw fallback).

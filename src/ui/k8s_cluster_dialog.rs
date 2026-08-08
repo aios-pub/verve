@@ -323,6 +323,63 @@ impl Render for K8sClusterDialogState {
     }
 }
 
+/// 解析当前 kubeconfig 文本：读取 `kubeconfig_text`，调用 `parse_kubeconfig_contexts`，
+/// 写回 `error` / `parsed_contexts` / `selected_context`，并在成功时自动填充集群名称。
+///
+/// 文件导入成功后和「解析 kubeconfig」按钮共享此逻辑，避免重复。
+fn parse_kubeconfig_now(state: &Entity<K8sClusterDialogState>, window: &mut Window, cx: &mut App) {
+    let text = state.read(cx).kubeconfig_text.read(cx).value().to_string();
+    let (error, contexts, selected, name_val_for_auto) = if text.trim().is_empty() {
+        (
+            Some("请粘贴 kubeconfig YAML 内容或选择文件".to_string()),
+            Vec::new(),
+            None,
+            None,
+        )
+    } else {
+        match parse_kubeconfig_contexts(&text) {
+            Ok(ctxs) => {
+                if ctxs.is_empty() {
+                    (
+                        Some("kubeconfig 中未找到任何有效的 context".to_string()),
+                        Vec::new(),
+                        None,
+                        None,
+                    )
+                } else {
+                    // ctxs 已判非空，first() 必为 Some。
+                    let first_name = ctxs.first().map(|c| c.name.clone());
+                    (None, ctxs, Some(0), first_name)
+                }
+            }
+            Err(e) => (
+                Some(format!("解析 kubeconfig 失败: {e}")),
+                Vec::new(),
+                None,
+                None,
+            ),
+        }
+    };
+
+    let _ = state.update(cx, |s, cx| {
+        s.error = error;
+        s.parsed_contexts = contexts;
+        s.selected_context = selected;
+        cx.notify();
+    });
+
+    if let Some(name_val) = name_val_for_auto {
+        let s = state.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = s.update(cx, |s, cx| {
+                s.name.update(cx, |input, cx| {
+                    input.set_value(&name_val, window, cx);
+                });
+            });
+        });
+    }
+}
+
 /// Open the add/edit cluster dialog. `on_save` is invoked after a cluster is
 /// successfully saved, so the caller can refresh its state.
 pub fn open_dialog<F>(
@@ -361,10 +418,18 @@ pub fn open_dialog<F>(
                 let ssh_hosts_empty = s.ssh_label_to_id.is_empty();
                 let is_editing_imported = s.editing_id.is_some() && s.is_imported_cluster;
 
+                // 按窗口视口高度限制 body 高度，使其内部滚动，确保 footer（保存按钮）始终可见。
+                // 预留 240px 给标题 + footer；设下限防止极小窗口时内容被压缩到无法操作。
+                let viewport_h = window.viewport_size().height.as_f32();
+                let body_max_h = (viewport_h - 240.0).max(240.0);
                 let mut body = v_flex()
                     .p_4()
                     .w_full()
-                    .gap_3();
+                    .gap_3()
+                    .max_h(px(body_max_h))
+                    .min_h_0()
+                    .id("k8s-cluster-dialog-body-scroll")
+                    .overflow_y_scroll();
 
                 // Error message
                 if let Some(err) = &s.error {
@@ -442,7 +507,7 @@ pub fn open_dialog<F>(
                                     .gap_1()
                                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("KubeConfig YAML"))
                                     .child(Input::new(&s.kubeconfig_text).small().h(px(140.)))
-                                    .child(div().text_xs().text_color(muted).child("粘贴 kubeconfig YAML 内容或点击\"选择文件\"导入，然后点击\"解析\"列出可用 Context"))
+                                    .child(div().text_xs().text_color(muted).child("粘贴 kubeconfig YAML 内容或点击\"选择文件\"导入。选择文件导入后会自动解析；粘贴 YAML 后可点击\"解析\"列出可用 Context"))
                             );
 
                         // File picker + Parse buttons
@@ -471,6 +536,7 @@ pub fn open_dialog<F>(
                                                         Ok(Some(path)) => {
                                                             let content = std::fs::read_to_string(&path)
                                                                 .map_err(|e| format!("读取文件失败: {e}"));
+                                                            let content_ok = content.is_ok();
                                                             let _ = window_handle.update(cx, |_this, window, cx| {
                                                                 let _ = state.update(cx, |s, cx| {
                                                                     match content {
@@ -486,6 +552,10 @@ pub fn open_dialog<F>(
                                                                     }
                                                                     cx.notify();
                                                                 });
+                                                                // 文件导入成功后自动解析，无需用户再手动点「解析」。
+                                                                if content_ok {
+                                                                    parse_kubeconfig_now(&state, window, cx);
+                                                                }
                                                             });
                                                             break;
                                                         }
@@ -506,42 +576,7 @@ pub fn open_dialog<F>(
                                         .on_click({
                                             let state = state_for_content.clone();
                                             move |_ev, window, cx: &mut App| {
-                                                let text = state.read(cx).kubeconfig_text.read(cx).value().to_string();
-                                                let (error, contexts, selected, name_val_for_auto) = if text.trim().is_empty() {
-                                                    (Some("请粘贴 kubeconfig YAML 内容或选择文件".to_string()), Vec::new(), None, None)
-                                                } else {
-                                                    match parse_kubeconfig_contexts(&text) {
-                                                        Ok(ctxs) => {
-                                                            if ctxs.is_empty() {
-                                                                (Some("kubeconfig 中未找到任何有效的 context".to_string()), Vec::new(), None, None)
-                                                            } else {
-                                                                let first_name = ctxs.first().unwrap().name.clone();
-                                                                (None, ctxs, Some(0), Some(first_name))
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            (Some(format!("解析 kubeconfig 失败: {e}")), Vec::new(), None, None)
-                                                        }
-                                                    }
-                                                };
-
-                                                let _ = state.update(cx, |s, cx| {
-                                                    s.error = error;
-                                                    s.parsed_contexts = contexts;
-                                                    s.selected_context = selected;
-                                                    cx.notify();
-                                                });
-
-                                                if let Some(name_val) = name_val_for_auto {
-                                                    let s = state.clone();
-                                                    window.defer(cx, move |window, cx| {
-                                                        let _ = s.update(cx, |s, cx| {
-                                                            s.name.update(cx, |input, cx| {
-                                                                input.set_value(&name_val, window, cx);
-                                                            });
-                                                        });
-                                                    });
-                                                }
+                                                parse_kubeconfig_now(&state, window, cx);
                                             }
                                         })
                                 )

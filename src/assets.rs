@@ -19,11 +19,12 @@ use std::borrow::Cow;
 struct VerveIcons;
 
 /// Bundled fonts required by gpui's SVG renderer (IBM Plex Sans for sans-serif,
-/// Lilex for monospace). Without these, every SVG text render emits a
-/// "Bundled font not found" warning.
+/// Lilex for monospace) plus Noto Sans SC (CJK) for PDF export. Without these,
+/// every SVG text render emits a "Bundled font not found" warning.
 #[derive(RustEmbed)]
 #[folder = "assets/fonts"]
 #[include = "*.ttf"]
+#[include = "*.otf"]
 struct BundledFonts;
 
 /// Prefix under which custom Verve icons are exposed to the UI layer. A

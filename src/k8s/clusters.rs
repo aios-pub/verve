@@ -472,7 +472,11 @@ pub fn save_verve_kubeconfig(cfg: &crate::k8s::config::KubeConfig) -> Result<(),
 
 /// Parse an imported raw kubeconfig YAML and extract the cluster/context/user
 /// for a specific context name, returning the extracted auth and cluster info.
-fn extract_from_raw_kubeconfig(
+///
+/// Returns `(server, namespace, auth, ca_data, context_name)`. The `ca_data`
+/// is the base64-encoded PEM certificate-authority data from the cluster entry,
+/// or `None` if absent.
+pub(crate) fn extract_from_raw_kubeconfig(
     raw_yaml: &str,
     context_name: &str,
 ) -> Option<(String, String, ClusterAuth, Option<String>, String)> {

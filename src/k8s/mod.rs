@@ -13,6 +13,7 @@
 //!   a bastion). Mirrors the Docker SSH tunnel architecture.
 
 pub mod api_tunnel;
+pub mod client;
 pub mod clusters;
 pub mod config;
 pub mod kubectl;

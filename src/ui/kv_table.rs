@@ -197,42 +197,46 @@ impl RenderOnce for KvTable {
                         // We deliberately avoid mutating the value InputState
                         // so `to_kv()` keeps returning the model's real value
                         // (empty) and only `file_path` carries the file.
-                        let file_name: Option<String> =
-                            (is_file && allow_files).then(|| row.file_path.as_deref()).flatten()
-                                .and_then(|p| {
-                                    std::path::Path::new(p)
-                                        .file_name()
-                                        .and_then(|n| n.to_str())
-                                        .map(|s| s.to_string())
-                                });
-                        div().w(px(160.)).flex_shrink_0().child(if let Some(name) = file_name {
-                            div()
-                                .w_full()
-                                .h(px(24.))
-                                .flex()
-                                .items_center()
-                                .overflow_hidden()
-                                .text_size(px(12.))
-                                .text_color(theme.muted_foreground)
-                                .child(Icon::new(IconName::File).size_3())
-                                .child(
-                                    div()
-                                        .ml_1()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .whitespace_nowrap()
-                                        .child(name),
-                                )
-                                .into_any_element()
-                        } else {
-                            Input::new(&row.value)
-                                .small()
-                                .appearance(false)
-                                .disabled(is_file && allow_files)
-                                .into_any_element()
-                        })
+                        let file_name: Option<String> = (is_file && allow_files)
+                            .then(|| row.file_path.as_deref())
+                            .flatten()
+                            .and_then(|p| {
+                                std::path::Path::new(p)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .map(|s| s.to_string())
+                            });
+                        div()
+                            .w(px(160.))
+                            .flex_shrink_0()
+                            .child(if let Some(name) = file_name {
+                                div()
+                                    .w_full()
+                                    .h(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .overflow_hidden()
+                                    .text_size(px(12.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(Icon::new(IconName::File).size_3())
+                                    .child(
+                                        div()
+                                            .ml_1()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .child(name),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                Input::new(&row.value)
+                                    .small()
+                                    .appearance(false)
+                                    .disabled(is_file && allow_files)
+                                    .into_any_element()
+                            })
                     })
                     // Type selector dropdown (form-data / query).
                     .when(show_type, |this| {

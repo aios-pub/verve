@@ -1,9 +1,11 @@
 //! Keybinding action handlers: open/save/close Markdown files and the
 //! workspace. These are wired via `on_action` in the root Render.
 
-use gpui::{img, *};
 use super::SideView;
-use super::{CloseFile, NewFile, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace, VerveApp};
+use super::{
+    CloseFile, NewFile, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace, VerveApp,
+};
+use gpui::{img, *};
 
 impl VerveApp {
     pub(super) fn on_open_markdown_file(
@@ -16,7 +18,6 @@ impl VerveApp {
         let _ = self.markdown.update(cx, |p, cx| p.open_file_dialog(cx));
         cx.notify();
     }
-
 
     pub(super) fn on_open_markdown_file_new_tab(
         &mut self,
@@ -34,7 +35,12 @@ impl VerveApp {
     /// debounce). In other views this is a no-op (the editor owns file saving;
     /// there is no "workspace" to persist here). The WYSIWYG editor's own
     /// SaveDocument action is intentionally unregistered in the embedded build
-    pub(super) fn on_save_workspace(&mut self, _: &SaveWorkspace, w: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn on_save_workspace(
+        &mut self,
+        _: &SaveWorkspace,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.active_view {
             SideView::MarkdownEditor => {
                 let _ = self.markdown.update(cx, |p, cx| p.save(w, cx));

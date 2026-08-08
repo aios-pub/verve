@@ -2,16 +2,19 @@
 //! lists/quote/code/table/image, Paragraph & Format dropdowns) plus the
 //! root-level dropdown overlay panel.
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
-use crate::wysiwyg::editor::toolbar::{ToolbarAction, ToolbarDropdown, ToolbarSnapshot};
-use super::widgets::{command_keycap, dropdown_panel, dropdown_separator, toolbar_divider};
 use super::SideView;
 use super::VerveApp;
+use super::widgets::{command_keycap, dropdown_panel, dropdown_separator, toolbar_divider};
+use crate::wysiwyg::editor::toolbar::{ToolbarAction, ToolbarDropdown, ToolbarSnapshot};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
 
 impl VerveApp {
-    pub(super) fn active_editor_entity_for_toolbar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn active_editor_entity_for_toolbar(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let editor: Entity<crate::wysiwyg::editor::Editor> = match self.active_view {
             SideView::Notes => self.notes.read(cx).editor().clone(),
             SideView::MarkdownEditor => self.markdown.read(cx).editor().clone(),
@@ -19,7 +22,6 @@ impl VerveApp {
         };
         self.render_editor_dropdown_overlay(&editor, cx)
     }
-
 }
 
 impl VerveApp {

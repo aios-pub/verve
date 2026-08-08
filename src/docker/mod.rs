@@ -1,6 +1,10 @@
 //! Docker container management.
+//!
+//! All Docker Engine API access goes through the native `bollard` client (see
+//! [`client`]); no external `docker` CLI binary is required.
 
 pub mod cli;
+pub mod client;
 pub mod host_store;
 pub mod models;
 pub mod socket_tunnel;

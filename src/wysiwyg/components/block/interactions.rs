@@ -17,12 +17,11 @@ use crate::wysiwyg::components::{
     ConvertToNumberedList, ConvertToParagraph, ConvertToQuote, ConvertToTaskList, Copy, Cut,
     Delete, DeleteBack, DismissTransientUi, End, ExitCodeBlock, FocusNext, FocusPrev, Heading1,
     Heading2, Heading3, Heading4, Heading5, Heading6, HighlightSelection, Home, IndentBlock,
-    InsertLink, InsertTableColumnRight, InsertTableRowBelow, ItalicSelection, MoveLeft,
-    MoveRight, Newline, OutdentBlock, Paste, PastePlainText, SelectAll, SelectEnd, SelectHome,
-    SelectLeft,
+    InsertLink, InsertTableColumnRight, InsertTableRowBelow, ItalicSelection, MoveLeft, MoveRight,
+    Newline, OutdentBlock, Paste, PastePlainText, SelectAll, SelectEnd, SelectHome, SelectLeft,
     SelectRight, StrikethroughSelection, SubscriptSelection, SuperscriptSelection,
-    UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft,
-    WordMoveRight, WordSelectLeft, WordSelectRight,
+    UnderlineSelection, WordDeleteBack, WordDeleteForward, WordMoveLeft, WordMoveRight,
+    WordSelectLeft, WordSelectRight,
 };
 
 impl Block {

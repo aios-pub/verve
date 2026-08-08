@@ -13,9 +13,9 @@
 use std::ops::Range;
 
 use cssparser::color::{parse_hash_color, parse_named_color};
-use html5ever::driver::{parse_fragment, ParseOpts};
+use html5ever::driver::{ParseOpts, parse_fragment};
 use html5ever::tendril::TendrilSink;
-use html5ever::{local_name, namespace_url, ns, QualName};
+use html5ever::{QualName, local_name, namespace_url, ns};
 use markup5ever_rcdom::{NodeData, RcDom};
 use std::rc::Rc;
 
@@ -132,7 +132,12 @@ pub(crate) struct HtmlBoxEdges {
 impl HtmlBoxEdges {
     /// Uniform edges from a single value.
     fn uniform(v: f32) -> Self {
-        Self { top: v, right: v, bottom: v, left: v }
+        Self {
+            top: v,
+            right: v,
+            bottom: v,
+            left: v,
+        }
     }
 }
 
@@ -433,13 +438,8 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     // <html>/<head>/<body>, so the children of the context are exactly the
     // fragment's top-level nodes.
     let context = QualName::new(None, ns!(html), local_name!("div"));
-    let dom = parse_fragment(
-        RcDom::default(),
-        ParseOpts::default(),
-        context,
-        Vec::new(),
-    )
-    .one(raw_source.to_string());
+    let dom = parse_fragment(RcDom::default(), ParseOpts::default(), context, Vec::new())
+        .one(raw_source.to_string());
 
     if !dom.errors.is_empty() {
         log::debug!(
@@ -453,10 +453,7 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     // fragment's top-level nodes.
     let top_level = fragment_top_level_children(&dom);
 
-    let nodes: Vec<HtmlNode> = top_level
-        .iter()
-        .filter_map(dom_node_to_html_node)
-        .collect();
+    let nodes: Vec<HtmlNode> = top_level.iter().filter_map(dom_node_to_html_node).collect();
 
     // No usable nodes → treat the whole fragment as raw text (preserves the
     // exact source for display/export).
@@ -467,9 +464,9 @@ pub(crate) fn parse_html_document(raw_source: &str) -> HtmlDocument {
     // If every top-level node is raw text (no semantic element at all), keep
     // the document as raw text so it renders as a single source block rather
     // than a pile of raw-text children.
-    let any_semantic = nodes.iter().any(|n| {
-        !matches!(n.kind, HtmlNodeKind::RawTextBlock) && n.tag_name != "#text"
-    });
+    let any_semantic = nodes
+        .iter()
+        .any(|n| !matches!(n.kind, HtmlNodeKind::RawTextBlock) && n.tag_name != "#text");
     if !any_semantic {
         return HtmlDocument::raw(raw_source);
     }
@@ -557,11 +554,7 @@ fn dom_node_to_html_node(node: &Rc<markup5ever_rcdom::Node>) -> Option<HtmlNode>
                 source_range: 0..0,
             }
         }
-        NodeData::Element {
-            name,
-            attrs,
-            ..
-        } => {
+        NodeData::Element { name, attrs, .. } => {
             let tag_name = name.local.as_ref().to_string();
             let html_attrs: Vec<HtmlAttr> = attrs
                 .borrow()
@@ -947,13 +940,8 @@ pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock>
     // html5ever (instead of the old hand-written tag tokenizer) keeps this
     // robust against attribute quoting/ordering variations.
     let context = QualName::new(None, ns!(html), local_name!("div"));
-    let dom = parse_fragment(
-        RcDom::default(),
-        ParseOpts::default(),
-        context,
-        Vec::new(),
-    )
-    .one(trimmed.to_string());
+    let dom = parse_fragment(RcDom::default(), ParseOpts::default(), context, Vec::new())
+        .one(trimmed.to_string());
 
     // The fragment's real top-level nodes live under the <body> wrapper that
     // html5ever synthesizes (see `fragment_top_level_children`).
@@ -1775,14 +1763,24 @@ mod tests {
         let s = parse_inline_style("margin: 8px 12px;");
         assert_eq!(
             s.margin,
-            Some(HtmlBoxEdges { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 })
+            Some(HtmlBoxEdges {
+                top: 8.0,
+                right: 12.0,
+                bottom: 8.0,
+                left: 12.0
+            })
         );
 
         // 4 values → t/r/b/l.
         let s = parse_inline_style("padding: 1px 2px 3px 4px;");
         assert_eq!(
             s.padding,
-            Some(HtmlBoxEdges { top: 1.0, right: 2.0, bottom: 3.0, left: 4.0 })
+            Some(HtmlBoxEdges {
+                top: 1.0,
+                right: 2.0,
+                bottom: 3.0,
+                left: 4.0
+            })
         );
 
         // Individual sides accumulate into one struct.
@@ -1880,7 +1878,10 @@ mod tests {
         assert_eq!(inline_word_chunks("end ", false, false), vec!["end "]);
         assert!(inline_word_chunks("", false, false).is_empty());
         // Inline code / highlighted runs stay a single continuous box.
-        assert_eq!(inline_word_chunks("let x = 2", true, false), vec!["let x = 2"]);
+        assert_eq!(
+            inline_word_chunks("let x = 2", true, false),
+            vec!["let x = 2"]
+        );
         assert_eq!(
             inline_word_chunks("highlighted text", false, true),
             vec!["highlighted text"],
@@ -1931,8 +1932,11 @@ mod tests {
         let doc = parse_html_document(
             "<p>内置 HTTP 调试、<strong>SSH 终端</strong>、Docker 只读查看。</p>",
         );
-        let inline_source: String =
-            doc.nodes[0].children.iter().map(|c| c.raw_source.as_str()).collect();
+        let inline_source: String = doc.nodes[0]
+            .children
+            .iter()
+            .map(|c| c.raw_source.as_str())
+            .collect();
 
         let tree = InlineTextTree::from_markdown(&inline_source);
         let cache = tree.render_cache();
@@ -1976,8 +1980,11 @@ mod tests {
 
         // Concatenate the children's raw_source the way the renderer does, then
         // re-parse as Markdown: the **bold** lead must survive as a bold run.
-        let inline_source: String =
-            doc.nodes[0].children.iter().map(|c| c.raw_source.as_str()).collect();
+        let inline_source: String = doc.nodes[0]
+            .children
+            .iter()
+            .map(|c| c.raw_source.as_str())
+            .collect();
         let tree = InlineTextTree::from_markdown(&inline_source);
         let cache = tree.render_cache();
         let visible = cache.visible_text();
@@ -2076,7 +2083,10 @@ mod tests {
         let src = "<div align=\"center\">old</div>";
         let doc = parse_html_document(src);
         let shape = extract_editable_inline_wrapper(&doc).expect("editable wrapper");
-        assert_eq!(shape.wrap("new **bold**"), "<div align=\"center\">new **bold**</div>");
+        assert_eq!(
+            shape.wrap("new **bold**"),
+            "<div align=\"center\">new **bold**</div>"
+        );
     }
 
     #[test]
@@ -2170,8 +2180,6 @@ mod tests {
         if node.tag_name == tag {
             return Some(node);
         }
-        node.children
-            .iter()
-            .find_map(|c| find_first_tag(c, tag))
+        node.children.iter().find_map(|c| find_first_tag(c, tag))
     }
 }

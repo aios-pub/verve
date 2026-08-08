@@ -3,15 +3,21 @@
 //! size persistence. These are used across several title-bar and
 //! toolbar rendering methods.
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _, button::{Button, ButtonVariants as _}, h_flex, v_flex};
+use super::SideView;
+use super::{
+    CloseFile, NewFile, NewRequest, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace,
+};
 use crate::assets::{EXPORT, SAVE, SAVE_AS};
 use crate::share::models::ShareConfig;
 use crate::state::persistence;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
 use gpui_component::resizable::ResizableState;
-use super::SideView;
-use super::{SaveWorkspace, NewRequest, OpenMarkdownFile, OpenMarkdownFileNewTab, NewFile, CloseFile};
+use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 
 /// Build an icon from a Verve-custom Lucide SVG path.
 pub(super) fn vicon(path: &'static str) -> Icon {
@@ -170,11 +176,9 @@ pub(super) fn menu_item(
         })
 }
 
-
 pub(super) fn menu_separator(theme: &gpui_component::Theme) -> impl IntoElement {
     div().w_full().h(px(1.)).my(px(2.)).bg(theme.border)
 }
-
 
 pub(super) fn command_keycap(
     command: crate::wysiwyg::components::actions::ShortcutCommand,
@@ -188,11 +192,9 @@ pub(super) fn command_keycap(
         .map(|ks| Kbd::new(ks).into_any_element())
 }
 
-
 pub(super) fn toolbar_divider(theme: &gpui_component::Theme) -> impl IntoElement {
     div().mx(px(4.)).w(px(1.)).h(px(16.)).bg(theme.border)
 }
-
 
 pub(super) fn dropdown_separator(theme: &gpui_component::Theme) -> AnyElement {
     div()
@@ -202,7 +204,6 @@ pub(super) fn dropdown_separator(theme: &gpui_component::Theme) -> AnyElement {
         .bg(theme.border)
         .into_any_element()
 }
-
 
 pub(super) fn dropdown_panel(
     id: &'static str,

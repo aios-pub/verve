@@ -167,9 +167,10 @@ impl ResponsePanel {
     /// request is selected.
     fn snapshot_examples(&self, cx: &App) -> ExampleSnapshot {
         let st = self.state.read(cx);
-        let req = st
-            .active_project()
-            .and_then(|p| p.find_request(st.selected_request.as_deref()?).map(|(_, r)| r));
+        let req = st.active_project().and_then(|p| {
+            p.find_request(st.selected_request.as_deref()?)
+                .map(|(_, r)| r)
+        });
         match req {
             Some(r) => ExampleSnapshot {
                 success: r
@@ -321,9 +322,10 @@ impl ResponsePanel {
     /// come from the editor entities.
     fn example_metas(&self, cx: &App) -> (Option<ExampleMeta>, Vec<ExampleMeta>) {
         let st = self.state.read(cx);
-        let req = st
-            .active_project()
-            .and_then(|p| p.find_request(st.selected_request.as_deref()?).map(|(_, r)| r));
+        let req = st.active_project().and_then(|p| {
+            p.find_request(st.selected_request.as_deref()?)
+                .map(|(_, r)| r)
+        });
         match req {
             Some(r) => (
                 r.success_example.as_ref().map(ExampleMeta::from),
@@ -377,11 +379,7 @@ impl ResponsePanel {
                 GroupKind::Failure,
                 theme,
             ));
-            for (i, (meta, editor)) in fail_metas
-                .iter()
-                .zip(self.fail_editors.iter())
-                .enumerate()
-            {
+            for (i, (meta, editor)) in fail_metas.iter().zip(self.fail_editors.iter()).enumerate() {
                 group = group.child(example_card(
                     Some(meta),
                     GroupKind::Failure,

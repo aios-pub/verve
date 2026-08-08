@@ -673,11 +673,7 @@ fn color_to_hsla(color: &Color) -> Hsla {
                 let g = (n % 36) / 6;
                 let b = n % 6;
                 fn cube(v: usize) -> u8 {
-                    if v == 0 {
-                        0
-                    } else {
-                        (55 + 40 * v) as u8
-                    } // 0,95,135,175,215,255
+                    if v == 0 { 0 } else { (55 + 40 * v) as u8 } // 0,95,135,175,215,255
                 }
                 hsla_from_rgb8(cube(r), cube(g), cube(b))
             } else {
@@ -1120,8 +1116,7 @@ fn apply_log_highlights(text: &str, runs: &[TextRun]) -> Vec<TextRun> {
     // per-byte highlight color. 0 = no highlight; indices 1.. map to the
     // palette. Using a u8 palette id keeps the mark array small (text is
     // ASCII where we mark, so byte == char here).
-    const PALETTE: [Hsla; 6] =
-        [HL_TIMESTAMP, HL_ERROR, HL_WARN, HL_INFO, HL_DEBUG, HL_VALUE];
+    const PALETTE: [Hsla; 6] = [HL_TIMESTAMP, HL_ERROR, HL_WARN, HL_INFO, HL_DEBUG, HL_VALUE];
     fn palette_id(c: Hsla) -> u8 {
         PALETTE
             .iter()
@@ -1291,7 +1286,12 @@ impl Render for TerminalView {
             (0..screen_lines)
                 .map(|row_idx| {
                     let grid_line = viewport_top + row_idx as i32;
-                    build_row(grid, alacritty_terminal::index::Line(grid_line), num_cols, &fonts)
+                    build_row(
+                        grid,
+                        alacritty_terminal::index::Line(grid_line),
+                        num_cols,
+                        &fonts,
+                    )
                 })
                 .collect::<Vec<_>>()
         };
@@ -1590,11 +1590,7 @@ impl Render for TerminalView {
 /// what `StyledText` actually renders (unlike `ch_advance`, whose raw font
 /// metric can drift by a subpixel amount that accumulates over many columns),
 /// so the PTY column count lines up with the visual wrap width.
-fn measure_mono_cell_width(
-    window: &Window,
-    font: &gpui::Font,
-    font_size: Pixels,
-) -> Result<f32> {
+fn measure_mono_cell_width(window: &Window, font: &gpui::Font, font_size: Pixels) -> Result<f32> {
     const SAMPLE_CHARS: usize = 64;
     let sample: String = "0".repeat(SAMPLE_CHARS);
     let run = TextRun {
@@ -1646,12 +1642,12 @@ mod tests {
     fn col_to_byte_handles_multibyte_chars() {
         // `·` is U+00B7 (2 bytes), CJK chars are 3 bytes.
         let row = "ab·cd阅"; // chars: a(0) b(1) ·(2) c(3) d(4) 阅(5)
-                             // bytes: a=0 b=1 ·=2..4 c=4 d=5 阅=6..9
+        // bytes: a=0 b=1 ·=2..4 c=4 d=5 阅=6..9
         assert_eq!(col_to_byte(row, 0), 0); // 'a'
         assert_eq!(col_to_byte(row, 2), 2); // '·' start byte
         assert_eq!(col_to_byte(row, 3), 4); // 'c' (skips the 2nd byte of '·')
         assert_eq!(col_to_byte(row, 5), 6); // '阅' start byte
-                                            // Out of range clamps to end (byte length 9), never panics.
+        // Out of range clamps to end (byte length 9), never panics.
         assert_eq!(col_to_byte(row, 99), 9);
     }
 
@@ -1774,9 +1770,7 @@ mod tests {
         let total: usize = out.iter().map(|r| r.len).sum();
         assert_eq!(total, 10, "output runs must still cover the whole text");
         // The selected sub-runs must carry the selection background.
-        assert!(out
-            .iter()
-            .any(|r| r.background_color == Some(sel_bg)));
+        assert!(out.iter().any(|r| r.background_color == Some(sel_bg)));
         // And the run text COLOR must be unchanged (not replaced).
         assert!(out.iter().all(|r| r.color == super::TERMINAL_FG));
     }

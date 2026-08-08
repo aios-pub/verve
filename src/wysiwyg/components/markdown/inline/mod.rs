@@ -3028,14 +3028,14 @@ fn stack_variants(
     match style.script {
         InlineScript::Normal => {}
         InlineScript::Superscript
-        if can_use_markdown_script_delimiters(previous_fragment, fragment) =>
+            if can_use_markdown_script_delimiters(previous_fragment, fragment) =>
         {
             markdown_stack.push(Delimiter::SuperscriptMarkdown)
         }
         InlineScript::Superscript => markdown_stack.push(Delimiter::SuperscriptHtml),
         InlineScript::Subscript
-        if style.strikethrough
-            || !can_use_markdown_script_delimiters(previous_fragment, fragment) =>
+            if style.strikethrough
+                || !can_use_markdown_script_delimiters(previous_fragment, fragment) =>
         {
             markdown_stack.push(Delimiter::SubscriptHtml)
         }
@@ -3297,7 +3297,6 @@ fn can_open_script(tokens: &[CharToken], index: usize, marker: char) -> bool {
 fn can_close_emphasis(tokens: &[CharToken], index: usize) -> bool {
     index > 0 && !tokens[index - 1].ch.is_whitespace()
 }
-
 
 // Inline-parsing tests live in a sibling file.
 #[cfg(test)]

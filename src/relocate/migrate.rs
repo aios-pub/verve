@@ -223,8 +223,7 @@ pub(crate) fn copy_dir_with_progress(
             ConflictPolicy::BackupRename => {
                 let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
                 let backup = dest.with_extension(format!("relocate-backup-{}", ts));
-                std::fs::rename(dest, &backup)
-                    .map_err(|e| format!("备份重命名失败: {}", e))?;
+                std::fs::rename(dest, &backup).map_err(|e| format!("备份重命名失败: {}", e))?;
             }
             ConflictPolicy::Merge => {
                 // Leave dest in place; we copy into it, overwriting existing files.
@@ -300,7 +299,7 @@ pub(crate) fn copy_dir_with_progress(
                         "读取符号链接失败 {}: {}",
                         entry.path().display(),
                         e
-                    ))
+                    ));
                 }
             }
             continue;
@@ -315,7 +314,7 @@ pub(crate) fn copy_dir_with_progress(
                     "读取文件元数据失败 {}: {}",
                     entry.path().display(),
                     e
-                ))
+                ));
             }
         };
         file_tasks.push(FileTask {
@@ -323,10 +322,7 @@ pub(crate) fn copy_dir_with_progress(
             dst: target,
             size: meta.len(),
             perms: Some(meta.permissions()),
-            name: entry
-                .file_name()
-                .to_string_lossy()
-                .into_owned(),
+            name: entry.file_name().to_string_lossy().into_owned(),
         });
     }
 
@@ -514,7 +510,8 @@ pub fn tree_sha256(dir: &Path) -> Result<String, String> {
             .to_string_lossy()
             .into_owned();
         combined.update(rel.as_bytes());
-        let bytes = std::fs::read(&f).map_err(|e| format!("读取校验失败 {}: {}", f.display(), e))?;
+        let bytes =
+            std::fs::read(&f).map_err(|e| format!("读取校验失败 {}: {}", f.display(), e))?;
         combined.update(&bytes);
     }
     let digest = combined.finalize();
@@ -676,12 +673,12 @@ pub fn migrate_one(
         Ok(_) => {
             return MigrateOutcome::PreconditionFailed {
                 reason: format!("源路径不是目录：{}", source.display()),
-            }
+            };
         }
         Err(e) => {
             return MigrateOutcome::PreconditionFailed {
                 reason: format!("源目录不可读 {}: {}", source.display(), e),
-            }
+            };
         }
     };
     let _ = src_meta;
@@ -702,7 +699,11 @@ pub fn migrate_one(
     //    here would make them unmigratable. We proceed and let the robust delete
     //    step surface a real failure (with the external copy already in place).
     if let Some(summary) = check_occupied(source) {
-        log::warn!("relocate: {} 被进程占用，迁移可能失败：\n{}", source.display(), summary);
+        log::warn!(
+            "relocate: {} 被进程占用，迁移可能失败：\n{}",
+            source.display(),
+            summary
+        );
     }
 
     let dest = external_target(target_root, source);
@@ -923,7 +924,10 @@ mod tests {
         std::fs::write(tmp.join("nested/deeper/c.txt"), b"gamma").unwrap();
 
         force_remove_dir_all(&tmp).expect("should remove the populated tree");
-        assert!(!tmp.exists(), "tree should be gone after force_remove_dir_all");
+        assert!(
+            !tmp.exists(),
+            "tree should be gone after force_remove_dir_all"
+        );
 
         // No-op on a path that no longer exists.
         force_remove_dir_all(&tmp).expect("should be a no-op for missing path");
@@ -956,7 +960,10 @@ mod tests {
             .unwrap();
 
         force_remove_dir_all(&tmp).expect("should remove despite read-only perms");
-        assert!(!tmp.exists(), "tree should be gone despite read-only entries");
+        assert!(
+            !tmp.exists(),
+            "tree should be gone despite read-only entries"
+        );
     }
 
     /// Symlinks *inside* the source tree must be preserved as symlinks at the
@@ -1185,7 +1192,11 @@ mod tests {
         // chance to abort mid-copy.
         std::fs::write(source.join("a.txt"), vec![b'A'; 4 * 1024 * 1024]).unwrap();
         std::fs::write(source.join("b.txt"), vec![b'B'; 4 * 1024 * 1024]).unwrap();
-        std::fs::write(source.join("nested").join("c.txt"), vec![b'C'; 4 * 1024 * 1024]).unwrap();
+        std::fs::write(
+            source.join("nested").join("c.txt"),
+            vec![b'C'; 4 * 1024 * 1024],
+        )
+        .unwrap();
 
         // Flip the cancel flag from a separate thread after a short delay.
         // We can't rely on the progress callback (which is now time-sampled and
@@ -1229,7 +1240,10 @@ mod tests {
             meta.is_dir() && !meta.file_type().is_symlink(),
             "source must remain a real directory after cancellation"
         );
-        assert_eq!(std::fs::read(source.join("a.txt")).unwrap().len(), 4 * 1024 * 1024);
+        assert_eq!(
+            std::fs::read(source.join("a.txt")).unwrap().len(),
+            4 * 1024 * 1024
+        );
 
         // 2. The partial external copy was cleaned up.
         let dest = external_target(&target_root, &source);

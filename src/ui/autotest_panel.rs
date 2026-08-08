@@ -430,8 +430,7 @@ impl Render for AutoTestPanel {
             .with_state(&state)
             .on_resize(|state, _, cx| {
                 if let Some(w) = state.read(cx).sizes().first() {
-                    let mut layout =
-                        crate::state::persistence::load_layout().unwrap_or_default();
+                    let mut layout = crate::state::persistence::load_layout().unwrap_or_default();
                     let mut arr = layout.side_widths.unwrap_or([260., 260., 260., 220.]);
                     arr[1] = w.as_f32();
                     layout.side_widths = Some(arr);

@@ -176,19 +176,15 @@ fn statvfs(path: &Path) -> Option<(u64, u64)> {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-fn probe_macos(target_root: &Path, _free_bytes: u64) -> (Internality, FsKind, Medium, Option<String>) {
+fn probe_macos(
+    target_root: &Path,
+    _free_bytes: u64,
+) -> (Internality, FsKind, Medium, Option<String>) {
     // Resolve the target to a /Volumes mount and read diskutil info for it.
     let mount = resolve_mount(target_root);
     let plist = match mount.as_deref().and_then(run_diskutil) {
         Some(p) => p,
-        None => {
-            return (
-                Internality::Unknown,
-                FsKind::Other,
-                Medium::Unknown,
-                None,
-            )
-        }
+        None => return (Internality::Unknown, FsKind::Other, Medium::Unknown, None),
     };
     let info = parse_diskutil_plist(&plist);
 
@@ -200,11 +196,7 @@ fn probe_macos(target_root: &Path, _free_bytes: u64) -> (Internality, FsKind, Me
     };
 
     // Filesystem: match the `FilesystemType` / `Content` strings.
-    let fs_kind = match info
-        .filesystem_type
-        .as_deref()
-        .or(info.content.as_deref())
-    {
+    let fs_kind = match info.filesystem_type.as_deref().or(info.content.as_deref()) {
         Some(s) => classify_fs(s),
         None => FsKind::Other,
     };
@@ -284,15 +276,12 @@ fn parse_diskutil_plist(xml: &str) -> DiskutilInfo {
     static BOOL_RE: OnceLock<Regex> = OnceLock::new();
     static INT_RE: OnceLock<Regex> = OnceLock::new();
     static STR_RE: OnceLock<Regex> = OnceLock::new();
-    let bool_re = BOOL_RE.get_or_init(|| {
-        Regex::new(r"(?s)<key>([^<]+)</key>\s*<(true|false)/>").unwrap()
-    });
-    let int_re = INT_RE.get_or_init(|| {
-        Regex::new(r"(?s)<key>([^<]+)</key>\s*<integer>(\d+)</integer>").unwrap()
-    });
-    let str_re = STR_RE.get_or_init(|| {
-        Regex::new(r"(?s)<key>([^<]+)</key>\s*<string>([^<]*)</string>").unwrap()
-    });
+    let bool_re =
+        BOOL_RE.get_or_init(|| Regex::new(r"(?s)<key>([^<]+)</key>\s*<(true|false)/>").unwrap());
+    let int_re = INT_RE
+        .get_or_init(|| Regex::new(r"(?s)<key>([^<]+)</key>\s*<integer>(\d+)</integer>").unwrap());
+    let str_re = STR_RE
+        .get_or_init(|| Regex::new(r"(?s)<key>([^<]+)</key>\s*<string>([^<]*)</string>").unwrap());
 
     let mut info = DiskutilInfo::default();
     for c in bool_re.captures_iter(xml) {
@@ -344,12 +333,7 @@ fn probe_other(_target_root: &Path) -> (Internality, FsKind, Medium, Option<Stri
     // Linux/Windows: we can't reliably tell internal vs external without a
     // mount-table walk; report Unknown and let the user confirm. The UI still
     // shows free-space checks and lets migration proceed.
-    (
-        Internality::Unknown,
-        FsKind::Other,
-        Medium::Unknown,
-        None,
-    )
+    (Internality::Unknown, FsKind::Other, Medium::Unknown, None)
 }
 
 #[cfg(test)]

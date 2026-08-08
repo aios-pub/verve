@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::vault::{self, SecretMap, KEY_LEN};
+use super::vault::{self, KEY_LEN, SecretMap};
 
 /// In-memory cache of the decrypted vault (populated on first access).
 /// Holding the decrypted secrets in memory avoids re-reading/decrypting the
@@ -36,7 +36,9 @@ pub fn keyring_key(host_id: &str, kind: &str) -> String {
 /// This is the single entry point for reading the vault; callers should never
 /// touch `VAULT_CACHE` directly.
 fn vault_map() -> Result<Arc<SecretMap>, String> {
-    let mut guard = VAULT_CACHE.lock().map_err(|e| format!("vault cache lock: {e}"))?;
+    let mut guard = VAULT_CACHE
+        .lock()
+        .map_err(|e| format!("vault cache lock: {e}"))?;
     if let Some(map) = guard.as_ref() {
         return Ok(Arc::clone(map));
     }
@@ -54,7 +56,9 @@ fn save_and_cache(map: SecretMap) -> Result<(), String> {
     let result = vault::save_vault(&key, &map);
     zeroize_key(key);
     result?;
-    let mut guard = VAULT_CACHE.lock().map_err(|e| format!("vault cache lock: {e}"))?;
+    let mut guard = VAULT_CACHE
+        .lock()
+        .map_err(|e| format!("vault cache lock: {e}"))?;
     *guard = Some(Arc::new(map));
     Ok(())
 }
@@ -124,10 +128,7 @@ mod tests {
     fn store_load_delete_round_trip() {
         with_temp_data_dir(|| {
             store_secret("host1", "password", "s3cret").unwrap();
-            assert_eq!(
-                load_secret("host1", "password").as_deref(),
-                Some("s3cret")
-            );
+            assert_eq!(load_secret("host1", "password").as_deref(), Some("s3cret"));
 
             // Overwrite.
             store_secret("host1", "password", "new_pw").unwrap();

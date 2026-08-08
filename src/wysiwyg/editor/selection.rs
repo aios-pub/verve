@@ -37,7 +37,6 @@ fn safe_slice(s: &str, start: usize, end: usize) -> &str {
     &s[start..end]
 }
 
-
 /// Cross-block selection with endpoints ordered by visible block position.
 #[derive(Clone, Copy)]
 struct NormalizedCrossBlockSelection {
@@ -224,8 +223,7 @@ impl Editor {
             .document
             .visible_index_for_entity_id(entity_id)
             .unwrap_or(0);
-        let is_last_visible_leaf =
-            visible_before.len() == 1 && block.read(cx).children.is_empty();
+        let is_last_visible_leaf = visible_before.len() == 1 && block.read(cx).children.is_empty();
 
         // Empty-document guard: never delete the only block. Mirror RequestDelete
         // by downgrading it to an empty paragraph (content already copied above).
@@ -1078,10 +1076,11 @@ impl Editor {
 
 #[cfg(all(test, feature = "wysiwyg-gpui-tests"))]
 mod tests {
-    use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
+    use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
     use crate::wysiwyg::components::{Cut, Undo, UndoCaptureKind};
     use crate::wysiwyg::i18n::I18nManager;
     use crate::wysiwyg::theme::ThemeManager;
+    use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};
 
     fn init_editor_test_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -1393,10 +1392,7 @@ mod tests {
             ""
         );
         assert_eq!(
-            editor.read_with(cx, |editor, cx| editor
-                .document
-                .visible_blocks()
-                .len()),
+            editor.read_with(cx, |editor, cx| editor.document.visible_blocks().len()),
             1
         );
         cx.quit();

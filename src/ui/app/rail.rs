@@ -2,15 +2,23 @@
 //! drag-to-reorder, drop indicators, brand mark, settings + theme picker.
 //! Also hosts `refresh_switchers` (rebuilds project/env switcher lists).
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, Selectable as _,
-    button::{Button, ButtonVariants as _}, h_flex, v_flex, popover::Popover, Size::Medium};
-use crate::assets::{BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, FILE_PDF, HISTORY,
-    K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, SERVER};
-use crate::state::AppEvent;
 use super::widgets::vicon;
-use super::{RailDrag, SideView, VerveApp, PendingDialog};
+use super::{PendingDialog, RailDrag, SideView, VerveApp};
+use crate::assets::{
+    BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, FILE_PDF, HISTORY, K8S as K8S_ICON, KANBAN, MARKDOWN,
+    NOTEBOOK, SERVER,
+};
+use crate::state::AppEvent;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::{
+    ActiveTheme, Icon, IconName, Selectable as _, Sizable as _,
+    Size::Medium,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    popover::Popover,
+    v_flex,
+};
 
 impl VerveApp {
     pub(super) fn refresh_switchers(&mut self, window: &mut Window, cx: &mut Context<Self>) {

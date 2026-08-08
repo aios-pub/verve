@@ -118,7 +118,8 @@ impl Editor {
         if run_start >= run_end {
             // Row whose [top, bottom) contains scroll_y; clamp to [0, n).
             let anchor = match tops[..n].binary_search_by(|t| {
-                t.partial_cmp(&scroll_y).unwrap_or(std::cmp::Ordering::Equal)
+                t.partial_cmp(&scroll_y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }) {
                 Ok(i) => i,
                 Err(i) => i.saturating_sub(1).min(n.saturating_sub(1)),

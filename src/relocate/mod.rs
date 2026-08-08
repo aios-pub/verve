@@ -25,6 +25,4 @@ pub mod scanner;
 pub mod types;
 
 pub use engine::{EngineState, RelocateEngine, RelocateEvent};
-pub use types::{
-    AutoGroup, CategoryRule, DirEntry, RiskLevel, TaskRecord, TaskStatus,
-};
+pub use types::{AutoGroup, CategoryRule, DirEntry, RiskLevel, TaskRecord, TaskStatus};

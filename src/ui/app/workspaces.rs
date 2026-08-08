@@ -2,13 +2,17 @@
 //! delete workspaces (each maps to a git branch), project & env dialogs,
 //! mock-rule generation, project export, and collection import.
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Sizable as _, WindowExt as _, button::{Button, ButtonVariants as _}, h_flex, v_flex};
-use crate::share::models::ShareScope;
-use crate::state::{AppEvent, AppState};
 use super::sanitize;
 use super::{PendingDialog, VerveApp};
+use crate::share::models::ShareScope;
+use crate::state::{AppEvent, AppState};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::{
+    ActiveTheme, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 
 impl VerveApp {
     pub(super) fn open_kv_manager(
@@ -314,7 +318,12 @@ impl VerveApp {
         });
     }
 
-    pub(super) fn open_project_settings(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_project_settings(
+        &mut self,
+        idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let current_name = self
             .state
             .read(cx)
@@ -447,7 +456,12 @@ impl VerveApp {
         });
     }
 
-    pub(super) fn confirm_delete_project(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_delete_project(
+        &mut self,
+        idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let project_name = self
             .state
             .read(cx)
@@ -497,7 +511,12 @@ impl VerveApp {
         });
     }
 
-    pub(super) fn confirm_delete_env(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_delete_env(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let env_name = self
             .state
             .read(cx)

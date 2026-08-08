@@ -3328,8 +3328,13 @@ async fn scroll_keeps_mounting_rows_into_viewport(cx: &mut TestAppContext) {
     parts.push("# Title\n\nintro paragraph\n".to_string());
     // A wide, multi-row table (tall block).
     parts.push(
-        ["| h0 | h1 | h2 |", "| --- | --- | --- |", "| a | b | c |", "| d | e | f |"]
-            .join("\n"),
+        [
+            "| h0 | h1 | h2 |",
+            "| --- | --- | --- |",
+            "| a | b | c |",
+            "| d | e | f |",
+        ]
+        .join("\n"),
     );
     // Many short paragraphs (the bulk of the document).
     for i in 0..120 {
@@ -3385,9 +3390,7 @@ async fn scroll_keeps_mounting_rows_into_viewport(cx: &mut TestAppContext) {
             -f32::from(editor.scroll_handle.offset().y)
         });
         last_scroll_y = scroll_y;
-        eprintln!(
-            "[scroll-test] step={step} scroll_y={scroll_y:.0} cached={cached}"
-        );
+        eprintln!("[scroll-test] step={step} scroll_y={scroll_y:.0} cached={cached}");
     }
 
     // Scrolling must have actually advanced the offset (proves scroll → repaint
@@ -3407,7 +3410,12 @@ async fn scroll_keeps_mounting_rows_into_viewport(cx: &mut TestAppContext) {
         f32::from(editor.scroll_handle.max_offset().y.max(px(0.0)))
     });
     let sum_measured: f32 = editor.update(cx, |editor, _cx| {
-        editor.row_stride_cache.values().copied().filter(|s| *s > 0.0).sum()
+        editor
+            .row_stride_cache
+            .values()
+            .copied()
+            .filter(|s| *s > 0.0)
+            .sum()
     });
     let blocks = editor.update(cx, |editor, _cx| editor.document.visible_blocks().len());
     eprintln!(

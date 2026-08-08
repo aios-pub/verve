@@ -295,7 +295,9 @@ impl Editor {
         let url = cx.new(|cx| {
             gpui_component::input::InputState::new(window, cx).placeholder("图片 URL 或本地路径")
         });
-        let alt = cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("替代文本（可选）"));
+        let alt = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx).placeholder("替代文本（可选）")
+        });
         self.image_insert_dialog = Some(ImageInsertDialogState { target, url, alt });
         // Focus the URL field so the user can type or paste immediately.
         if let Some(dialog) = self.image_insert_dialog.as_ref() {
@@ -335,7 +337,10 @@ impl Editor {
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
             let res = rfd::FileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"])
+                .add_filter(
+                    "Images",
+                    &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"],
+                )
                 .pick_file();
             let _ = tx.send(res.map(|p| p.to_path_buf()));
         });
@@ -395,7 +400,6 @@ impl Editor {
         let record = crate::wysiwyg::components::BlockRecord::paragraph(markdown);
         self.insert_structural_block(target, record, cx);
     }
-
 
     fn close_context_menu(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
@@ -2118,18 +2122,19 @@ impl Editor {
                                                 .items_center()
                                                 .gap(px(d.dialog_button_gap))
                                                 .child(
-                                                    div().flex_1().min_w_0().child(
-                                                        Input::new(&url_input).small(),
-                                                    ),
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .child(Input::new(&url_input).small()),
                                                 )
                                                 .child(
                                                     Button::new("image-pick-file")
                                                         .small()
                                                         .ghost()
                                                         .label("选择文件")
-                                                        .on_click(cx.listener(
-                                                            Self::on_pick_image_file,
-                                                        )),
+                                                        .on_click(
+                                                            cx.listener(Self::on_pick_image_file),
+                                                        ),
                                                 ),
                                         ),
                                 )
@@ -2175,9 +2180,11 @@ impl Editor {
                                                     t.dialog_button_weight.to_font_weight(),
                                                 )
                                                 .text_color(c.dialog_secondary_button_text)
-                                                .on_click(cx.listener(
-                                                    Self::on_cancel_image_insert_dialog,
-                                                ))
+                                                .on_click(
+                                                    cx.listener(
+                                                        Self::on_cancel_image_insert_dialog,
+                                                    ),
+                                                )
                                                 .child("取消"),
                                         )
                                         .child(
@@ -2205,9 +2212,11 @@ impl Editor {
                                                     t.dialog_button_weight.to_font_weight(),
                                                 )
                                                 .text_color(c.dialog_primary_button_text)
-                                                .on_click(cx.listener(
-                                                    Self::on_confirm_image_insert_dialog,
-                                                ))
+                                                .on_click(
+                                                    cx.listener(
+                                                        Self::on_confirm_image_insert_dialog,
+                                                    ),
+                                                )
                                                 .child("插入"),
                                         ),
                                 ),

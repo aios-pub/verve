@@ -69,12 +69,8 @@ pub fn dev_caches() -> CategoryRule {
 /// them breaks `cargo`/`rustc`/`adb` etc. immediately. The scanner rejects
 /// these even if a user adds them as custom paths. Only pure caches (which
 /// tools rebuild on demand) are migratable.
-pub const DEV_RUNTIME_EXCLUDE: &[&str] = &[
-    "~/.cargo",
-    "~/.rustup",
-    "~/.android",
-    "~/Library/Android",
-];
+pub const DEV_RUNTIME_EXCLUDE: &[&str] =
+    &["~/.cargo", "~/.rustup", "~/.android", "~/Library/Android"];
 
 /// Group 2 — local code-project directories (PerformanceWarn).
 ///

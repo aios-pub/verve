@@ -1,21 +1,30 @@
 //! Key-value table rendering and editing: request & folder KV tables,
 //! the folder detail view (incl. the interface table), raw/visual field
 //! sync, and all toggle/add/delete/commit handlers.
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use super::folder_helpers::{
+    self, IfaceEntry, collect_iface_entries, folder_tab_label, set_folder_base_url,
+};
+use super::{FolderKvSection, FolderTab, ReqTab, RequestPanel};
+use crate::http;
+use crate::state::models::*;
+use crate::state::{AppEvent, AppState};
+use crate::ui::kv_table::{self, KvRow};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::Icon;
 use gpui_component::WindowExt as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::{ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, popover::Popover, v_flex};
-use crate::http;
-use crate::state::models::*;
-use crate::state::{AppEvent, AppState};
-use crate::ui::kv_table::{self, KvRow};
-use super::folder_helpers::{self, IfaceEntry, collect_iface_entries, folder_tab_label, set_folder_base_url};
-use super::{RequestPanel, ReqTab, FolderKvSection, FolderTab};
+use gpui_component::{
+    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    popover::Popover,
+    v_flex,
+};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 impl RequestPanel {
     /// Render the kv editor for params/headers rows.
@@ -999,8 +1008,8 @@ impl RequestPanel {
                 } else if row.file_path.is_none() {
                     // Only auto-pick for form-data rows (the only scope that
                     // supports files); urlencoded etc. have no file concept.
-                    open_picker = self.body_type == BodyType::FormData
-                        && self.active_tab == ReqTab::Body;
+                    open_picker =
+                        self.body_type == BodyType::FormData && self.active_tab == ReqTab::Body;
                 }
             }
         }

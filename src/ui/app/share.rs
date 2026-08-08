@@ -1,13 +1,17 @@
 //! Document-sharing actions: open the share-config dialog (local or cloud
 //! mode), build share URLs, and delete a share config.
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Sizable as _, WindowExt as _, button::{Button, ButtonVariants as _}, h_flex, v_flex};
+use super::VerveApp;
+use super::widgets::show_share_result_dialog;
 use crate::share::models::ShareScope;
 use crate::ui::share_dialog;
-use super::widgets::show_share_result_dialog;
-use super::VerveApp;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::{
+    ActiveTheme, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
+};
 
 impl VerveApp {
     pub(super) fn open_share_dialog(

@@ -642,7 +642,9 @@ pub fn postman(json: &str) -> anyhow::Result<Project> {
                     // Should always be present (server_list names feed the
                     // map), but fall back to the name on this very entry just
                     // in case the global list missed it.
-                    let var_name = server_var_names.get(sid).cloned()
+                    let var_name = server_var_names
+                        .get(sid)
+                        .cloned()
                         .or_else(|| srv.name.clone())
                         .unwrap_or_else(|| format!("server_{}", sid));
                     e.variables.push(KeyValue::new(var_name, uri));

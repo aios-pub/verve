@@ -1,19 +1,25 @@
 //! Folder/interface helper types and functions: the interface-table entry
 //! model + collector, folder tab labels, and folder base-URL resolution.
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use super::{FolderKvSection, FolderTab, ReqTab, RequestPanel};
+use crate::http;
+use crate::state::AppState;
+use crate::state::models::*;
+use crate::ui::kv_table::{self, KvRow};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::Icon;
 use gpui_component::WindowExt as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
-use gpui_component::{ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _, button::{Button, ButtonVariants as _}, h_flex, popover::Popover, v_flex};
-use crate::http;
-use crate::state::models::*;
-use crate::state::AppState;
-use crate::ui::kv_table::{self, KvRow};
-use super::{RequestPanel, FolderKvSection, FolderTab, ReqTab};
+use gpui_component::{
+    ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    popover::Popover,
+    v_flex,
+};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// A flattened request entry in a folder's interface list. Carries all the
 /// column data (name/method/path/audit metadata) so the table renders any
@@ -107,7 +113,6 @@ pub(super) fn folder_tab_label(
         }))
 }
 
-
 // Silence unused import warnings for items used only conditionally.
 #[allow(dead_code)]
 pub(super) fn _unused(_a: Arc<()>, _t: Task<()>) {}
@@ -177,6 +182,54 @@ pub(super) fn resolve_folder_base_url(
         }
     }
     None
+}
+
+/// Resolve the effective base URL for a request given its per-request override
+/// mode (tri-state stored on `ApiRequest::base_url_override`):
+///
+/// - `None`            : inherit — fall back to the folder chain's `base_url`.
+/// - `Some(None)`      : explicitly disable any prefix for this request.
+/// - `Some(Some(val))` : override — use `val` (a literal URL or a `{{var}}`
+///   placeholder). If `val` is empty, `raw_input` (the live editor value) is
+///   used instead so a manually typed-in value still wins.
+///
+/// Returns `Some(base)` when a prefix should be applied, or `None` when the
+/// request should have no prefix at all (inherit-and-found-none, explicit
+/// disable, or override that resolves to empty). The caller injects the
+/// result as the `__folder_base_url__` variable; a `None` return means that
+/// variable is simply not set, so the relative URL stays relative.
+pub(super) fn resolve_effective_base_url(
+    mode: &Option<Option<String>>,
+    raw_input: &str,
+    vars: &BTreeMap<String, String>,
+    project: &crate::state::models::Project,
+    chain: &[String],
+) -> Option<String> {
+    match mode {
+        // Inherit: use the folder chain's base_url (may itself be None).
+        None => resolve_folder_base_url(project, chain),
+        // Explicit disable: never apply a prefix.
+        Some(None) => None,
+        // Override with a specific value (literal or {{var}} placeholder).
+        Some(val_ref) => {
+            let val = val_ref.as_deref().unwrap_or("");
+            let raw = if val.trim().is_empty() {
+                raw_input
+            } else {
+                val
+            };
+            if raw.trim().is_empty() {
+                return None;
+            }
+            let resolved = crate::http::variable::substitute(raw, vars);
+            let resolved = resolved.trim_end_matches('/');
+            if resolved.is_empty() {
+                None
+            } else {
+                Some(resolved.to_string())
+            }
+        }
+    }
 }
 
 /// Apply autosave logic: if the global autosave setting is enabled, save the

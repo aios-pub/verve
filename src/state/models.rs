@@ -829,6 +829,12 @@ pub struct ApiRequest {
     /// Free-form comma/space separated tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Per-request base-URL override mode (tri-state):
+    /// - `None`             : inherit the folder's `base_url` (default, backward-compatible).
+    /// - `Some(None)`       : explicitly disable any prefix for this request.
+    /// - `Some(Some(url))`  : use exactly this url (may contain `{{var}}` placeholders).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url_override: Option<Option<String>>,
 }
 
 impl ApiRequest {
@@ -860,6 +866,7 @@ impl ApiRequest {
             updated_at: now,
             status: String::new(),
             tags: Vec::new(),
+            base_url_override: None,
         }
     }
 }

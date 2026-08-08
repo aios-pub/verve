@@ -29,7 +29,10 @@ pub(crate) fn format_err_chain<E: std::error::Error + ?Sized>(err: &E) -> String
         let msg = cause.to_string();
         // Avoid duplicating identical adjacent layers (some wrappers re-print
         // the inner message verbatim).
-        if parts.last().is_none_or(|last| !msg.is_empty() && last != &msg) {
+        if parts
+            .last()
+            .is_none_or(|last| !msg.is_empty() && last != &msg)
+        {
             parts.push(msg);
         }
         source = cause.source();
@@ -93,7 +96,8 @@ async fn build_inferred_client() -> Result<Client, PodError> {
     let config = Config::infer()
         .await
         .map_err(|e| PodError(format!("读取 kubeconfig 失败: {}", format_err_chain(&e))))?;
-    Client::try_from(config).map_err(|e| PodError(format!("创建 K8s 客户端失败: {}", format_err_chain(&e))))
+    Client::try_from(config)
+        .map_err(|e| PodError(format!("创建 K8s 客户端失败: {}", format_err_chain(&e))))
 }
 
 /// Build a client configured directly from a Verve `ManualCluster`.
@@ -135,7 +139,8 @@ async fn build_client_for_cluster(cluster: &ManualCluster) -> Result<Client, Pod
 
     apply_auth(&mut config, &cluster.auth);
 
-    Client::try_from(config).map_err(|e| PodError(format!("创建 K8s 客户端失败: {}", format_err_chain(&e))))
+    Client::try_from(config)
+        .map_err(|e| PodError(format!("创建 K8s 客户端失败: {}", format_err_chain(&e))))
 }
 
 /// Extract the cluster's CA certificate bundle from the preserved raw
@@ -173,13 +178,17 @@ fn apply_auth(config: &mut Config, auth: &ClusterAuth) {
         ClusterAuth::Token { token } => {
             config.auth_info.token = Some(secrecy_010::SecretString::from(token.clone()));
         }
-        ClusterAuth::ClientCert { cert_data, key_data } => {
+        ClusterAuth::ClientCert {
+            cert_data,
+            key_data,
+        } => {
             // kube's AuthInfo expects the SAME base64-encoded PEM strings that a
             // kubeconfig stores — kube does the base64 decode internally
             // (file_config::load_from_base64). Passing decoded PEM here would
             // make kube's decode fail ("invalid symbol 10" = the newline in PEM).
             config.auth_info.client_certificate_data = Some(cert_data.clone());
-            config.auth_info.client_key_data = Some(secrecy_010::SecretString::from(key_data.clone()));
+            config.auth_info.client_key_data =
+                Some(secrecy_010::SecretString::from(key_data.clone()));
         }
         ClusterAuth::BasicAuth { username, password } => {
             config.auth_info.username = Some(username.clone());

@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use super::blacklist::{expand_tilde, is_blacklisted};
-use super::categories::{builtin_rules, CUSTOM_GROUP, OTHER_GROUP};
+use super::categories::{CUSTOM_GROUP, OTHER_GROUP, builtin_rules};
 use super::types::{AutoGroup, CategoryRule, DirEntry, RiskLevel};
 
 /// Sentinel: a directory matched by a builtin rule. Grouped together so the
@@ -66,11 +66,7 @@ fn expand_pattern(pattern: &str) -> Vec<PathBuf> {
                     // Only directories; symlinks-to-dir are skipped here to
                     // avoid following them (could loop or double-count).
                     let ft = e.file_type().ok()?;
-                    if ft.is_dir() {
-                        Some(e.path())
-                    } else {
-                        None
-                    }
+                    if ft.is_dir() { Some(e.path()) } else { None }
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -115,7 +111,10 @@ fn matched_for_rule(rule: &CategoryRule, rule_index: usize) -> Vec<Matched> {
                 _ => continue,
             };
             // Skip empty directories at this stage too (PRD §5.4 auto-prune).
-            if std::fs::read_dir(&cand).map(|mut r| r.next().is_none()).unwrap_or(true) {
+            if std::fs::read_dir(&cand)
+                .map(|mut r| r.next().is_none())
+                .unwrap_or(true)
+            {
                 continue;
             }
             out.push(Matched {
@@ -158,10 +157,7 @@ fn is_dev_runtime(path: &Path) -> bool {
 /// Top-level non-rule-matched home directories, for the 【其他目录】 bucket
 /// (PRD §5.7). Only *non-empty*, *non-blacklisted* directories that no builtin
 /// rule already claimed are considered.
-fn other_home_dirs(
-    home: &Path,
-    claimed: &std::collections::HashSet<PathBuf>,
-) -> Vec<PathBuf> {
+fn other_home_dirs(home: &Path, claimed: &std::collections::HashSet<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let rd = match std::fs::read_dir(home) {
         Ok(r) => r,
@@ -182,8 +178,7 @@ fn other_home_dirs(
         // whole dir breaks apps. Specific cache subdirs under ~/Library are
         // still matched by the dev-caches rule's explicit patterns, which are
         // handled separately in matched_for_rule (not here).
-        if path.file_name().map(|n| n == "Library").unwrap_or(false)
-            && path.parent() == Some(home)
+        if path.file_name().map(|n| n == "Library").unwrap_or(false) && path.parent() == Some(home)
         {
             continue;
         }
@@ -196,7 +191,10 @@ fn other_home_dirs(
             continue;
         }
         // Skip empty (PRD §5.4).
-        if std::fs::read_dir(&path).map(|mut r| r.next().is_none()).unwrap_or(true) {
+        if std::fs::read_dir(&path)
+            .map(|mut r| r.next().is_none())
+            .unwrap_or(true)
+        {
             continue;
         }
         out.push(path);

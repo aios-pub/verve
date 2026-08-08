@@ -1127,9 +1127,7 @@ fn key_binding_for(
             KeyBinding::new(key, InsertHorizontalRule, context)
         }
         ShortcutCommand::InsertTable => KeyBinding::new(key, InsertTable, context),
-        ShortcutCommand::InsertTableRowBelow => {
-            KeyBinding::new(key, InsertTableRowBelow, context)
-        }
+        ShortcutCommand::InsertTableRowBelow => KeyBinding::new(key, InsertTableRowBelow, context),
         ShortcutCommand::InsertTableColumnRight => {
             KeyBinding::new(key, InsertTableColumnRight, context)
         }

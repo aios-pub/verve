@@ -229,7 +229,10 @@ mod tests {
         map.insert("host1:password".into(), "s3cret".into());
         let result = save_vault(&key, &map);
         let loaded = load_vault(&key).unwrap();
-        assert_eq!(loaded.get("host1:password").map(String::as_str), Some("s3cret"));
+        assert_eq!(
+            loaded.get("host1:password").map(String::as_str),
+            Some("s3cret")
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
         result.unwrap();

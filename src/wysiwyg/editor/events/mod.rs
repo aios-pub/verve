@@ -1494,11 +1494,7 @@ impl Editor {
             // FocusPrev off the first child → leave the wrapper upward.
             BlockEvent::RequestFocusPrev { .. } => {
                 if binding.index == 0 {
-                    self.focus_block_adjacent_to_html_wrapper(
-                        &binding.wrapper_block,
-                        -1,
-                        cx,
-                    );
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, -1, cx);
                 } else if !self.focus_html_wrapper_child_neighbor(
                     &binding.wrapper_block,
                     binding.index,
@@ -1510,14 +1506,10 @@ impl Editor {
             }
             // FocusNext off the last child → leave the wrapper downward.
             BlockEvent::RequestFocusNext { .. } => {
-                let last = self
-                    .is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
+                let last =
+                    self.is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
                 if last {
-                    self.focus_block_adjacent_to_html_wrapper(
-                        &binding.wrapper_block,
-                        1,
-                        cx,
-                    );
+                    self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, 1, cx);
                 } else if !self.focus_html_wrapper_child_neighbor(
                     &binding.wrapper_block,
                     binding.index,
@@ -1531,16 +1523,26 @@ impl Editor {
                 if binding.index == 0 {
                     self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, -1, cx);
                 } else {
-                    self.focus_html_wrapper_child_neighbor(&binding.wrapper_block, binding.index, -1, cx);
+                    self.focus_html_wrapper_child_neighbor(
+                        &binding.wrapper_block,
+                        binding.index,
+                        -1,
+                        cx,
+                    );
                 }
             }
             BlockEvent::RequestBlockDown => {
-                let last = self
-                    .is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
+                let last =
+                    self.is_last_html_wrapper_child(&binding.wrapper_block, binding.index, cx);
                 if last {
                     self.focus_block_adjacent_to_html_wrapper(&binding.wrapper_block, 1, cx);
                 } else {
-                    self.focus_html_wrapper_child_neighbor(&binding.wrapper_block, binding.index, 1, cx);
+                    self.focus_html_wrapper_child_neighbor(
+                        &binding.wrapper_block,
+                        binding.index,
+                        1,
+                        cx,
+                    );
                 }
             }
             BlockEvent::RequestOpenLink {
@@ -1966,22 +1968,21 @@ impl Editor {
                 // exit doesn't leave a dangling blank quote behind.
                 let trigger_is_empty = block.read(cx).display_text().trim().is_empty();
                 if trigger_is_empty {
-                    self.document
-                        .with_structure_mutation(cx, |document, cx| {
-                            document.remove_block_by_id_raw(block.entity_id(), cx)
-                        });
+                    self.document.with_structure_mutation(cx, |document, cx| {
+                        document.remove_block_by_id_raw(block.entity_id(), cx)
+                    });
                 }
 
                 // Insert a plain paragraph after the quote ancestor. Re-resolve
                 // its location after the optional removal above (the index may
                 // have shifted if the empty trigger was the ancestor itself).
-                let Some(ancestor_location) =
-                    self.document.find_block_location(quote_ancestor.entity_id())
+                let Some(ancestor_location) = self
+                    .document
+                    .find_block_location(quote_ancestor.entity_id())
                 else {
                     return;
                 };
-                let new_paragraph =
-                    Self::new_block(cx, BlockRecord::paragraph(String::new()));
+                let new_paragraph = Self::new_block(cx, BlockRecord::paragraph(String::new()));
                 self.document.insert_blocks_at(
                     ancestor_location.parent,
                     ancestor_location.index + 1,

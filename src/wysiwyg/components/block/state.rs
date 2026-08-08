@@ -256,8 +256,11 @@ impl BlockKind {
     pub fn is_raw_source_block(&self) -> bool {
         matches!(
             self,
-            Self::HtmlBlock | Self::MathBlock | Self::MermaidBlock
-                | Self::RawMarkdown | Self::Comment
+            Self::HtmlBlock
+                | Self::MathBlock
+                | Self::MermaidBlock
+                | Self::RawMarkdown
+                | Self::Comment
         )
     }
 

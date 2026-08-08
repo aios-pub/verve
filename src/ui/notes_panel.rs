@@ -396,8 +396,7 @@ impl NotesPanel {
     pub fn close_current_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_current(cx);
         self.store.active_note = None;
-        self.tree
-            .update(cx, |t, cx| t.set_selected_item(None, cx));
+        self.tree.update(cx, |t, cx| t.set_selected_item(None, cx));
         self.reload_editor("", window, cx, false);
         let _ = crate::state::persistence::save_notes(&self.store);
         self.rebuild_tree(cx);
@@ -441,9 +440,8 @@ impl NotesPanel {
             self.prev_editors.drain(0..self.prev_editors.len() - 3);
         }
         let content = content.to_string();
-        let new_editor = cx.new(|cx| {
-            crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).embedded()
-        });
+        let new_editor = cx
+            .new(|cx| crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).embedded());
         self.editor = new_editor;
         // The autosave observer is bound to the (now-dropped) old editor entity;
         // re-subscribe to the new one. It's the first entry in `_subs`.
@@ -460,7 +458,6 @@ impl NotesPanel {
             self.editor.update(cx, |e, _cx| e.clear_pending_focus());
         }
     }
-
 
     pub fn note_count(&self) -> usize {
         self.store.notes.len()
@@ -479,6 +476,19 @@ impl NotesPanel {
     /// Whether the note list sidebar is currently collapsed.
     pub fn is_list_collapsed(&self) -> bool {
         self.list_collapsed
+    }
+
+    /// Whether the per-note export popover (in the title bar) is open.
+    pub fn export_popover_open(&self) -> bool {
+        self.export_popover_open
+    }
+
+    /// Toggle the export popover open/closed (used by the title-bar trigger).
+    pub fn set_export_popover_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.export_popover_open != open {
+            self.export_popover_open = open;
+            cx.notify();
+        }
     }
 
     /// Duplicate a note by id (creates a copy with "(Copy)" suffix, selects it).
@@ -540,7 +550,7 @@ impl NotesPanel {
         &mut self,
         note_id: &str,
         fmt: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(note) = self.store.notes.iter().find(|n| n.id == note_id).cloned() else {
@@ -559,6 +569,7 @@ impl NotesPanel {
         let format = fmt.to_string();
         let format_for_dialog = format.clone();
         let format_for_save = format.clone();
+        let window_handle: gpui::AnyWindowHandle = window.window_handle().into();
 
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
@@ -582,7 +593,10 @@ impl NotesPanel {
                         };
                         match result {
                             Ok(()) => log::info!("exported note to {:?}", path),
-                            Err(e) => log::error!("export failed: {e:?}"),
+                            Err(e) => {
+                                log::error!("export failed: {e:?}");
+                                show_export_error(window_handle, &e.to_string(), cx);
+                            }
                         }
                         break;
                     }
@@ -662,13 +676,13 @@ impl NotesPanel {
         cx.notify();
     }
 
-    /// Open a native save dialog and export the currently active note as Markdown.
-    pub fn export_active_note_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.export_active_note_as("md", window, cx);
-    }
-
     /// Export the active note in a given format: `"md"` or `"pdf"`.
-    fn export_active_note_as(&mut self, fmt: &str, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn export_active_note_as(
+        &mut self,
+        fmt: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(active_id) = self.store.active_note.clone() else {
             log::warn!("export: no active note");
             return;
@@ -688,6 +702,7 @@ impl NotesPanel {
         let format = fmt.to_string();
         let format_for_dialog = format.clone();
         let format_for_save = format.clone();
+        let window_handle: gpui::AnyWindowHandle = window.window_handle().into();
 
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
@@ -711,7 +726,10 @@ impl NotesPanel {
                         };
                         match result {
                             Ok(()) => log::info!("exported note to {:?}", path),
-                            Err(e) => log::error!("export failed: {e:?}"),
+                            Err(e) => {
+                                log::error!("export failed: {e:?}");
+                                show_export_error(window_handle, &e.to_string(), cx);
+                            }
                         }
                         break;
                     }
@@ -1497,8 +1515,8 @@ impl Render for NotesPanel {
                 .with_state(&state)
                 .on_resize(|state, _, cx| {
                     if let Some(w) = state.read(cx).sizes().first() {
-                        let mut layout = crate::state::persistence::load_layout()
-                            .unwrap_or_default();
+                        let mut layout =
+                            crate::state::persistence::load_layout().unwrap_or_default();
                         let mut arr = layout.side_widths.unwrap_or([260., 260., 260., 220.]);
                         arr[0] = w.as_f32();
                         layout.side_widths = Some(arr);
@@ -1576,4 +1594,28 @@ fn sanitize_filename(name: &str) -> String {
         }
     }
     out.trim().trim_matches('.').to_string()
+}
+
+/// Surface an export failure to the user via a critical prompt dialog.
+///
+/// Runs on the async context (the save completes on a background thread) and
+/// dispatches the blocking `window.prompt` back onto the window thread via
+/// `update_window`, mirroring the WYSIWYG editor's `show_export_error`.
+fn show_export_error(window_handle: gpui::AnyWindowHandle, detail: &str, cx: &mut gpui::AsyncApp) {
+    let detail = detail.to_string();
+    let _ = cx.update_window(
+        window_handle,
+        move |_view: gpui::AnyView, window: &mut gpui::Window, cx: &mut gpui::App| {
+            let title = rust_i18n::t!("notes.export_failed").to_string();
+            let ok = rust_i18n::t!("common.ok").to_string();
+            let buttons = [ok.as_str()];
+            let _ = window.prompt(
+                gpui::PromptLevel::Critical,
+                &title,
+                Some(&detail),
+                &buttons,
+                cx,
+            );
+        },
+    );
 }

@@ -29,8 +29,7 @@ const CONTENT_W: f32 = PAGE_W - 2.0 * MARGIN;
 // Embedded Noto Sans SC (SIL Open Font License). SubsetOTF covers the commonly
 // used Simplified Chinese glyphs plus Latin/ASCII, so both 中英 mixed content
 // renders. Two weights are embedded; italics fall back to the regular shape.
-const FONT_REGULAR: &[u8] =
-    include_bytes!("../assets/fonts/noto-sans-sc/NotoSansSC-Regular.otf");
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/noto-sans-sc/NotoSansSC-Regular.otf");
 const FONT_BOLD: &[u8] = include_bytes!("../assets/fonts/noto-sans-sc/NotoSansSC-Bold.otf");
 
 /// Punctuation that must not start a line (CJK 禁则 / 行首禁排).
@@ -66,8 +65,8 @@ impl GlyphMeasurer {
         // the `FontRef`. Both fonts were validated at build/download time.
         let regular = FontRef::try_from_slice(FONT_REGULAR)
             .context("parse NotoSansSC-Regular for measurement")?;
-        let bold = FontRef::try_from_slice(FONT_BOLD)
-            .context("parse NotoSansSC-Bold for measurement")?;
+        let bold =
+            FontRef::try_from_slice(FONT_BOLD).context("parse NotoSansSC-Bold for measurement")?;
         Ok(Self { regular, bold })
     }
 
@@ -451,7 +450,8 @@ mod tests {
 
     #[test]
     fn renders_mixed_cjk_and_latin_pdf() {
-        let md = "# 标题 Heading\n\n你好，世界！Hello 中文 mixed 内容。\n\n- 列表项一\n- 列表项二\n";
+        let md =
+            "# 标题 Heading\n\n你好，世界！Hello 中文 mixed 内容。\n\n- 列表项一\n- 列表项二\n";
         let bytes = markdown_to_pdf_bytes(md, "测试标题").expect("pdf bytes");
         assert!(
             bytes.starts_with(b"%PDF"),

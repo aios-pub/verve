@@ -158,9 +158,7 @@ where
 {
     let opt = Option::<f64>::deserialize(deserializer)?;
     // Coerce NaN/inf to 0 as well — these are never useful latencies.
-    Ok(opt
-        .filter(|v| v.is_finite())
-        .unwrap_or(0.0))
+    Ok(opt.filter(|v| v.is_finite()).unwrap_or(0.0))
 }
 
 /// Deserialize a `BTreeMap<String, f64>` treating any null values as 0.0.
@@ -174,9 +172,7 @@ where
     Ok(raw
         .into_iter()
         .map(|(k, v)| {
-            let v = v
-                .filter(|x| x.is_finite())
-                .unwrap_or(0.0);
+            let v = v.filter(|x| x.is_finite()).unwrap_or(0.0);
             (k, v)
         })
         .collect())

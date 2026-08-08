@@ -3,18 +3,24 @@
 //! toggle / update / export / language pickers, and the per-view bars
 //! (SSH, Docker, K8s, Notes, JSON, Relocate, PDF, Markdown, AutoTest).
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable as _, Selectable as _, Disableable as _,
-    button::{Button, ButtonVariants as _}, h_flex, v_flex, popover::Popover, WindowExt};
-use crate::assets::{BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF,
-    HISTORY, IMPORT, K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE,
-    SAVE_AS, SERVER, SHARE};
-use crate::share::models::ShareScope;
-use crate::ui::k8s_panel::View as K8sView;
-use crate::state::{AppEvent, AppState};
 use super::widgets::{menu_item, menu_separator, vicon};
 use super::{PendingDialog, SideView, VerveApp};
+use crate::assets::{
+    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
+    K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
+};
+use crate::share::models::ShareScope;
+use crate::state::{AppEvent, AppState};
+use crate::ui::k8s_panel::View as K8sView;
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::{
+    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, WindowExt,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    popover::Popover,
+    v_flex,
+};
 
 impl VerveApp {
     pub(super) fn render_title_bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1209,19 +1215,83 @@ impl VerveApp {
                         });
                     })),
             )
-            // Export button.
-            .child(
-                Button::new("notes-title-export")
-                    .ghost()
-                    .small()
-                    .icon(vicon(EXPORT))
-                    .label(rust_i18n::t!("notes.export").to_string())
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        let _ = notes_export.update(cx, |p, cx| {
-                            p.export_active_note_dialog(window, cx);
-                        });
-                    })),
-            )
+            // Export popover (Markdown / PDF).
+            .child({
+                let export_open = notes_export.read(cx).export_popover_open();
+                Popover::new("notes-title-export-pop")
+                    .anchor(gpui::Anchor::BottomRight)
+                    .open(export_open)
+                    .on_open_change({
+                        let notes = notes_export.clone();
+                        move |open: &bool, _window, cx: &mut gpui::App| {
+                            let _ = notes.update(cx, |this, cx| {
+                                this.set_export_popover_open(*open, cx);
+                            });
+                        }
+                    })
+                    .trigger(
+                        Button::new("notes-title-export")
+                            .ghost()
+                            .small()
+                            .icon(vicon(EXPORT))
+                            .label(rust_i18n::t!("notes.export").to_string())
+                            .tooltip(rust_i18n::t!("notes.export").to_string()),
+                    )
+                    .p(px(4.))
+                    .child(
+                        v_flex()
+                            .w(px(170.))
+                            .gap(px(2.))
+                            // Export as Markdown
+                            .child(
+                                div()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .child(rust_i18n::t!("notes.export_md").to_string()),
+                                    )
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let notes = notes_export.clone();
+                                        cx.listener(move |_, _, window, cx| {
+                                            let _ = notes.update(cx, |this, cx| {
+                                                this.set_export_popover_open(false, cx);
+                                                this.export_active_note_as("md", window, cx);
+                                            });
+                                        })
+                                    }),
+                            )
+                            // Export as PDF
+                            .child(
+                                div()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.muted))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .child(rust_i18n::t!("notes.export_pdf").to_string()),
+                                    )
+                                    .on_mouse_down(MouseButton::Left, {
+                                        let notes = notes_export.clone();
+                                        cx.listener(move |_, _, window, cx| {
+                                            let _ = notes.update(cx, |this, cx| {
+                                                this.set_export_popover_open(false, cx);
+                                                this.export_active_note_as("pdf", window, cx);
+                                            });
+                                        })
+                                    }),
+                            ),
+                    )
+            })
             .child(self.render_lang_picker(cx))
     }
 
@@ -1514,7 +1584,12 @@ impl VerveApp {
                     .min_w_0()
                     .max_w(px(320.))
                     .overflow_hidden()
-                    .child(div().flex_shrink_0().text_color(theme.primary).child(vicon(DOCS)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(theme.primary)
+                            .child(vicon(DOCS)),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -1525,12 +1600,7 @@ impl VerveApp {
                             .child(title),
                     )
                     .when(dirty, |d| {
-                        d.child(
-                            div()
-                                .flex_shrink_0()
-                                .text_color(theme.primary)
-                                .child("●"),
-                        )
+                        d.child(div().flex_shrink_0().text_color(theme.primary).child("●"))
                     })
                     .when_some(file_path, |this, path| {
                         // Click the path to copy the full path to the clipboard

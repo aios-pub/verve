@@ -76,6 +76,7 @@ notes:
   export: Export
   export_md: "Export as Markdown"
   export_pdf: "Export as PDF"
+  export_failed: "Export failed"
   collapse_list: "Collapse Notes"
   expand_list: "Expand Notes"
   note_count: "%{count} notes"

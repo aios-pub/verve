@@ -241,15 +241,18 @@ impl Editor {
     }
 
     pub(super) fn focusable_entity_by_id(&self, entity_id: EntityId) -> Option<Entity<Block>> {
-        self.document.block_entity_by_id(entity_id).or_else(|| {
-            self.table_cells
-                .get(&entity_id)
-                .map(|binding| binding.cell.clone())
-        }).or_else(|| {
-            self.html_wrapper_children
-                .get(&entity_id)
-                .map(|binding| binding.child.clone())
-        })
+        self.document
+            .block_entity_by_id(entity_id)
+            .or_else(|| {
+                self.table_cells
+                    .get(&entity_id)
+                    .map(|binding| binding.cell.clone())
+            })
+            .or_else(|| {
+                self.html_wrapper_children
+                    .get(&entity_id)
+                    .map(|binding| binding.child.clone())
+            })
     }
 
     /// The currently focused block entity id, for toolbar state detection and
@@ -342,10 +345,7 @@ impl Editor {
     }
 
     /// The wrapper (parent) HtmlBlock owning `child_id`, if it is a wrapper child.
-    pub(super) fn html_wrapper_block_for_child(
-        &self,
-        child_id: EntityId,
-    ) -> Option<Entity<Block>> {
+    pub(super) fn html_wrapper_block_for_child(&self, child_id: EntityId) -> Option<Entity<Block>> {
         self.html_wrapper_children
             .get(&child_id)
             .map(|binding| binding.wrapper_block.clone())

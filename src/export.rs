@@ -194,10 +194,8 @@ fn env_server_url(env: &crate::state::models::Environment) -> Option<String> {
         }
         let val = v.value.trim();
         // Legacy names kept for back-compat with older project files.
-        let is_legacy_name = v
-            .key
-            .eq_ignore_ascii_case("baseurl")
-            || v.key.eq_ignore_ascii_case("base_url");
+        let is_legacy_name =
+            v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url");
         // Imported servers carry their display name as the key; we can't list
         // them by name, so detect by value (same heuristic the request-panel
         // base-URL dropdown uses).
@@ -226,10 +224,8 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
             // is an http(s) URL OR is named baseUrl/base_url (legacy).
             let mut server_uri = String::new();
             for v in &env.variables {
-                let is_legacy_name = v
-                    .key
-                    .eq_ignore_ascii_case("baseurl")
-                    || v.key.eq_ignore_ascii_case("base_url");
+                let is_legacy_name =
+                    v.key.eq_ignore_ascii_case("baseurl") || v.key.eq_ignore_ascii_case("base_url");
                 let val = v.value.trim();
                 let is_url_value = val.starts_with("http://") || val.starts_with("https://");
                 if server_uri.is_empty() && (is_legacy_name || is_url_value) && !val.is_empty() {

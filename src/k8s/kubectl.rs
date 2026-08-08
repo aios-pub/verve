@@ -181,10 +181,12 @@ pub async fn list_pods(
         Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
         _ => Api::all(client),
     };
-    let list = pods
-        .list(&ListParams::default())
-        .await
-        .map_err(|e| PodError(format!("获取 Pod 列表失败: {}", super::client::format_err_chain(&e))))?;
+    let list = pods.list(&ListParams::default()).await.map_err(|e| {
+        PodError(format!(
+            "获取 Pod 列表失败: {}",
+            super::client::format_err_chain(&e)
+        ))
+    })?;
     Ok(list.items.into_iter().map(super::client::map_pod).collect())
 }
 
@@ -195,10 +197,12 @@ pub async fn list_namespaces(context: Option<&str>) -> Result<Vec<String>, PodEr
 
     let client = super::client::build_client(context).await?;
     let namespaces: Api<k8s_openapi::api::core::v1::Namespace> = Api::all(client);
-    let list = namespaces
-        .list(&ListParams::default())
-        .await
-        .map_err(|e| PodError(format!("获取 Namespace 列表失败: {}", super::client::format_err_chain(&e))))?;
+    let list = namespaces.list(&ListParams::default()).await.map_err(|e| {
+        PodError(format!(
+            "获取 Namespace 列表失败: {}",
+            super::client::format_err_chain(&e)
+        ))
+    })?;
     Ok(list
         .items
         .into_iter()
@@ -299,7 +303,10 @@ pub fn stream_logs(
                 }
             }
             Err(e) => {
-                let _ = started_tx.send(Err(PodError(format!("获取日志失败: {}", super::client::format_err_chain(&e)))));
+                let _ = started_tx.send(Err(PodError(format!(
+                    "获取日志失败: {}",
+                    super::client::format_err_chain(&e)
+                ))));
             }
         }
     });
@@ -492,11 +499,11 @@ fn shell_available(pod: &str, namespace: Option<&str>, context: Option<&str>, sh
             };
             let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &ns);
             // Run `<shell> -c exit`; success means the shell exists.
-            let ap = AttachParams::default().stdin(false).stdout(true).stderr(false);
-            match pods
-                .exec(&pod, vec![&shell, "-c", "exit"], &ap)
-                .await
-            {
+            let ap = AttachParams::default()
+                .stdin(false)
+                .stdout(true)
+                .stderr(false);
+            match pods.exec(&pod, vec![&shell, "-c", "exit"], &ap).await {
                 Ok(mut attached) => {
                     // Drain stdout so the process can finish, with a 5s deadline.
                     let mut out = String::new();
@@ -572,8 +579,7 @@ pub fn exec_pod(
     // AttachParams: tty=true so the server allocates a PTY and merges stderr into
     // stdout (we read a single stream, matching the old PTY-based behavior).
     let rt = super::client::k8s_runtime();
-    let (started_tx, started_rx) =
-        std::sync::mpsc::channel::<Result<AttachedHandle, PodError>>();
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<AttachedHandle, PodError>>();
 
     rt.spawn(async move {
         let client = match super::client::build_client(context.as_deref()).await {
@@ -594,7 +600,10 @@ pub fn exec_pod(
                 let _ = started_tx.send(Ok(AttachedHandle::new(attached)));
             }
             Err(e) => {
-                let _ = started_tx.send(Err(PodError(format!("启动 exec 失败: {}", super::client::format_err_chain(&e)))));
+                let _ = started_tx.send(Err(PodError(format!(
+                    "启动 exec 失败: {}",
+                    super::client::format_err_chain(&e)
+                ))));
             }
         }
     });

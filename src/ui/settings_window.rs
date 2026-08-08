@@ -197,7 +197,10 @@ impl SettingsWindow {
             )
         });
 
-        let autosave_options: Vec<String> = AUTOSAVE_MODES.iter().map(|m| m.label().to_string()).collect();
+        let autosave_options: Vec<String> = AUTOSAVE_MODES
+            .iter()
+            .map(|m| m.label().to_string())
+            .collect();
         let autosave_idx = AUTOSAVE_MODES
             .iter()
             .position(|&m| m == autosave_mode)
@@ -706,7 +709,11 @@ impl Render for SettingsWindow {
         self.autosave_select.update(cx, |s, cx| {
             let cur = s.selected_index(cx).map(|p| p.row).unwrap_or(usize::MAX);
             if cur != autosave_idx {
-                s.set_selected_index(Some(gpui_component::IndexPath::new(autosave_idx)), window, cx);
+                s.set_selected_index(
+                    Some(gpui_component::IndexPath::new(autosave_idx)),
+                    window,
+                    cx,
+                );
             }
         });
 

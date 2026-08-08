@@ -15,8 +15,8 @@ use super::runtime::{VisualLineHit, VisualLineKind, VisualLinePrefix};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::wysiwyg::components::{
     HtmlBoxEdges, HtmlCssColor, HtmlDocument, HtmlInlineStyle, HtmlLength, HtmlNode, HtmlNodeKind,
-    InlineScript, TableAxisHighlight, TableAxisKind, TableAxisMarker,
-    TableCellInlineImageSegment, TableColumnLayout, attr_value, display_math_font_size,
+    InlineScript, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
+    TableColumnLayout, attr_value, display_math_font_size,
     has_only_inline_content as html_has_only_inline_content, inline_math_font_size,
     parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
     parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
@@ -447,10 +447,14 @@ fn apply_html_box_style(
         };
     }
     if let Some(edges) = style.padding {
-        element = element.px(px(edges.left + edges.right)).py(px(edges.top + edges.bottom));
+        element = element
+            .px(px(edges.left + edges.right))
+            .py(px(edges.top + edges.bottom));
     }
     if let Some(edges) = style.margin {
-        element = element.mx(px(edges.left + edges.right)).my(px(edges.top + edges.bottom));
+        element = element
+            .mx(px(edges.left + edges.right))
+            .my(px(edges.top + edges.bottom));
     }
     if let Some(width) = style.width {
         let px_val = html_length_to_px(width, computed.font_size, computed.parent_width);
@@ -1480,8 +1484,11 @@ impl Block {
                 // handled, so `**bold**`, headings, blockquotes, and inline HTML
                 // tags all keep working.
                 let mut element = if html_has_only_inline_content(node) {
-                    let inline_source: String =
-                        node.children.iter().map(|c| c.raw_source.as_str()).collect();
+                    let inline_source: String = node
+                        .children
+                        .iter()
+                        .map(|c| c.raw_source.as_str())
+                        .collect();
                     // Record per-line click hits only when this inline-content
                     // container IS the editable wrapper's own content (its
                     // inline source equals the wrapper's inner Markdown).
@@ -1599,7 +1606,11 @@ impl Block {
                     .text_size(px(size))
                     .text_color(base_color)
                     .font_weight(FontWeight::BOLD)
-                    .mt(px(if lines.is_empty() { 0.0 } else { d.block_gap * 0.5 }))
+                    .mt(px(if lines.is_empty() {
+                        0.0
+                    } else {
+                        d.block_gap * 0.5
+                    }))
                     .children(self.render_inline_tree_children(
                         &tree,
                         theme,
@@ -1664,20 +1675,16 @@ impl Block {
                     .border_color(c.border_quote)
                     .text_size(px(base_size))
                     .text_color(c.text_quote)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .min_w(px(0.0))
-                            .children(self.render_inline_tree_children(
-                                &tree,
-                                theme,
-                                c.text_quote,
-                                base_size,
-                                FontWeight::NORMAL,
-                                cx,
-                            )),
-                    )
+                    .child(div().flex().flex_wrap().min_w(px(0.0)).children(
+                        self.render_inline_tree_children(
+                            &tree,
+                            theme,
+                            c.text_quote,
+                            base_size,
+                            FontWeight::NORMAL,
+                            cx,
+                        ),
+                    ))
                     .into_any_element();
                 self.push_html_markdown_visual_line(
                     &mut lines,
@@ -1809,9 +1816,8 @@ impl Block {
                 hits.push(hit);
                 index
             };
-            lines.push(
-                VisualLineBoundsElement::new(cx.entity(), index, element).into_any_element(),
-            );
+            lines
+                .push(VisualLineBoundsElement::new(cx.entity(), index, element).into_any_element());
         } else {
             lines.push(element);
         }
@@ -2294,20 +2300,21 @@ impl Render for Block {
                             .unwrap_or_else(|| self.display_text()),
                     )
                 });
-                let table_base = self.render_shell(
-                    block_id.clone(),
-                    false,
-                    CursorStyle::IBeam,
-                    d.block_padding_x,
-                    d.block_padding_x,
-                    d,
-                    cx,
-                )
-                .text_size(px(t.text_size))
-                .text_color(c.text_default)
-                .line_height(rems(t.text_line_height))
-                .child(self.render_html_document(&html, &theme, cx))
-                .into_any_element();
+                let table_base = self
+                    .render_shell(
+                        block_id.clone(),
+                        false,
+                        CursorStyle::IBeam,
+                        d.block_padding_x,
+                        d.block_padding_x,
+                        d,
+                        cx,
+                    )
+                    .text_size(px(t.text_size))
+                    .text_color(c.text_default)
+                    .line_height(rems(t.text_line_height))
+                    .child(self.render_html_document(&html, &theme, cx))
+                    .into_any_element();
                 // Wrap in BoundsCaptureElement so the table visual's bounds are
                 // recorded; the editor uses last_bounds to resolve the nearest
                 // child on the first wrapper click.

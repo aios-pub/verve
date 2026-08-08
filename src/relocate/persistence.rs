@@ -72,11 +72,7 @@ pub fn append(record: &TaskRecord) {
     };
     json.push('\n');
     // Open for append (create if missing).
-    let mut file = match fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    let mut file = match fs::OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => f,
         Err(e) => {
             log::error!("relocate: open tasks file failed: {e}");

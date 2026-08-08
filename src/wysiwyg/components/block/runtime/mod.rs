@@ -26,12 +26,12 @@ use super::{
     ImageReferenceDefinitions, ImageResolvedSource, ImageSyntax, LinkReferenceDefinitions,
     parse_standalone_image, resolve_image_source,
 };
+use crate::wysiwyg::components::markdown::html::{
+    HtmlWrapperShape, extract_editable_inline_wrapper, is_html_table_block,
+};
 use crate::wysiwyg::components::markdown::inline::{
     InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineRenderCache, InlineScript,
     InlineSpan, InlineStyle, InlineTextTree, StyleFlag,
-};
-use crate::wysiwyg::components::markdown::html::{
-    HtmlWrapperShape, extract_editable_inline_wrapper, is_html_table_block,
 };
 use crate::wysiwyg::components::{
     TableAxisHighlight, TableAxisMarker, TableCellPosition, TableColumnAlignment, TableRuntime,
@@ -2258,7 +2258,10 @@ impl Block {
             .collect();
         let flags_to_clear: Vec<StyleFlag> = [
             (StyleFlag::Bold, overlapping.iter().any(|s| s.style.bold)),
-            (StyleFlag::Italic, overlapping.iter().any(|s| s.style.italic)),
+            (
+                StyleFlag::Italic,
+                overlapping.iter().any(|s| s.style.italic),
+            ),
             (
                 StyleFlag::Underline,
                 overlapping.iter().any(|s| s.style.underline),
@@ -2361,7 +2364,10 @@ impl Block {
         let (body, post_sel_len) = if selection.is_empty() {
             ("x".to_string(), 1)
         } else {
-            (self.display_text()[selection.clone()].to_string(), selection.len())
+            (
+                self.display_text()[selection.clone()].to_string(),
+                selection.len(),
+            )
         };
         let math_markdown = format!("${body}$");
 

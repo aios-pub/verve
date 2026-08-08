@@ -603,10 +603,7 @@ impl SshPanel {
         // Rebuild as a new host record with a fresh id + creation time. We
         // construct via SshHost::new to get a new created_at, then overwrite
         // every field with the source's values except id/name.
-        let mut dup = SshHost::new(
-            format!("{} 副本", src.name),
-            src.host.clone(),
-        );
+        let mut dup = SshHost::new(format!("{} 副本", src.name), src.host.clone());
         dup.id = new_id.clone();
         dup.port = src.port;
         dup.username = src.username.clone();

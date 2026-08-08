@@ -19,7 +19,7 @@ use crate::ssh::host_store as ssh_host_store;
 /// Connection mode selected in the dialog.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnMode {
-    /// User enters a DOCKER_HOST URL directly (tcp://, ssh://, unix://).
+    /// User enters a DOCKER_HOST URL directly (tcp://, https://, unix://).
     Direct,
     /// Tunnel through an existing Verve-managed SSH host.
     SshTunnel,
@@ -75,7 +75,7 @@ impl DockerHostDialogState {
         });
         let host_url = cx.new(|cx| {
             let mut s = InputState::new(window, cx)
-                .placeholder("tcp://host:2376 或 ssh://user@host 或 unix:///path");
+                .placeholder("tcp://host:2376, https://host:2376 或 unix:///path");
             if !init_url.is_empty() {
                 s.set_value(&init_url, window, cx);
             }
@@ -251,7 +251,7 @@ where
                                 div()
                                     .text_xs()
                                     .text_color(muted)
-                                    .child("例如: tcp://192.168.1.10:2376, ssh://user@server, unix:///var/run/docker.sock"),
+                                    .child("例如: tcp://192.168.1.10:2376, unix:///var/run/docker.sock (SSH 连接请用「SSH 隧道」模式)"),
                             )
                             .into_any_element(),
                         ConnMode::SshTunnel => {

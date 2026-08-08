@@ -209,7 +209,10 @@ mod tests {
         let m = vars(&[]);
         let v = substitute("{{$timestamp}}", &m);
         assert!(!v.is_empty());
-        assert!(v.chars().all(|c| c.is_ascii_digit()), "expected digits only");
+        assert!(
+            v.chars().all(|c| c.is_ascii_digit()),
+            "expected digits only"
+        );
     }
 
     #[test]

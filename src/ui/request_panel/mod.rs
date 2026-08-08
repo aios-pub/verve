@@ -68,7 +68,6 @@ pub(super) fn unregister_stop(id: &str) {
     stop_flags().lock().unwrap().remove(id);
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ReqTab {
     Headers,
@@ -94,6 +93,12 @@ pub struct RequestPanel {
     pub url: Entity<InputState>,
     /// Base URL prefix for the current request (independent of folder config).
     pub req_base_url: Entity<InputState>,
+    /// Tri-state override mode mirroring `ApiRequest::base_url_override`:
+    /// `None` = inherit folder config; `Some(None)` = explicit no prefix;
+    /// `Some(Some(url))` = use this url. Driving resolution off this (instead
+    /// of treating an empty input as "inherit") is what lets the user clear
+    /// the prefix without it silently falling back to the folder base_url.
+    pub req_base_mode: Option<Option<String>>,
     /// Whether the base URL popover is open.
     pub req_baseurl_open: bool,
     pub name: Entity<InputState>,
@@ -194,7 +199,6 @@ pub enum FolderTab {
     /// 接口列表 — all requests inside the folder.
     InterfaceList,
 }
-
 
 impl RequestPanel {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -343,6 +347,7 @@ impl RequestPanel {
             request_id: None,
             url,
             req_base_url,
+            req_base_mode: None,
             req_baseurl_open: false,
             name,
             method_select,
@@ -509,7 +514,12 @@ impl RequestPanel {
     /// On input change/blur, commit the editors back into the active model
     /// (request or folder) so edits apply live (name/path/etc. update in the
     /// tree and lists as you type). Saving is debounced inside notify_edited.
-    pub(super) fn on_input_blur(&mut self, _src: Entity<InputState>, ev: &InputEvent, cx: &mut Context<Self>) {
+    pub(super) fn on_input_blur(
+        &mut self,
+        _src: Entity<InputState>,
+        ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(ev, InputEvent::Blur | InputEvent::Change) {
             // If a folder is selected, commit the folder editors; otherwise
             // commit the request editors.
@@ -521,7 +531,12 @@ impl RequestPanel {
         }
     }
 
-    pub(super) fn on_state_event(&mut self, _src: Entity<AppState>, ev: &AppEvent, cx: &mut Context<Self>) {
+    pub(super) fn on_state_event(
+        &mut self,
+        _src: Entity<AppState>,
+        ev: &AppEvent,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(
             ev,
             AppEvent::SelectionChanged | AppEvent::EnvironmentChanged
@@ -556,10 +571,15 @@ impl RequestPanel {
         match req {
             Some(r) => {
                 // Split URL into base + path for display in two separate inputs.
-                // If URL starts with http:// or https://, extract host as base_url.
-                // Otherwise, try folder base_url and show only the path.
+                // Resolution at send time is driven by `req_base_mode` (mirrors
+                // `ApiRequest::base_url_override`), NOT by whether the input is
+                // empty — so the three states are distinguishable:
+                //   inherit (None) / explicit-disable (Some(None)) / override (Some(Some)).
                 let (base_display, path_display) = {
                     if r.url.starts_with("http://") || r.url.starts_with("https://") {
+                        // Absolute URL carries its own scheme; reset the mode to
+                        // inherit (no override applies) and split host→base input.
+                        self.req_base_mode = None;
                         // Split at the first '/' after the host.
                         let scheme_end = if r.url.starts_with("https://") { 8 } else { 7 };
                         if let Some(slash) = r.url[scheme_end..].find('/') {
@@ -570,17 +590,39 @@ impl RequestPanel {
                             (r.url.clone(), String::new())
                         }
                     } else {
-                        // Relative path — check folder base_url.
-                        let base = {
-                            let st = self.state.read(cx);
-                            st.active_project().and_then(|p| {
-                                p.find_request(&r.id)
-                                    .and_then(|(chain, _)| resolve_folder_base_url(p, &chain))
-                            })
-                        };
-                        match base {
-                            Some(b) => (b, r.url.clone()),
-                            None => (String::new(), r.url.clone()),
+                        // Relative path — the base input reflects the persisted mode.
+                        match &r.base_url_override {
+                            // Explicitly disable any prefix for this request.
+                            Some(None) => {
+                                self.req_base_mode = Some(None);
+                                (String::new(), r.url.clone())
+                            }
+                            // Override with a specific value (literal or {{var}}).
+                            Some(Some(u)) => {
+                                self.req_base_mode = Some(Some(u.clone()));
+                                if u.trim().is_empty() {
+                                    (String::new(), r.url.clone())
+                                } else {
+                                    (u.clone(), r.url.clone())
+                                }
+                            }
+                            // Inherit: show the folder-resolved base_url purely
+                            // for display; the mode stays inherit (None).
+                            None => {
+                                self.req_base_mode = None;
+                                let base = {
+                                    let st = self.state.read(cx);
+                                    st.active_project().and_then(|p| {
+                                        p.find_request(&r.id).and_then(|(chain, _)| {
+                                            resolve_folder_base_url(p, &chain)
+                                        })
+                                    })
+                                };
+                                match base {
+                                    Some(b) => (b, r.url.clone()),
+                                    None => (String::new(), r.url.clone()),
+                                }
+                            }
                         }
                     }
                 };
@@ -761,7 +803,11 @@ impl RequestPanel {
     /// If a folder is currently selected, load its name/description/params/
     /// headers/variables into the folder editors and return true. Returns
     /// false when no folder is selected (so the caller can load a request).
-    pub(super) fn load_active_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn load_active_folder(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let id = self.state.read(cx).selected_folder.clone();
         if id.is_none() {
             return false;
@@ -880,6 +926,17 @@ impl RequestPanel {
             value: self.auth_value.read(cx).value().to_string(),
             add_to: self.auth_target,
         };
+        // Snapshot the per-request base-URL override mode. In override mode the
+        // persisted value follows the live editor input so the user can type a
+        // literal URL (not just pick a {{var}} placeholder).
+        let base_url_override = {
+            let live = self.req_base_url.read(cx).value().to_string();
+            match &self.req_base_mode {
+                None => None,
+                Some(None) => Some(None),
+                Some(Some(_)) => Some(Some(live)),
+            }
+        };
 
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
@@ -892,6 +949,7 @@ impl RequestPanel {
                     req.headers = headers;
                     req.path = path;
                     req.cookies = cookies;
+                    req.base_url_override = base_url_override;
                     req.body.body_type = self.body_type;
                     req.body.raw = raw_body;
                     req.body.raw_language = body_lang;
@@ -1030,20 +1088,19 @@ impl RequestPanel {
             "EFFECTIVE_VARS: final map keys={:?}",
             map.keys().collect::<Vec<_>>()
         );
-        // Inject folder base_url as "baseUrl" + special key for relative paths.
-        // A per-request base_url override (selected from the dropdown) takes
-        // precedence over the folder's base_url.
+        // Inject the effective base URL as "__folder_base_url__" (used for
+        // relative-path prefixing in the HTTP client) and as "baseUrl" (used
+        // for {{baseUrl}} substitution). Resolution is driven by the tri-state
+        // `req_base_mode`: inherit / explicit-disable / override. A returned
+        // None simply leaves both keys unset, so a relative URL stays relative.
         let req_base_raw = self.req_base_url.read(cx).value().to_string();
-        if !req_base_raw.trim().is_empty() {
-            let resolved = crate::http::variable::substitute(&req_base_raw, &map);
-            if !resolved.trim().is_empty() {
-                map.insert(
-                    "__folder_base_url__".to_string(),
-                    resolved.trim_end_matches('/').to_string(),
-                );
-                map.entry("baseUrl".to_string()).or_insert(resolved);
-            }
-        } else if let Some(base) = resolve_folder_base_url(project, &chain) {
+        if let Some(base) = crate::ui::request_panel::folder_helpers::resolve_effective_base_url(
+            &self.req_base_mode,
+            &req_base_raw,
+            &map,
+            project,
+            &chain,
+        ) {
             map.insert("__folder_base_url__".to_string(), base.clone());
             map.entry("baseUrl".to_string()).or_insert(base);
         }
@@ -1216,7 +1273,6 @@ impl RequestPanel {
 
         parts.join(" \\\n  ")
     }
-
 }
 
 pub(super) fn truncate_history_body(body: &str) -> (Option<String>, bool) {
@@ -1231,7 +1287,6 @@ pub(super) fn truncate_history_body(body: &str) -> (Option<String>, bool) {
     s.push_str("…");
     (Some(s), true)
 }
-
 
 impl Render for RequestPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1469,15 +1524,13 @@ impl Render for RequestPanel {
                             // verb (GET/POST/…) reads at a glance, Apifox-style.
                             let method_text = crate::ui::method_colors::badge_color(method, cx);
                             bar.child(
-                                div()
-                                    .w(px(110.))
-                                    .child(
-                                        Select::new(&self.method_select)
-                                            .small()
-                                            .appearance(true)
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(method_text),
-                                    ),
+                                div().w(px(110.)).child(
+                                    Select::new(&self.method_select)
+                                        .small()
+                                        .appearance(true)
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(method_text),
+                                ),
                             )
                         })
                         .child(
@@ -1512,19 +1565,28 @@ impl Render for RequestPanel {
                                 let panel_entity = cx.entity();
                                 let open = self.req_baseurl_open;
                                 let base_val_raw = self.req_base_url.read(cx).value().to_string();
-                                // Substitute any {{var}} placeholder so the
-                                // button label shows the resolved URL, not the
-                                // raw placeholder text.
-                                let base_val = if base_val_raw.contains("{{") {
-                                    let vars = self.effective_vars(cx);
-                                    crate::http::variable::substitute(&base_val_raw, &vars)
-                                } else {
-                                    base_val_raw
-                                };
-                                let label_text = if base_val.trim().is_empty() {
-                                    "前置URL".to_string()
-                                } else {
-                                    base_val
+                                // The button label reflects the tri-state mode:
+                                //   Some(None)              → "不使用前置URL"
+                                //   Some(Some(url))         → the resolved url
+                                //   None (inherit)          → resolved folder base_url, or "前置URL"
+                                let label_text = match &self.req_base_mode {
+                                    Some(None) => "不使用前置URL".to_string(),
+                                    _ => {
+                                        // Substitute any {{var}} placeholder so the
+                                        // button label shows the resolved URL, not the
+                                        // raw placeholder text.
+                                        let base_val = if base_val_raw.contains("{{") {
+                                            let vars = self.effective_vars(cx);
+                                            crate::http::variable::substitute(&base_val_raw, &vars)
+                                        } else {
+                                            base_val_raw
+                                        };
+                                        if base_val.trim().is_empty() {
+                                            "前置URL".to_string()
+                                        } else {
+                                            base_val
+                                        }
+                                    }
                                 };
 
                                 Popover::new("req-base-pop")
@@ -1576,6 +1638,13 @@ impl Render for RequestPanel {
                                                         MouseButton::Left,
                                                         move |_ev, window, cx: &mut App| {
                                                             let _ = pe.update(cx, |this, cx| {
+                                                                // Inherit: reset to the folder's
+                                                                // base_url. Clear the input; on the
+                                                                // next render the label falls back
+                                                                // to "前置URL" or the resolved folder
+                                                                // value, and send-time resolution
+                                                                // uses resolve_folder_base_url.
+                                                                this.req_base_mode = None;
                                                                 this.req_base_url.update(
                                                                     cx,
                                                                     |input, cx| {
@@ -1584,6 +1653,46 @@ impl Render for RequestPanel {
                                                                         );
                                                                     },
                                                                 );
+                                                                this.commit_to_model(cx);
+                                                                this.req_baseurl_open = false;
+                                                                cx.notify();
+                                                            });
+                                                            window.refresh();
+                                                        },
+                                                    )
+                                            })
+                                            .child({
+                                                let pe = panel_entity.clone();
+                                                div()
+                                                    .id("req-base-disable")
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .cursor_pointer()
+                                                    .hover(|s| s.bg(theme_c.muted))
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(theme_c.muted_foreground)
+                                                            .child("不使用前置URL"),
+                                                    )
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        move |_ev, window, cx: &mut App| {
+                                                            let _ = pe.update(cx, |this, cx| {
+                                                                // Explicit disable: this request
+                                                                // carries no prefix at all, even
+                                                                // if a folder base_url is set.
+                                                                this.req_base_mode = Some(None);
+                                                                this.req_base_url.update(
+                                                                    cx,
+                                                                    |input, cx| {
+                                                                        input.set_value(
+                                                                            "", window, cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                                this.commit_to_model(cx);
                                                                 this.req_baseurl_open = false;
                                                                 cx.notify();
                                                             });
@@ -1638,6 +1747,12 @@ impl Render for RequestPanel {
                                                             move |_ev, window, cx: &mut App| {
                                                                 let _ =
                                                                     pe.update(cx, |this, cx| {
+                                                                        // Override with the
+                                                                        // selected {{var}} value.
+                                                                        this.req_base_mode =
+                                                                            Some(Some(
+                                                                                placeholder.clone(),
+                                                                            ));
                                                                         this.req_base_url.update(
                                                                             cx,
                                                                             |input, cx| {
@@ -1648,6 +1763,7 @@ impl Render for RequestPanel {
                                                                                 );
                                                                             },
                                                                         );
+                                                                        this.commit_to_model(cx);
                                                                         this.req_baseurl_open =
                                                                             false;
                                                                         cx.notify();
@@ -1934,7 +2050,6 @@ pub(super) fn tab_label(
             cx.notify();
         }))
 }
-
 
 impl Focusable for RequestPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {

@@ -648,11 +648,7 @@ impl Editor {
     /// axis menu, the cell context menu, and the `DeleteTable` keyboard
     /// shortcut. Thin wrapper over [`remove_table_block`], kept as a named
     /// entry point so menu/shortcut handlers stay self-documenting.
-    pub(super) fn delete_table(
-        &mut self,
-        table_block: &Entity<Block>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn delete_table(&mut self, table_block: &Entity<Block>, cx: &mut Context<Self>) {
         self.remove_table_block(table_block, cx);
     }
 

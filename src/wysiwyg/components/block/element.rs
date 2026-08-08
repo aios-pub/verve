@@ -1706,7 +1706,8 @@ impl Element for VisualLineBoundsElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let (layout_id, ()) = Element::request_layout(&mut self.child, id, inspector_id, window, cx);
+        let (layout_id, ()) =
+            Element::request_layout(&mut self.child, id, inspector_id, window, cx);
         (layout_id, ())
     }
 
@@ -1785,7 +1786,8 @@ impl Element for BoundsCaptureElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let (layout_id, ()) = Element::request_layout(&mut self.child, id, inspector_id, window, cx);
+        let (layout_id, ()) =
+            Element::request_layout(&mut self.child, id, inspector_id, window, cx);
         (layout_id, ())
     }
 

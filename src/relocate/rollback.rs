@@ -52,7 +52,8 @@ fn is_expected_symlink(record: &TaskRecord) -> bool {
                 Ok(target) => {
                     let expected = PathBuf::from(&record.target_external_path);
                     target == expected
-                        || std::fs::canonicalize(&target).ok() == std::fs::canonicalize(&expected).ok()
+                        || std::fs::canonicalize(&target).ok()
+                            == std::fs::canonicalize(&expected).ok()
                 }
                 Err(_) => false,
             }
@@ -69,34 +70,21 @@ fn is_expected_symlink(record: &TaskRecord) -> bool {
 /// manually replaced the link, and we must not risk deleting their data
 /// (PRD §2.2: "删链 ≠ 删文件").
 fn safe_unlink_symlink(symlink_path: &Path) -> Result<(), String> {
-    let meta = std::fs::symlink_metadata(symlink_path).map_err(|e| {
-        format!(
-            "无法读取符号链接元数据 {}: {}",
-            symlink_path.display(),
-            e
-        )
-    })?;
+    let meta = std::fs::symlink_metadata(symlink_path)
+        .map_err(|e| format!("无法读取符号链接元数据 {}: {}", symlink_path.display(), e))?;
     if !meta.file_type().is_symlink() {
         return Err(format!(
             "目标路径不是符号链接（可能是真实目录），为防止误删数据已中止：{}",
             symlink_path.display()
         ));
     }
-    std::fs::remove_file(symlink_path).map_err(|e| {
-        format!(
-            "删除符号链接失败 {}: {}",
-            symlink_path.display(),
-            e
-        )
-    })
+    std::fs::remove_file(symlink_path)
+        .map_err(|e| format!("删除符号链接失败 {}: {}", symlink_path.display(), e))
 }
 
 /// Copy the external directory back to the original local path. The local
 /// parent is created if missing. Existing local dir is left in place (merge).
-fn copy_back_with_progress(
-    external: &Path,
-    local: &Path,
-) -> Result<u64, String> {
+fn copy_back_with_progress(external: &Path, local: &Path) -> Result<u64, String> {
     // Reuse the cancel-aware copy from migrate.rs. Rollback is never cancelled
     // mid-copy (the cancel token below stays false), but we get progress +
     // permission preservation for free. Merge policy overwrites any stale local
@@ -107,7 +95,7 @@ fn copy_back_with_progress(
         local,
         super::migrate::ConflictPolicy::Merge,
         |_| {}, // no progress callback for rollback
-        0, // total unknown for rollback; progress still reports bytes_done
+        0,      // total unknown for rollback; progress still reports bytes_done
         &never_cancel,
     )
     .map_err(|e| {
@@ -252,7 +240,10 @@ pub fn delete_external_copy(record: &TaskRecord) -> Result<(), String> {
     let external = Path::new(&record.target_external_path);
     // Never touch a blacklisted path (defence in depth).
     if super::blacklist::is_blacklisted(external) {
-        return Err(format!("外置副本路径位于黑名单，拒绝删除：{}", external.display()));
+        return Err(format!(
+            "外置副本路径位于黑名单，拒绝删除：{}",
+            external.display()
+        ));
     }
     if !external.exists() {
         return Ok(()); // already gone — nothing to do.
@@ -326,7 +317,10 @@ mod tests {
 
     #[test]
     fn rollback_reports_external_unavailable() {
-        let rec = fresh_record("/tmp/does-not-exist-symlink", "/tmp/does-not-exist-external");
+        let rec = fresh_record(
+            "/tmp/does-not-exist-symlink",
+            "/tmp/does-not-exist-external",
+        );
         match rollback_one(&rec) {
             RollbackOutcome::ExternalUnavailable { .. } => {}
             other => panic!("expected ExternalUnavailable, got {:?}", other),
@@ -374,7 +368,10 @@ mod tests {
             b"beta"
         );
         // External copy was removed after the successful copy-back.
-        assert!(!external.exists(), "external copy should be removed after restore");
+        assert!(
+            !external.exists(),
+            "external copy should be removed after restore"
+        );
 
         std::fs::remove_dir_all(&tmp).ok();
     }

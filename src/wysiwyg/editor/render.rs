@@ -478,9 +478,8 @@ impl Editor {
         let Some(focused_block) = target else {
             return false;
         };
-        let active_bounds = focused_block.read_with(cx, |block, _cx| {
-            block.active_range_or_cursor_bounds()
-        });
+        let active_bounds =
+            focused_block.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds());
 
         let viewport = self.scroll_handle.bounds();
         let padding = px(20.0);
@@ -1692,11 +1691,7 @@ impl Editor {
     /// `n/total` match counter, prev/next buttons, and a close button. The bar
     /// carries the `EditorFindBar` key context so FindNext/FindPrevious
     /// bindings fire while the query field is focused.
-    fn render_find_bar(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    fn render_find_bar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use gpui_component::button::Button;
         use gpui_component::h_flex;
         use gpui_component::input::Input;
@@ -1780,11 +1775,7 @@ impl Editor {
                             h_flex()
                                 .items_center()
                                 .gap(px(6.))
-                                .child(
-                                    h_flex()
-                                        .w(px(220.))
-                                        .child(Input::new(&input).small()),
-                                )
+                                .child(h_flex().w(px(220.)).child(Input::new(&input).small()))
                                 .child(
                                     div()
                                         .min_w(px(40.))
@@ -2262,7 +2253,12 @@ impl Render for Editor {
         };
         let strides: Vec<f32> = row_first_ids
             .iter()
-            .map(|id| self.row_stride_cache.get(id).copied().unwrap_or(estimated_stride))
+            .map(|id| {
+                self.row_stride_cache
+                    .get(id)
+                    .copied()
+                    .unwrap_or(estimated_stride)
+            })
             .collect();
 
         // Bound the cache against block churn, only when it outgrows the live
@@ -2566,77 +2562,76 @@ impl Render for Editor {
             .pt(px(titlebar_height + menu_bar_height))
             .flex()
             .min_w(px(0.0));
-        let main_content = if let Some(workspace_panel) =
-            self.render_workspace_panel(&theme, &strings, cx)
-        {
-            // Resizable workspace drawer: drag the right edge to resize.
-            let saved = crate::state::persistence::load_layout()
-                .and_then(|l| l.markdown_drawer_width)
-                .filter(|&w| w > 0.0)
-                .map(gpui::px)
-                .unwrap_or_else(|| gpui::px(240.));
-            let state = self.workspace_resize.clone();
-            main_content.child(
-                gpui_component::resizable::h_resizable("editor-workspace")
-                    .with_state(&state)
-                    .on_resize(|state, _, cx| {
-                        if let Some(w) = state.read(cx).sizes().first() {
-                            let mut layout = crate::state::persistence::load_layout()
-                                .unwrap_or_default();
-                            layout.markdown_drawer_width = Some(w.as_f32());
-                            let _ = crate::state::persistence::save_layout(&layout);
-                        }
-                    })
-                    .child(
-                        gpui_component::resizable::resizable_panel()
-                            .size(saved)
-                            .size_range(gpui::px(180.)..gpui::px(520.))
-                            .child(workspace_panel),
-                    )
-                    .child(
-                        gpui_component::resizable::resizable_panel()
-                            .overflow_hidden()
-                            .child(content_area),
-                    ),
-            )
-        } else if self.owns_window {
-            // Workspace drawer is closed and the editor owns its window
-            // (standalone mode, no host title bar): show a thin expand strip so
-            // the user can reopen the outline. Mirrors the Notes panel's
-            // collapsed-list strip (same width, border, bg, button).
-            //
-            // In the side-view (`show_chrome && !owns_window`) the host title
-            // bar already provides the outline toggle, so we collapse fully —
-            // no residual border, no redundant expand button.
-            let app = cx.theme();
-            let strip_border = app.border;
-            let strip_bg = app.muted.opacity(0.3);
-            main_content
-                .child(
-                    div()
-                        .w(px(28.))
-                        .h_full()
-                        .flex_shrink_0()
-                        .border_r_1()
-                        .border_color(strip_border)
-                        .bg(strip_bg)
-                        .items_center()
-                        .pt_2()
+        let main_content =
+            if let Some(workspace_panel) = self.render_workspace_panel(&theme, &strings, cx) {
+                // Resizable workspace drawer: drag the right edge to resize.
+                let saved = crate::state::persistence::load_layout()
+                    .and_then(|l| l.markdown_drawer_width)
+                    .filter(|&w| w > 0.0)
+                    .map(gpui::px)
+                    .unwrap_or_else(|| gpui::px(240.));
+                let state = self.workspace_resize.clone();
+                main_content.child(
+                    gpui_component::resizable::h_resizable("editor-workspace")
+                        .with_state(&state)
+                        .on_resize(|state, _, cx| {
+                            if let Some(w) = state.read(cx).sizes().first() {
+                                let mut layout =
+                                    crate::state::persistence::load_layout().unwrap_or_default();
+                                layout.markdown_drawer_width = Some(w.as_f32());
+                                let _ = crate::state::persistence::save_layout(&layout);
+                            }
+                        })
                         .child(
-                            gpui_component::button::Button::new("editor-outline-expand")
-                                .ghost()
-                                .xsmall()
-                                .icon(gpui_component::IconName::PanelLeftOpen)
-                                .tooltip(strings.workspace_tab_outline.clone())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_workspace_drawer(window, cx);
-                                })),
+                            gpui_component::resizable::resizable_panel()
+                                .size(saved)
+                                .size_range(gpui::px(180.)..gpui::px(520.))
+                                .child(workspace_panel),
+                        )
+                        .child(
+                            gpui_component::resizable::resizable_panel()
+                                .overflow_hidden()
+                                .child(content_area),
                         ),
                 )
-                .child(content_area)
-        } else {
-            main_content.child(content_area)
-        };
+            } else if self.owns_window {
+                // Workspace drawer is closed and the editor owns its window
+                // (standalone mode, no host title bar): show a thin expand strip so
+                // the user can reopen the outline. Mirrors the Notes panel's
+                // collapsed-list strip (same width, border, bg, button).
+                //
+                // In the side-view (`show_chrome && !owns_window`) the host title
+                // bar already provides the outline toggle, so we collapse fully —
+                // no residual border, no redundant expand button.
+                let app = cx.theme();
+                let strip_border = app.border;
+                let strip_bg = app.muted.opacity(0.3);
+                main_content
+                    .child(
+                        div()
+                            .w(px(28.))
+                            .h_full()
+                            .flex_shrink_0()
+                            .border_r_1()
+                            .border_color(strip_border)
+                            .bg(strip_bg)
+                            .items_center()
+                            .pt_2()
+                            .child(
+                                gpui_component::button::Button::new("editor-outline-expand")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(gpui_component::IconName::PanelLeftOpen)
+                                    .tooltip(strings.workspace_tab_outline.clone())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_workspace_drawer(window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(content_area)
+            } else {
+                main_content.child(content_area)
+            };
         let base = base.child(main_content);
         // The status bar (word count, view-mode switch, cursor position,
         // sidebar toggle) is rendered when `show_chrome` is set — i.e. for the
@@ -2673,9 +2668,7 @@ impl Render for Editor {
         } else {
             base
         };
-        let base = if let Some(image_dialog) =
-            self.render_image_insert_dialog_overlay(&theme, cx)
-        {
+        let base = if let Some(image_dialog) = self.render_image_insert_dialog_overlay(&theme, cx) {
             base.child(image_dialog)
         } else {
             base

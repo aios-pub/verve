@@ -2,34 +2,37 @@
 //! check, the pending-Markdown-file watcher, and the manual update flow.
 //! All app-wide wiring (panels, git, share server, subscriptions) happens here.
 
-use gpui::{img, *};
-use gpui::prelude::FluentBuilder as _;
-use gpui_component::{ActiveTheme, Sizable as _, WindowExt as _, select::{SelectEvent, SelectState}};
-use gpui_component::resizable::ResizableState;
+use super::{SideView, VerveApp};
 use crate::git::GitState;
+use crate::share::models::ShareScope;
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
+use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
-use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
-use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::docker_panel::DockerPanel;
 use crate::ui::hosts_panel::HostsPanel;
 use crate::ui::json_panel::JsonPanel;
 use crate::ui::k8s_panel::K8sPanel;
 use crate::ui::markdown_panel::MarkdownPanel;
+use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::notes_panel::NotesPanel;
 use crate::ui::pdf_panel::PdfPanel;
+use crate::ui::project_manage_panel::ProjectManagePanel;
+use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::proxy_panel::ProxyPanel;
 use crate::ui::relocate_panel::RelocatePanel;
 use crate::ui::request_panel::RequestPanel;
 use crate::ui::response_panel::ResponsePanel;
+use crate::ui::share_panel::{ShareEvent, SharePanel};
 use crate::ui::ssh_panel::SshPanel;
 use crate::ui::stress_panel::StressPanel;
-use crate::ui::autotest_panel::AutoTestPanel;
-use crate::ui::project_manage_panel::ProjectManagePanel;
-use crate::share::models::ShareScope;
-use crate::ui::share_panel::{ShareEvent, SharePanel};
-use super::{SideView, VerveApp};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{img, *};
+use gpui_component::resizable::ResizableState;
+use gpui_component::{
+    ActiveTheme, Sizable as _, WindowExt as _,
+    select::{SelectEvent, SelectState},
+};
 
 impl VerveApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -593,7 +596,6 @@ impl VerveApp {
         }
         cx.notify();
     }
-
 }
 
 impl VerveApp {

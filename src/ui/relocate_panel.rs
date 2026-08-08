@@ -25,11 +25,9 @@ use gpui_component::progress::Progress;
 use gpui_component::{ActiveTheme, Disableable as _, IconName, Sizable as _, h_flex, v_flex};
 
 use crate::relocate::disk_probe::{FsKind, Medium, Recommendation};
-use crate::relocate::engine::{
-    EngineState, LogLevel, RelocateEngine, RelocateEvent,
-};
+use crate::relocate::engine::{EngineState, LogLevel, RelocateEngine, RelocateEvent};
 use crate::relocate::migrate::ConflictPolicy;
-use crate::relocate::types::{human_bytes, AutoGroup, RiskLevel, TaskStatus};
+use crate::relocate::types::{AutoGroup, RiskLevel, TaskStatus, human_bytes};
 
 pub struct RelocatePanel {
     pub engine: Entity<RelocateEngine>,
@@ -145,12 +143,14 @@ impl RelocatePanel {
         let mut col = v_flex().gap_3();
 
         for (gi, group) in groups.iter().enumerate() {
-            let all_selected = group.entries.iter().all(|e| {
-                selected.contains(&e.path.to_string_lossy().to_string())
-            });
-            let any_selected = group.entries.iter().any(|e| {
-                selected.contains(&e.path.to_string_lossy().to_string())
-            });
+            let all_selected = group
+                .entries
+                .iter()
+                .all(|e| selected.contains(&e.path.to_string_lossy().to_string()));
+            let any_selected = group
+                .entries
+                .iter()
+                .any(|e| selected.contains(&e.path.to_string_lossy().to_string()));
 
             // Group header: risk badge, name, size, recommended tag, all-toggle.
             let risk_color = match group.risk {
@@ -350,7 +350,11 @@ impl RelocatePanel {
                 .ghost()
                 .small()
                 .icon(IconName::Redo)
-                .label(if self.scan_started { "重新扫描" } else { "开始检测" })
+                .label(if self.scan_started {
+                    "重新扫描"
+                } else {
+                    "开始检测"
+                })
                 .on_click(cx.listener(|this, _, _, cx| this.scan_now(cx))),
         ]);
 
@@ -448,9 +452,7 @@ impl RelocatePanel {
                             } else {
                                 "选择磁盘"
                             })
-                            .on_click(cx.listener(|this, _, w, cx| {
-                                this.pick_target_root(w, cx)
-                            })),
+                            .on_click(cx.listener(|this, _, w, cx| this.pick_target_root(w, cx))),
                     ),
             )
             .child(
@@ -493,15 +495,20 @@ impl RelocatePanel {
                     .child("目标冲突时："),
             )
             .children([
-                policy_btn("policy-merge", "合并", conflict == ConflictPolicy::Merge, {
-                    let engine = self.engine.clone();
-                    cx.listener(move |_, _, _, cx| {
-                        engine.update(cx, |e, cx| {
-                            e.conflict_policy = ConflictPolicy::Merge;
-                            cx.notify();
-                        });
-                    })
-                }),
+                policy_btn(
+                    "policy-merge",
+                    "合并",
+                    conflict == ConflictPolicy::Merge,
+                    {
+                        let engine = self.engine.clone();
+                        cx.listener(move |_, _, _, cx| {
+                            engine.update(cx, |e, cx| {
+                                e.conflict_policy = ConflictPolicy::Merge;
+                                cx.notify();
+                            });
+                        })
+                    },
+                ),
                 policy_btn(
                     "policy-backup",
                     "备份重命名",
@@ -531,19 +538,15 @@ impl RelocatePanel {
         let verify_row = h_flex()
             .items_center()
             .gap_2()
-            .child(
-                Checkbox::new("relocate-verify")
-                    .checked(verify)
-                    .on_click({
-                        let engine = self.engine.clone();
-                        cx.listener(move |_, _, _, cx| {
-                            engine.update(cx, |e, cx| {
-                                e.verify = !e.verify;
-                                cx.notify();
-                            });
-                        })
-                    }),
-            )
+            .child(Checkbox::new("relocate-verify").checked(verify).on_click({
+                let engine = self.engine.clone();
+                cx.listener(move |_, _, _, cx| {
+                    engine.update(cx, |e, cx| {
+                        e.verify = !e.verify;
+                        cx.notify();
+                    });
+                })
+            }))
             .child(
                 div()
                     .text_size(px(12.))
@@ -788,8 +791,7 @@ impl RelocatePanel {
 
     fn render_tasks(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let tasks: Vec<crate::relocate::types::TaskRecord> =
-            self.engine.read(cx).tasks.clone();
+        let tasks: Vec<crate::relocate::types::TaskRecord> = self.engine.read(cx).tasks.clone();
         let reclaimed = self.engine.read(cx).reclaimed_bytes();
 
         let mut rows = v_flex().gap_1();
@@ -887,9 +889,7 @@ impl RelocatePanel {
                                             let engine = self.engine.clone();
                                             let id = t.task_id.clone();
                                             cx.listener(move |_, _, _, cx| {
-                                                engine.update(cx, |e, cx| {
-                                                    e.rollback_task(&id, cx)
-                                                });
+                                                engine.update(cx, |e, cx| e.rollback_task(&id, cx));
                                             })
                                         }),
                                 )
@@ -1028,11 +1028,7 @@ impl Render for RelocatePanel {
                     .child(self.render_tasks(cx)),
             );
 
-        h_flex()
-            .size_full()
-            .min_h_0()
-            .child(left)
-            .child(right)
+        h_flex().size_full().min_h_0().child(left).child(right)
     }
 }
 

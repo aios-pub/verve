@@ -103,7 +103,10 @@ pub enum RelocateEvent {
     /// The disk probe finished for the chosen target root.
     ProbeCompleted,
     /// A custom directory was added (or rejected).
-    CustomAdded { accepted: bool, reason: Option<String> },
+    CustomAdded {
+        accepted: bool,
+        reason: Option<String>,
+    },
     /// Queue state changed (started / paused / resumed / finished).
     StateChanged,
     /// Per-item progress tick.
@@ -205,7 +208,10 @@ impl RelocateEngine {
     pub fn add_custom(&mut self, path: PathBuf, cx: &mut Context<Self>) -> bool {
         // PRD §6.3.1 — blacklist hard-check.
         if super::blacklist::is_blacklisted(&path) {
-            self.log(LogLevel::Error, &format!("该目录禁止迁移：{}", path.display()));
+            self.log(
+                LogLevel::Error,
+                &format!("该目录禁止迁移：{}", path.display()),
+            );
             cx.emit(RelocateEvent::CustomAdded {
                 accepted: false,
                 reason: Some("该目录禁止迁移".into()),
@@ -216,7 +222,10 @@ impl RelocateEngine {
         match std::fs::metadata(&path) {
             Ok(m) if m.is_dir() => {}
             Ok(_) => {
-                self.log(LogLevel::Error, &format!("路径不是目录：{}", path.display()));
+                self.log(
+                    LogLevel::Error,
+                    &format!("路径不是目录：{}", path.display()),
+                );
                 cx.emit(RelocateEvent::CustomAdded {
                     accepted: false,
                     reason: Some("所选路径不是目录".into()),
@@ -244,7 +253,10 @@ impl RelocateEngine {
             return false;
         }
         self.custom_paths.push(path.clone());
-        self.log(LogLevel::Info, &format!("已添加自定义目录：{}", path.display()));
+        self.log(
+            LogLevel::Info,
+            &format!("已添加自定义目录：{}", path.display()),
+        );
         // Re-scan so the custom group reflects the new entry (with size).
         self.scan_async(cx);
         cx.emit(RelocateEvent::CustomAdded {
@@ -309,7 +321,10 @@ impl RelocateEngine {
         for g in &self.scan.groups {
             for e in &g.entries {
                 any = true;
-                if !self.selected.contains(&e.path.to_string_lossy().to_string()) {
+                if !self
+                    .selected
+                    .contains(&e.path.to_string_lossy().to_string())
+                {
                     return false;
                 }
             }
@@ -322,7 +337,10 @@ impl RelocateEngine {
         let mut total = 0u64;
         for g in &self.scan.groups {
             for e in &g.entries {
-                if self.selected.contains(&e.path.to_string_lossy().to_string()) {
+                if self
+                    .selected
+                    .contains(&e.path.to_string_lossy().to_string())
+                {
                     total += e.size_bytes;
                 }
             }
@@ -424,7 +442,10 @@ impl RelocateEngine {
         let mut items: Vec<QueueItem> = Vec::new();
         for g in &self.scan.groups {
             for e in &g.entries {
-                if self.selected.contains(&e.path.to_string_lossy().to_string()) {
+                if self
+                    .selected
+                    .contains(&e.path.to_string_lossy().to_string())
+                {
                     items.push(QueueItem {
                         source: e.path.clone(),
                         group_name: g.group_name.clone(),
@@ -596,7 +617,11 @@ impl RelocateEngine {
                     this.progress.current_source = r_for_update.source_path.clone();
                     match outcome {
                         RollbackOutcome::Done { bytes_restored, .. } => {
-                            persistence::update_status(&r_for_update.task_id, TaskStatus::RolledBack, None);
+                            persistence::update_status(
+                                &r_for_update.task_id,
+                                TaskStatus::RolledBack,
+                                None,
+                            );
                             this.refresh_tasks();
                             this.log(
                                 LogLevel::Info,
@@ -609,9 +634,16 @@ impl RelocateEngine {
                         }
                         RollbackOutcome::ExternalUnavailable { reason }
                         | RollbackOutcome::Failed { reason } => {
-                            persistence::update_status(&r_for_update.task_id, TaskStatus::Failed, Some(&reason));
+                            persistence::update_status(
+                                &r_for_update.task_id,
+                                TaskStatus::Failed,
+                                Some(&reason),
+                            );
                             this.refresh_tasks();
-                            this.log(LogLevel::Error, &format!("回退失败 {}: {}", r_for_update.source_path, reason));
+                            this.log(
+                                LogLevel::Error,
+                                &format!("回退失败 {}: {}", r_for_update.source_path, reason),
+                            );
                         }
                     }
                     done += 1;
@@ -646,7 +678,10 @@ impl RelocateEngine {
             return;
         };
         if record.status != TaskStatus::Migrated {
-            self.log(LogLevel::Warn, &format!("任务 {} 非已迁移状态，跳过。", task_id));
+            self.log(
+                LogLevel::Warn,
+                &format!("任务 {} 非已迁移状态，跳过。", task_id),
+            );
             return;
         }
         self.state = EngineState::RollingBack;
@@ -661,16 +696,10 @@ impl RelocateEngine {
         let record = Arc::new(record);
         cx.spawn(async move |_this, cx| {
             let rec = record.clone();
-            let outcome = smol::unblock(move || {
-                rollback::rollback_one(&rec)
-            })
-            .await;
+            let outcome = smol::unblock(move || rollback::rollback_one(&rec)).await;
             let _ = weak.update(cx, |this, cx| {
                 match outcome {
-                    RollbackOutcome::Done {
-                        bytes_restored,
-                        ..
-                    } => {
+                    RollbackOutcome::Done { bytes_restored, .. } => {
                         persistence::update_status(&record.task_id, TaskStatus::RolledBack, None);
                         this.refresh_tasks();
                         this.log(
@@ -777,7 +806,9 @@ impl RelocateEngine {
                 // If the engine was cancelled/rolled back out-of-band (driver
                 // task dropped via cancel_and_rollback), bail immediately.
                 let cancelled = weak
-                    .read_with(cx, |this, _cx| this.current_cancel.is_none() && this.state != EngineState::Migrating)
+                    .read_with(cx, |this, _cx| {
+                        this.current_cancel.is_none() && this.state != EngineState::Migrating
+                    })
                     .unwrap_or(false);
                 if cancelled {
                     return;
@@ -838,23 +869,29 @@ impl RelocateEngine {
                 // updates while the copy runs.
                 let (ptx, prx) = smol::channel::bounded::<CopyProgress>(128);
                 let cancel_for_copy = cancel.clone();
-                let copy_task: Task<MigrateOutcome> =
-                    cx.background_executor().spawn(async move {
-                        let ptx = ptx;
-                        let cancel = cancel_for_copy;
-                        // smol::unblock runs the blocking copy off the async
-                        // runtime; the closure sends progress to ptx as it goes.
-                        smol::unblock(move || {
-                            migrate::migrate_one(
-                                &src, &root, &group, size, conflict, verify, cancel, |cp| {
-                                    // Best-effort non-blocking send; if the channel
-                                    // is full the UI simply skips a sample.
-                                    let _ = ptx.try_send(cp.clone());
-                                },
-                            )
-                        })
-                        .await
-                    });
+                let copy_task: Task<MigrateOutcome> = cx.background_executor().spawn(async move {
+                    let ptx = ptx;
+                    let cancel = cancel_for_copy;
+                    // smol::unblock runs the blocking copy off the async
+                    // runtime; the closure sends progress to ptx as it goes.
+                    smol::unblock(move || {
+                        migrate::migrate_one(
+                            &src,
+                            &root,
+                            &group,
+                            size,
+                            conflict,
+                            verify,
+                            cancel,
+                            |cp| {
+                                // Best-effort non-blocking send; if the channel
+                                // is full the UI simply skips a sample.
+                                let _ = ptx.try_send(cp.clone());
+                            },
+                        )
+                    })
+                    .await
+                });
 
                 // Concurrently drain the progress channel until the copy finishes.
                 let outcome = loop {
@@ -941,7 +978,10 @@ impl RelocateEngine {
                                 let _ = std::fs::remove_dir_all(&dest);
                                 this.log(
                                     LogLevel::Warn,
-                                    &format!("🚫 已取消（删除外置副本，原目录未受影响）：{}", source.display()),
+                                    &format!(
+                                        "🚫 已取消（删除外置副本，原目录未受影响）：{}",
+                                        source.display()
+                                    ),
                                 );
                             } else {
                                 // Mid-copy cancel: migrate_one already removed
@@ -997,11 +1037,8 @@ impl RelocateEngine {
                 let dt = now.duration_since(prev_time).as_secs_f64();
                 if dt >= 0.25 {
                     let db = cp.bytes_done.saturating_sub(prev_bytes);
-                    self.progress.speed_bytes_per_sec = if dt > 0.0 {
-                        (db as f64 / dt) as u64
-                    } else {
-                        0
-                    };
+                    self.progress.speed_bytes_per_sec =
+                        if dt > 0.0 { (db as f64 / dt) as u64 } else { 0 };
                     self.speed_sample = Some((cp.bytes_done, now));
                 }
             }

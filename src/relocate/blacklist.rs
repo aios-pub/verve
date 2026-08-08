@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 /// Resolve `~/`-prefixed path strings to absolute `PathBuf`s against `$HOME`.
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Expand a leading `~/` to the absolute home path. Non-`~/` paths are
@@ -244,7 +246,9 @@ fn classify_block(candidate: &Path) -> Option<&'static str> {
     }
     // Exact ~/Library match (wholesale migration of ~/Library).
     if is_exact_blocked_path(candidate) {
-        return Some("~/Library 整体包含应用运行时数据（TCC 保护），整体迁移会破坏应用程序，请只迁移其下特定缓存子目录");
+        return Some(
+            "~/Library 整体包含应用运行时数据（TCC 保护），整体迁移会破坏应用程序，请只迁移其下特定缓存子目录",
+        );
     }
     // System / SIP level?
     let resolved = std::fs::canonicalize(candidate)
@@ -253,9 +257,7 @@ fn classify_block(candidate: &Path) -> Option<&'static str> {
     for blocked in system_blocklist() {
         let b = normalise(&blocked);
         if resolved == b || resolved.starts_with(&b) {
-            if (b == Path::new("/usr")
-                || b == Path::new("/var")
-                || b == Path::new("/private"))
+            if (b == Path::new("/usr") || b == Path::new("/var") || b == Path::new("/private"))
                 && is_safe_usr_or_var_carve_out(&resolved)
             {
                 continue;
@@ -267,10 +269,10 @@ fn classify_block(candidate: &Path) -> Option<&'static str> {
     if let Some(home) = home() {
         for blocked in home_blocklist() {
             let b = normalise(&blocked);
-            if (resolved == b || resolved.starts_with(&b))
-                && b != normalise(&home.join(".Trash"))
-            {
-                return Some("~/Library 下高危子目录（钥匙串/账户/同步/启动项等），迁移会导致账户损坏或系统异常");
+            if (resolved == b || resolved.starts_with(&b)) && b != normalise(&home.join(".Trash")) {
+                return Some(
+                    "~/Library 下高危子目录（钥匙串/账户/同步/启动项等），迁移会导致账户损坏或系统异常",
+                );
             }
         }
     }
@@ -281,7 +283,10 @@ fn classify_block(candidate: &Path) -> Option<&'static str> {
 /// The error message explains *why* the path is blocked (SIP / TCC / etc.).
 pub fn assert_migratable(candidate: &Path) -> Result<(), String> {
     if let Some(reason) = classify_block(candidate) {
-        Err(format!("该目录禁止迁移（{reason}）：{}", candidate.display()))
+        Err(format!(
+            "该目录禁止迁移（{reason}）：{}",
+            candidate.display()
+        ))
     } else {
         Ok(())
     }
@@ -416,7 +421,10 @@ mod tests {
         // ~/Library wholesale.
         let home = home().expect("HOME set in test env");
         let err = assert_migratable(&home.join("Library")).unwrap_err();
-        assert!(err.contains("TCC") || err.contains("应用运行时"), "Library reason missing: {err}");
+        assert!(
+            err.contains("TCC") || err.contains("应用运行时"),
+            "Library reason missing: {err}"
+        );
 
         // ~/Library high-risk subdir.
         let err = assert_migratable(&home.join("Library/Keychains")).unwrap_err();

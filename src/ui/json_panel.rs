@@ -71,10 +71,7 @@ enum RowKind {
         needs_comma: bool,
     },
     /// Closing `}` or `]`, dedented to the container's depth.
-    Close {
-        bracket: char,
-        needs_comma: bool,
-    },
+    Close { bracket: char, needs_comma: bool },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -553,11 +550,7 @@ fn seed_default_expanded(
 }
 
 /// Collect the path of every container (used by "Expand All").
-fn collect_all_paths(
-    value: &serde_json::Value,
-    path: &mut Vec<u32>,
-    out: &mut HashSet<NodePath>,
-) {
+fn collect_all_paths(value: &serde_json::Value, path: &mut Vec<u32>, out: &mut HashSet<NodePath>) {
     match value {
         serde_json::Value::Object(map) => {
             out.insert(path.clone());
@@ -797,7 +790,14 @@ fn render_row(
                 format!("{}{{...{}}}", key, count)
             };
             base.h(px(row_h))
-                .child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
+                .child(row_open(
+                    *expanded,
+                    chevron_size,
+                    muted_fg,
+                    fg,
+                    label,
+                    mono_font,
+                ))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -818,7 +818,14 @@ fn render_row(
                 format!("{}[...{}]", key, count)
             };
             base.h(px(row_h))
-                .child(row_open(*expanded, chevron_size, muted_fg, fg, label, mono_font))
+                .child(row_open(
+                    *expanded,
+                    chevron_size,
+                    muted_fg,
+                    fg,
+                    label,
+                    mono_font,
+                ))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -951,8 +958,8 @@ fn row_open(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_all_paths, flatten, seed_default_expanded, simplify, FlatRow, RowKind,
-        COLLAPSE_THRESHOLD,
+        COLLAPSE_THRESHOLD, FlatRow, RowKind, collect_all_paths, flatten, seed_default_expanded,
+        simplify,
     };
     use serde_json::json;
     use std::collections::HashSet;
@@ -970,14 +977,22 @@ mod tests {
     /// Render a row's visible text (mirrors `render_row` logic) for assertion.
     fn row_label(row: &FlatRow) -> String {
         match &row.kind {
-            RowKind::Object { key, count, expanded } => {
+            RowKind::Object {
+                key,
+                count,
+                expanded,
+            } => {
                 if *expanded {
                     format!("{}{}", key, "{")
                 } else {
                     format!("{}{{...{}}}", key, count)
                 }
             }
-            RowKind::Array { key, count, expanded } => {
+            RowKind::Array {
+                key,
+                count,
+                expanded,
+            } => {
                 if *expanded {
                     format!("{}[", key)
                 } else {

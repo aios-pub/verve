@@ -105,15 +105,12 @@ impl Editor {
 
         // The wrapper that should remain active: the focused wrapper itself, or
         // the parent of the currently-focused child.
-        let active_wrapper_id = focused_wrapper
-            .as_ref()
-            .map(|w| w.entity_id())
-            .or_else(|| {
-                focused_id.and_then(|id| {
-                    self.html_wrapper_block_for_child(id)
-                        .map(|wrapper| wrapper.entity_id())
-                })
-            });
+        let active_wrapper_id = focused_wrapper.as_ref().map(|w| w.entity_id()).or_else(|| {
+            focused_id.and_then(|id| {
+                self.html_wrapper_block_for_child(id)
+                    .map(|wrapper| wrapper.entity_id())
+            })
+        });
 
         // Tear down any wrapper runtime whose focus has left.
         let stale: Vec<Entity<Block>> = self
@@ -161,11 +158,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> bool {
         // Already installed? Keep it (the focus sync runs every render).
-        if wrapper_block
-            .read(cx)
-            .html_wrapper_runtime
-            .is_some()
-        {
+        if wrapper_block.read(cx).html_wrapper_runtime.is_some() {
             return false;
         }
 
@@ -211,7 +204,8 @@ impl Editor {
             .into_iter()
             .filter(|child| {
                 let block = child.read(cx);
-                !(block.kind() == BlockKind::Paragraph && block.record.title.visible_text().is_empty())
+                !(block.kind() == BlockKind::Paragraph
+                    && block.record.title.visible_text().is_empty())
             })
             .collect();
         for child in &mut filtered {
@@ -325,8 +319,6 @@ impl Editor {
             block.record.set_title(InlineTextTree::plain(wrapped_html));
         });
     }
-
-
 
     /// Focus the wrapper child at `index`, clamped to the children range.
     /// Returns false if there is no child at that index.
@@ -453,12 +445,10 @@ impl Editor {
             return false;
         }
 
-        let Some(inner_source) = wrapper
-            .read(cx)
-            .record
-            .html
-            .as_ref()
-            .and_then(crate::wysiwyg::components::markdown::html::editable_wrapper_inner_markdown)
+        let Some(inner_source) =
+            wrapper.read(cx).record.html.as_ref().and_then(
+                crate::wysiwyg::components::markdown::html::editable_wrapper_inner_markdown,
+            )
         else {
             return false;
         };
@@ -484,7 +474,8 @@ impl Editor {
         }
 
         // 3. Map the clicked source line to a wrapper child + intra-child line.
-        let Some(target) = self.map_wrapper_click_target(wrapper, &inner_source, hit.source_line, cx)
+        let Some(target) =
+            self.map_wrapper_click_target(wrapper, &inner_source, hit.source_line, cx)
         else {
             return false;
         };
@@ -560,7 +551,11 @@ impl Editor {
             .iter()
             .map(|child| {
                 let mut raw = Vec::new();
-                DocumentTree::collect_root_markdown_lines(std::slice::from_ref(child), cx, &mut raw);
+                DocumentTree::collect_root_markdown_lines(
+                    std::slice::from_ref(child),
+                    cx,
+                    &mut raw,
+                );
                 raw.into_iter()
                     .flat_map(|entry| entry.split('\n').map(str::to_string).collect::<Vec<_>>())
                     .collect()
@@ -604,15 +599,11 @@ impl Editor {
         let display: SharedString = cache.visible_text().to_string().into();
 
         let base_font = window.text_style().font();
-        let runs = Self::visual_line_text_runs(&cache, text_len, base_font.clone(), hit.font_weight);
+        let runs =
+            Self::visual_line_text_runs(&cache, text_len, base_font.clone(), hit.font_weight);
         let font_size = hit.font_size;
-        let prefix_w = Self::visual_line_prefix_width(
-            &hit.prefix,
-            font_size,
-            &base_font,
-            &theme,
-            window,
-        );
+        let prefix_w =
+            Self::visual_line_prefix_width(&hit.prefix, font_size, &base_font, &theme, window);
         let wrap_width = (bounds.size.width - prefix_w).max(px(1.0));
         let lines = window
             .text_system()
@@ -943,10 +934,7 @@ mod pure_tests {
     fn source_line_in_blank_region_returns_none() {
         // source_line 3 is a blank line — no child maps to it.
         let inner_lines = inner("\n\n# Title\n\n\nbody\n");
-        let child_ser = vec![
-            vec!["# Title".to_string()],
-            vec!["body".to_string()],
-        ];
+        let child_ser = vec![vec!["# Title".to_string()], vec!["body".to_string()]];
         assert_eq!(match_wrapper_source_line(&inner_lines, &child_ser, 3), None);
     }
 
@@ -1052,7 +1040,12 @@ mod tests {
 
         // Child kinds match the clicked lines.
         editor.update(cx, |editor, cx| {
-            let children = &wrapper.read(cx).html_wrapper_runtime.as_ref().unwrap().children;
+            let children = &wrapper
+                .read(cx)
+                .html_wrapper_runtime
+                .as_ref()
+                .unwrap()
+                .children;
             assert_eq!(children[0].read(cx).kind(), BlockKind::Heading { level: 1 });
             assert_eq!(children[1].read(cx).kind(), BlockKind::Paragraph);
             assert!(children[2].read(cx).kind().is_list_item());
@@ -1085,9 +1078,17 @@ mod tests {
 
         // Display offset: ser line 1 + line offset → 2nd hard line of display.
         editor.update(cx, |editor, cx| {
-            let child = &wrapper.read(cx).html_wrapper_runtime.as_ref().unwrap().children[0];
+            let child = &wrapper
+                .read(cx)
+                .html_wrapper_runtime
+                .as_ref()
+                .unwrap()
+                .children[0];
             let off = Editor::wrapper_child_display_offset(child, 1, 0, cx);
-            assert_eq!(child.read(cx).display_text(), "para line one\npara line two");
+            assert_eq!(
+                child.read(cx).display_text(),
+                "para line one\npara line two"
+            );
             // Hard line 1 starts at "para line one\n".len() + 1.
             assert_eq!(off, "para line one\n".len());
         });
@@ -1114,7 +1115,12 @@ mod tests {
         assert_eq!(map(&editor, cx, &wrapper, &inner, 4).ser_line_index, 2);
 
         editor.update(cx, |editor, cx| {
-            let child = &wrapper.read(cx).html_wrapper_runtime.as_ref().unwrap().children[0];
+            let child = &wrapper
+                .read(cx)
+                .html_wrapper_runtime
+                .as_ref()
+                .unwrap()
+                .children[0];
             assert!(child.read(cx).kind().is_code_block());
             // Opening fence → caret before content (0); closing fence → end.
             assert_eq!(Editor::wrapper_child_display_offset(child, 0, 3, cx), 0);
@@ -1146,7 +1152,12 @@ mod tests {
         editor.update(cx, |editor, cx| {
             let wrapper = editor.document.first_root().expect("wrapper root").clone();
             assert!(editor.install_html_wrapper_runtime(&wrapper, cx));
-            let children = &wrapper.read(cx).html_wrapper_runtime.as_ref().unwrap().children;
+            let children = &wrapper
+                .read(cx)
+                .html_wrapper_runtime
+                .as_ref()
+                .unwrap()
+                .children;
             assert_eq!(children.len(), 1);
             let child = &children[0];
             // Downgraded to RawMarkdown, not Table.

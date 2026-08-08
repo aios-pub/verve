@@ -28,9 +28,7 @@ use tokio::sync::mpsc;
 
 use crate::http;
 use crate::scripting;
-use crate::state::models::{
-    ApiRequest, KeyValue, Project, Response,
-};
+use crate::state::models::{ApiRequest, KeyValue, Project, Response};
 
 use super::models::*;
 

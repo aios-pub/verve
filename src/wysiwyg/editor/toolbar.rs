@@ -207,9 +207,7 @@ impl Editor {
             ToolbarAction::Strikethrough => {
                 self.toolbar_toggle_inline(InlineFormat::Strikethrough, cx)
             }
-            ToolbarAction::Superscript => {
-                self.toolbar_toggle_inline(InlineFormat::Superscript, cx)
-            }
+            ToolbarAction::Superscript => self.toolbar_toggle_inline(InlineFormat::Superscript, cx),
             ToolbarAction::Subscript => self.toolbar_toggle_inline(InlineFormat::Subscript, cx),
             ToolbarAction::Highlight => self.toolbar_toggle_inline(InlineFormat::Highlight, cx),
             ToolbarAction::InlineCode => self.toolbar_toggle_inline(InlineFormat::Code, cx),

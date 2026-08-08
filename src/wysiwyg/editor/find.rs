@@ -8,9 +8,9 @@
 
 use std::ops::Range;
 
+use gpui::EntityInputHandler as _;
 use gpui::*;
 use gpui_component::input::{InputEvent, InputState};
-use gpui::EntityInputHandler as _;
 
 use super::Editor;
 use crate::wysiwyg::components::{Find, FindNext, FindPrevious, Replace, ReplaceAll};
@@ -182,19 +182,15 @@ impl Editor {
     pub(super) fn on_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
         if self.find_state.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find..."));
-            let replace_input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Replace..."));
+            let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace..."));
             let input_for_sub = input.clone();
             // Recompute matches on every keystroke so the bar stays live.
-            cx.subscribe(
-                &input_for_sub,
-                move |this, _src, ev: &InputEvent, cx| {
-                    if matches!(ev, InputEvent::Change) {
-                        this.refresh_find_matches(cx);
-                        cx.notify();
-                    }
-                },
-            )
+            cx.subscribe(&input_for_sub, move |this, _src, ev: &InputEvent, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.refresh_find_matches(cx);
+                    cx.notify();
+                }
+            })
             .detach();
             self.find_state = Some(FindState {
                 input,
@@ -233,11 +229,7 @@ impl Editor {
     }
 
     /// Replace the current match with the replacement text and advance.
-    pub(super) fn on_replace_one(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn on_replace_one(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let (block, range, replacement) = match self.find_state.as_ref() {
             Some(state) if !state.matches.is_empty() => {
                 let m = &state.matches[state.current];

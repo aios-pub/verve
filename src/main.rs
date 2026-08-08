@@ -29,6 +29,13 @@ fn main() {
         .format_timestamp_secs()
         .try_init();
 
+    // Install the process-default rustls crypto provider before any TLS use.
+    // rustls 0.23 panics on auto-detection when more than one provider is
+    // compiled in — here both `ring` (HTTP TLS: reqwest/kube) and `aws-lc-rs`
+    // (russh SSH) are present, so we must pick one explicitly. `ring` matches
+    // the HTTP stack that drives most TLS traffic.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let app = gpui_platform::application().with_assets(VerveAssets::new());
 
     // Collect .md file paths from argv (e.g. `verve path/to/note.md`).

@@ -2,13 +2,12 @@
 //!
 //! velotype originally rendered PDFs by driving a headless Chromium via
 //! `chromiumoxide`. verve removed that dependency and instead ships a native
-//! pure-Rust Markdown→PDF pipeline (`crate::notes_pdf`, backed by `printpdf`
-//! with built-in Helvetica/Courier fonts). The WYSIWYG export delegates to
-//! that pipeline so both the Notes panel and the standalone Markdown panel
-//! produce identical output.
+//! pure-Rust Markdown→PDF pipeline (`crate::notes_pdf`, backed by Typst via the
+//! `mdxport` crate). The WYSIWYG export delegates to that pipeline so both the
+//! Notes panel and the standalone Markdown panel produce identical output.
 //!
 //! `theme` / `base_path` are accepted to match the HTML export signature but
-//! are not consumed by the `printpdf` pipeline yet.
+//! are not consumed by the Typst pipeline yet.
 
 use std::path::Path;
 
@@ -18,9 +17,9 @@ use crate::wysiwyg::theme::Theme;
 /// Renders themed PDF bytes for the current document Markdown via verve's
 /// native `notes_pdf` pipeline.
 ///
-/// `theme` and `base_path` are currently unused (the `printpdf` pipeline draws
-/// with its own built-in fonts and layout) and are kept for signature
-/// compatibility with the HTML export path.
+/// `theme` and `base_path` are currently unused (the Typst pipeline draws
+/// with the OS-installed system fonts and its own layout) and are kept for
+/// signature compatibility with the HTML export path.
 #[allow(unused_variables)]
 pub(crate) fn render_pdf(
     markdown: &str,

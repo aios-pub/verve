@@ -160,12 +160,12 @@ secrecy = "0.8"
 bincode = "1"
 # Native file open/save dialogs for SFTP upload/download (cross-platform, async-safe).
 rfd = "0.15"
-# Low-level PDF generation. External (embedded) Noto Sans SC OTF is registered
-# so CJK glyphs render; printpdf's built-in fonts only cover WinAnsi (Latin).
-printpdf = "0.7"
-# Glyph advance-width measurement for CJK-aware line wrapping during PDF export
-# (printpdf's metrics API is pub(crate), so we measure with ab_glyph instead).
-ab_glyph = "0.2"
+# Markdown → PDF export for the Notes / Markdown panels. Backed by Typst, which
+# embeds fonts correctly (CFF + glyf) and subsets automatically. `default-features
+# = false` drops the CLI deps (clap/reqwest/notify/atty); we use the lib only.
+# CJK glyphs render via the OS-installed system fonts (macOS PingFang, Windows
+# YaHei, Linux Noto CJK); see `notes_pdf.rs`.
+mdxport = { version = "0.3", default-features = false }
 # PDF rendering via Pdfium (bundled native library, extracted at build time)
 pdfium-render = "0.8"
 # Pixel-buffer / image types for handing rendered PDF pages to GPUI.
@@ -203,8 +203,6 @@ markup5ever_rcdom = "0.3"
 cssparser = "0.37"
 # Grapheme/segmentation for correct caret movement in the block text editor.
 unicode-segmentation = "1.13"
-# East-Asian character width classification for PDF export CJK line wrapping.
-unicode-width = "0.2"
 # base64 decoding for inline HTML data: URLs and embedded images.
 base64 = "0.22"
 # HTML structure validation via tree-sitter (gates semantic HTML rendering vs raw fallback).

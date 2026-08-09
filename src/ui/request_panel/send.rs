@@ -1,9 +1,7 @@
 //! Protocol send engine: HTTP/SSE/WebSocket/TCP/gRPC/Socket.IO dispatch,
 //! the stop-flag machinery, and error-response helpers.
 use super::RequestPanel;
-use super::folder_helpers::{
-    apply_autosave_example, resolve_effective_base_url,
-};
+use super::folder_helpers::{apply_autosave_example, resolve_effective_base_url};
 use super::{register_stop, truncate_history_body, unregister_stop};
 use crate::http;
 use crate::state::AppEvent;

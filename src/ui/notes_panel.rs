@@ -553,6 +553,11 @@ impl NotesPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // If exporting the note currently shown in the editor, flush its
+        // pending (debounced) edits first so the exported body is up to date.
+        if self.store.active_note.as_deref() == Some(note_id) {
+            self.save_current(cx);
+        }
         let Some(note) = self.store.notes.iter().find(|n| n.id == note_id).cloned() else {
             return;
         };
@@ -687,6 +692,10 @@ impl NotesPanel {
             log::warn!("export: no active note");
             return;
         };
+        // Flush any pending (debounced) editor edits into `note.content` before
+        // reading it, otherwise an export fired right after typing yields a
+        // stale or empty body (autosave is debounced 500ms; see `schedule_save`).
+        self.save_current(cx);
         let Some(note) = self.store.notes.iter().find(|n| n.id == active_id).cloned() else {
             return;
         };

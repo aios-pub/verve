@@ -225,6 +225,12 @@ pub struct SshPanel {
     /// Currently-open tab right-click context menu: the right-clicked tab
     /// index plus the mouse position (used to anchor the floating menu).
     pub tab_context_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
+    /// The panel's window-absolute bounds, captured each render via a hidden
+    /// canvas child. Used to convert window-absolute mouse coordinates (from
+    /// MouseDownEvent) into panel-relative coordinates for positioning the
+    /// context-menu overlay (GPUI's `absolute` is relative to the parent's
+    /// content box, not the window viewport).
+    pub panel_bounds: std::sync::Arc<std::sync::Mutex<gpui::Bounds<gpui::Pixels>>>,
     /// When true, show the host picker overlay (for starting new connections
     /// without closing existing sessions).
     pub show_host_picker: bool,
@@ -260,6 +266,7 @@ impl SshPanel {
             active_tab: 0,
             pending_connect: None,
             tab_context_menu: None,
+            panel_bounds: std::sync::Arc::new(std::sync::Mutex::new(gpui::Bounds::default())),
             show_host_picker: false,
             fwd_status: None,
             fwd_inputs: None,
@@ -1425,6 +1432,22 @@ impl SshPanel {
             .overflow_hidden()
             .bg(bg)
             .text_color(fg)
+            // Hidden 0-size canvas: captures this container's window-absolute
+            // bounds each render so the context-menu overlay can convert
+            // window-absolute mouse coords into panel-relative coords.
+            .child({
+                let bounds = self.panel_bounds.clone();
+                gpui::canvas(
+                    move |b, _window, _cx| b,
+                    move |b, _prev, _window, _cx| {
+                        if let Ok(mut g) = bounds.lock() {
+                            *g = b;
+                        }
+                    },
+                )
+                .absolute()
+                .size(px(0.))
+            })
             // Tab bar — sits at the very top, SAME LINE as the macOS
             // traffic-light buttons. Left padding (78px) clears them.
             .child(
@@ -1477,6 +1500,7 @@ impl SshPanel {
                                 MouseButton::Right,
                                 cx.listener(move |this, ev: &MouseDownEvent, _window, cx| {
                                     if i < this.sessions.len() {
+                                        log::info!("tab right-click on idx {} at {:?}", i, ev.position);
                                         this.tab_context_menu = Some((i, ev.position));
                                         cx.notify();
                                     }
@@ -1576,10 +1600,6 @@ impl SshPanel {
                 self.render_mfa_bar(active, &theme, cx),
                 |col, bar| col.child(bar),
             )
-            // Tab right-click context menu (duplicate / close / close others).
-            .when_some(self.tab_context_menu, |col, (idx, pos)| {
-                col.child(self.render_tab_context_menu(idx, pos, &theme, cx))
-            })
             // Content area.
             .child(
                 div()
@@ -1680,6 +1700,12 @@ impl SshPanel {
                     )
                     .child(div().flex_1()),
             )
+            // Tab right-click context menu — MUST be the last child so it paints
+            // on top of the content/status bars (later siblings paint later in
+            // GPUI's flex layout).
+            .when_some(self.tab_context_menu, |col, (idx, pos)| {
+                col.child(self.render_tab_context_menu(idx, pos, &theme, cx))
+            })
     }
 
     /// Lazily create + bind the SFTP browser for the active session when the
@@ -1930,6 +1956,10 @@ impl SshPanel {
         theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        log::info!(
+            "render_tab_context_menu: idx={} pos={:?} origin={:?}",
+            idx, pos, self.panel_bounds.lock().map(|g| g.origin).unwrap_or_default()
+        );
         let bg = theme.background;
         let border = theme.border;
         let fg = theme.foreground;
@@ -1996,10 +2026,21 @@ impl SshPanel {
                     })),
             );
 
+        // Convert the window-absolute click position into panel-relative
+        // coordinates: GPUI's `absolute` is positioned relative to this
+        // container's content box, but `pos` (from MouseDownEvent) is
+        // window-absolute. Subtract the panel's captured origin to align them.
+        let origin = self
+            .panel_bounds
+            .lock()
+            .map(|g| g.origin)
+            .unwrap_or_default();
+        let rel_x = pos.x - origin.x;
+        let rel_y = pos.y - origin.y;
         // Anchor: offset slightly down-right from the cursor so the click
         // point sits at the menu's top-left corner.
-        let left = pos.x + px(2.);
-        let top = pos.y + px(2.);
+        let left = rel_x + px(2.);
+        let top = rel_y + px(2.);
 
         // Backdrop: closes the menu on left-click anywhere outside the panel.
         div()
@@ -2393,22 +2434,33 @@ impl SshPanel {
         cx.notify();
     }
 
-    /// Duplicate the session at `idx`: looks up the host config and queues a
-    /// fresh connection via `pending_connect` (the render loop starts it). The
-    /// new tab is a fully independent connection (own socket + session_uid);
-    /// the original is untouched.
+    /// Duplicate the session at `idx`: looks up the host config and starts a
+    /// fresh, independent connection in a new tab (own socket + session_uid;
+    /// the original is untouched). Calls start_session directly rather than
+    /// going through pending_connect so it works even outside the render loop.
     fn duplicate_session(&mut self, idx: usize, cx: &mut Context<Self>) {
+        self.tab_context_menu = None;
         let Some(session) = self.sessions.get(idx) else {
-            self.tab_context_menu = None;
+            log::warn!("duplicate_session: idx {} out of range (len {})", idx, self.sessions.len());
             return;
         };
         let host_id = session.host_id.clone();
-        if let Some(host) = host_store::find_host(&host_id) {
-            self.pending_connect = Some(host);
-            self.show_host_picker = false;
+        let host_name = session.host_name.clone();
+        log::info!(
+            "duplicate_session: idx={} host_id={} host_name={:?}",
+            idx, host_id, host_name
+        );
+        let Some(host) = host_store::find_host(&host_id) else {
+            log::warn!(
+                "duplicate_session: host_store::find_host returned None for id {} — \
+                 host config may have been deleted; no new session will start",
+                host_id
+            );
             cx.notify();
-        }
-        self.tab_context_menu = None;
+            return;
+        };
+        log::info!("duplicate_session: starting new session for host {}", host.name);
+        self.start_session(host, cx);
     }
 
     /// Close every session except the one at `keep`. The kept session moves to

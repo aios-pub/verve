@@ -310,7 +310,7 @@ impl Render for SshPanel {
         }
         // Process pending connection.
         if let Some(host) = self.pending_connect.take() {
-            self.start_session(host, cx);
+            self.start_session(host, None, cx);
         }
         let theme = cx.theme().clone();
         let bg = theme.background;
@@ -685,7 +685,16 @@ impl SshPanel {
     }
 
     /// Start a new SSH session.
-    fn start_session(&mut self, host: SshHost, cx: &mut Context<Self>) {
+    ///
+    /// `existing_conn`: when `Some`, reuse an already-authenticated connection
+    /// (e.g. when duplicating a session) — skips connect + MFA and just opens
+    /// a second shell on the shared transport. When `None`, do a full connect.
+    fn start_session(
+        &mut self,
+        host: SshHost,
+        existing_conn: Option<SshConnection>,
+        cx: &mut Context<Self>,
+    ) {
         let host_name = host.name.clone();
         let host_id = host.id.clone();
         let host_id_for_session = host_id.clone();
@@ -721,6 +730,10 @@ impl SshPanel {
         // Weak entity reference so we can stash the SshConnection on the session.
         let panel_for_task = cx.entity().downgrade();
         let session_uid_for_task = session_uid;
+        // When set, skip connect+MFA and reuse this already-authenticated
+        // connection (session duplication). Moved into the spawn closure.
+        let reuse_conn_for_task = existing_conn;
+        let mut reuse_conn_for_task = reuse_conn_for_task;
 
         cx.spawn(async move |_this, cx| {
             let mut attempt = 0usize;
@@ -787,15 +800,28 @@ impl SshPanel {
                 }
 
                 let host_connect = host_for_task.clone();
+                // Reuse connection only on the first attempt (if provided);
+                // retries fall back to a fresh connect (which may re-trigger MFA).
+                let reuse_conn = if attempt == 1 { reuse_conn_for_task.take() } else { None };
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                     rt.block_on(async move {
-                        match crate::ssh::client::SshConnection::connect_with_otp(
-                            &host_connect,
-                            Some(otp_prompt),
-                        )
-                        .await
-                        {
+                        // Establish the connection: either reuse an existing
+                        // authenticated one (skip connect+MFA) or do a full connect.
+                        let conn_result: Result<
+                            crate::ssh::client::SshConnection,
+                            crate::ssh::client::SshError,
+                        > = if let Some(conn) = reuse_conn {
+                            log::info!("SSH reuse: skipping connect+MFA (duplicating session)");
+                            Ok(conn)
+                        } else {
+                            crate::ssh::client::SshConnection::connect_with_otp(
+                                &host_connect,
+                                Some(otp_prompt),
+                            )
+                            .await
+                        };
+                        match conn_result {
                             Ok(conn) => {
                                 // Open a PTY shell on this connection.
                                 match conn.open_shell(180, 50).await {
@@ -2450,6 +2476,28 @@ impl SshPanel {
             "duplicate_session: idx={} host_id={} host_name={:?}",
             idx, host_id, host_name
         );
+
+        // Priority 1: reuse an already-authenticated connection (skips
+        // connect + MFA — the duplicated tab gets a fresh independent shell on
+        // the same transport). This is the whole point of "duplicate" for
+        // MFA-protected hosts: no second OTP prompt.
+        if let Some(conn) = session.connection.clone() {
+            log::info!(
+                "duplicate_session: reusing authenticated connection for {} (skip MFA)",
+                host_name
+            );
+            let host = host_store::find_host(&host_id).unwrap_or_else(|| SshHost {
+                id: host_id.clone(),
+                name: host_name.clone(),
+                ..SshHost::new(&host_name, "")
+            });
+            self.start_session(host, Some(conn), cx);
+            return;
+        }
+
+        // Priority 2: no live connection yet (still connecting, or the
+        // connection dropped) → fall back to a full fresh connect, which may
+        // re-trigger MFA.
         let Some(host) = host_store::find_host(&host_id) else {
             log::warn!(
                 "duplicate_session: host_store::find_host returned None for id {} — \
@@ -2459,8 +2507,11 @@ impl SshPanel {
             cx.notify();
             return;
         };
-        log::info!("duplicate_session: starting new session for host {}", host.name);
-        self.start_session(host, cx);
+        log::info!(
+            "duplicate_session: no live connection, starting fresh connect for {}",
+            host.name
+        );
+        self.start_session(host, None, cx);
     }
 
     /// Close every session except the one at `keep`. The kept session moves to

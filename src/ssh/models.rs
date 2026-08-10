@@ -20,6 +20,13 @@ pub enum SshAuthType {
     PrivateKey,
     /// SSH agent forwarding.
     Agent,
+    /// Keyboard-interactive authentication — the SSH mechanism used by
+    /// MFA/2FA (TOTP / OTP / hardware key). The server sends one or more
+    /// prompts (e.g. "Verification code:") and the client must respond with
+    /// the user's input. Many servers pair this with a password
+    /// ("password + OTP"), so the stored `"password"` secret is sent first.
+    #[serde(rename = "keyboard-interactive")]
+    KeyboardInteractive,
 }
 
 impl SshAuthType {
@@ -28,6 +35,7 @@ impl SshAuthType {
             SshAuthType::Password => "密码",
             SshAuthType::PrivateKey => "密钥",
             SshAuthType::Agent => "Agent",
+            SshAuthType::KeyboardInteractive => "键盘交互(MFA)",
         }
     }
 
@@ -35,6 +43,7 @@ impl SshAuthType {
         SshAuthType::Password,
         SshAuthType::PrivateKey,
         SshAuthType::Agent,
+        SshAuthType::KeyboardInteractive,
     ];
 }
 
@@ -245,6 +254,27 @@ mod tests {
         assert!(!h.is_bastion());
         h.host_type = SshHostType::Bastion;
         assert!(h.is_bastion());
+    }
+
+    #[test]
+    fn keyboard_interactive_variant() {
+        // The MFA auth type must be in ALL (so the UI selector shows it) and
+        // have a human-readable label.
+        assert!(SshAuthType::ALL.contains(&SshAuthType::KeyboardInteractive));
+        assert_eq!(
+            SshAuthType::KeyboardInteractive.label(),
+            "键盘交互(MFA)"
+        );
+    }
+
+    #[test]
+    fn keyboard_interactive_serialization() {
+        // serde tag must round-trip and stay lowercase-kebab so existing host
+        // config files don't break and future reads are stable.
+        let json = serde_json::to_string(&SshAuthType::KeyboardInteractive).unwrap();
+        assert_eq!(json, "\"keyboard-interactive\"");
+        let parsed: SshAuthType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, SshAuthType::KeyboardInteractive);
     }
 
     #[test]

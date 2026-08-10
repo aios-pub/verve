@@ -288,6 +288,25 @@ pub fn open_dialog<F>(
                                     .child(Input::new(&s.password).small().mask_toggle()),
                             )
                         })
+                        .when(auth_type == SshAuthType::KeyboardInteractive, |col| {
+                            col.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("密码（MFA 前置，可选）"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child("验证码（OTP/TOTP）将在连接时动态弹出，无需在此填写。许多 MFA 服务器要求“密码 + 验证码”，请填写账户密码。"),
+                                    )
+                                    .child(Input::new(&s.password).small().mask_toggle()),
+                            )
+                        })
                         // Jump host selection
                         .child(div().h(px(1.)).w_full().bg(border))
                         .child(
@@ -355,6 +374,9 @@ pub fn open_dialog<F>(
                             let kind = match s.auth_type {
                                 SshAuthType::Password => "password",
                                 SshAuthType::PrivateKey => "key_passphrase",
+                                // Keyboard-interactive (MFA) servers often pair
+                                // the OTP with a password, stored as "password".
+                                SshAuthType::KeyboardInteractive => "password",
                                 SshAuthType::Agent => "",
                             };
                             if !kind.is_empty() {

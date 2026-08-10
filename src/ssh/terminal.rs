@@ -256,6 +256,10 @@ pub struct TerminalView {
     /// Guard counter so we retry layout a bounded number of times while
     /// waiting for the canvas paint hook to report the container size.
     bounds_retry: u8,
+    /// When true, the terminal skips its per-render `window.focus(...)` call.
+    /// Set by the SSH panel while an MFA/OTP prompt is awaiting input, so the
+    /// OTP input field can keep focus instead of being stolen on every frame.
+    pub suppress_auto_focus: bool,
 }
 
 impl TerminalView {
@@ -327,6 +331,7 @@ impl TerminalView {
             mouse_handlers_registered: false,
             last_feed_tail: std::sync::Mutex::new(Vec::new()),
             bounds_retry: 0,
+            suppress_auto_focus: false,
         }
     }
 
@@ -1217,8 +1222,10 @@ impl Render for TerminalView {
         // and won't thrash once sized.
         self.resize_to_bounds(window, cx);
 
-        // Auto-focus.
-        window.focus(&focus_handle, cx);
+        // Auto-focus (unless a sibling UI — e.g. the MFA/OTP input — needs it).
+        if !self.suppress_auto_focus {
+            window.focus(&focus_handle, cx);
+        }
 
         // Build renderable lines from the alacritty grid, carrying per-cell
         // ANSI color/style as coalesced TextRuns. Honors scrollback history.

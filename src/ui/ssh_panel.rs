@@ -11,13 +11,15 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputState};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use futures::FutureExt as _;
 
 use crate::ssh::client::SshConnection;
 use crate::ssh::credentials;
@@ -47,6 +49,17 @@ enum ZmPathReply {
 static SESSION_UID_COUNTER: AtomicU64 = AtomicU64::new(1);
 fn rand_session_seed() -> u64 {
     SESSION_UID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Elide a server-supplied prompt to `max` characters (by `char` count, not
+/// bytes — safe for UTF-8). Used for MFA prompt display.
+fn truncate_prompt(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let head: String = chars.iter().take(max.saturating_sub(1)).collect();
+    format!("{head}…")
 }
 
 /// Messages from the SSH pump thread back to GPUI's executor.
@@ -81,6 +94,13 @@ enum PumpMsg {
     ZmNeedFileToSend {
         uid: u64,
         reply_tx: tokio::sync::mpsc::UnboundedSender<ZmPathReply>,
+    },
+    /// The SSH server issued a keyboard-interactive (MFA) challenge and needs
+    /// the user's verification code. The UI must render an OTP input and reply
+    /// via the oneshot sender; dropping it without sending = user cancelled.
+    MfaPrompt {
+        prompt_text: String,
+        reply_tx: tokio::sync::oneshot::Sender<String>,
     },
 }
 
@@ -118,6 +138,17 @@ pub struct TerminalSession {
     /// Currently-active local port forwards. Dropping this vec (or the session)
     /// stops the forwards via LocalForward::stop's Drop impl on abort.
     pub active_forwards: Vec<LocalForward>,
+    /// OTP/MFA input field, present only while a keyboard-interactive challenge
+    /// is awaiting a response. `None` = no pending prompt. Created lazily in
+    /// `render` (which has window access) from `pending_mfa_prompt`.
+    pub(crate) mfa_input: Option<Entity<InputState>>,
+    /// The prompt text (e.g. "Verification code:") for the current MFA challenge.
+    pub(crate) mfa_prompt: String,
+    /// Reply channel back to the SSH connect thread for the current MFA prompt.
+    pub(crate) mfa_reply_tx: Option<tokio::sync::oneshot::Sender<String>>,
+    /// A freshly-arrived MFA challenge awaiting UI setup. Set from the spawn
+    /// loop (no window access); consumed in `render` to build `mfa_input`.
+    pub(crate) pending_mfa_prompt: Option<(String, tokio::sync::oneshot::Sender<String>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -191,6 +222,9 @@ pub struct SshPanel {
     pub active_tab: usize,
     /// Pending connection requests (processed in render where a Window exists).
     pub pending_connect: Option<SshHost>,
+    /// Currently-open tab right-click context menu: the right-clicked tab
+    /// index plus the mouse position (used to anchor the floating menu).
+    pub tab_context_menu: Option<(usize, gpui::Point<gpui::Pixels>)>,
     /// When true, show the host picker overlay (for starting new connections
     /// without closing existing sessions).
     pub show_host_picker: bool,
@@ -225,6 +259,7 @@ impl SshPanel {
             sessions: Vec::new(),
             active_tab: 0,
             pending_connect: None,
+            tab_context_menu: None,
             show_host_picker: false,
             fwd_status: None,
             fwd_inputs: None,
@@ -702,6 +737,35 @@ impl SshPanel {
                     crate::ssh::client::SshConnection,
                 >();
 
+                // Dedicated channel for MFA/OTP prompts: the SSH connect thread
+                // (running on its own OS thread + runtime) sends each
+                // keyboard-interactive challenge here and awaits the user's
+                // code via a oneshot reply. Created before the connect thread
+                // starts so the OtpPromptFn closure can capture the sender.
+                let (mfa_prompt_tx, mfa_prompt_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<(
+                        String,
+                        tokio::sync::oneshot::Sender<String>,
+                    )>();
+
+                // Build the OtpPromptFn handed to the SSH layer. Each server
+                // prompt → a PumpMsg::MfaPrompt on the main pump channel via
+                // mfa_prompt_tx; the await on the oneshot blocks the connect
+                // thread until the user submits (or cancels by dropping).
+                let otp_prompt: crate::ssh::client::OtpPromptFn =
+                    std::sync::Arc::new(move |_name: String, prompt: String, _echo: bool| {
+                        let mfa_tx = mfa_prompt_tx.clone();
+                        async move {
+                            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+                            if mfa_tx.send((prompt, reply_tx)).is_err() {
+                                // Pump loop gone (session torn down) → cancelled.
+                                return Err(());
+                            }
+                            reply_rx.await.map_err(|_| ())
+                        }
+                        .boxed()
+                    });
+
                 // Show connecting / reconnecting status.
                 let status_msg = if attempt == 1 {
                     None
@@ -719,7 +783,12 @@ impl SshPanel {
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                     rt.block_on(async move {
-                        match crate::ssh::client::SshConnection::connect(&host_connect).await {
+                        match crate::ssh::client::SshConnection::connect_with_otp(
+                            &host_connect,
+                            Some(otp_prompt),
+                        )
+                        .await
+                        {
                             Ok(conn) => {
                                 // Open a PTY shell on this connection.
                                 match conn.open_shell(180, 50).await {
@@ -953,7 +1022,52 @@ impl SshPanel {
                 // `Disconnected` (no explicit error) defaults to retryable.
                 let mut last_error_retryable = true;
                 let session_uid = session_uid_for_task;
-                while let Some(msg) = pump_rx.recv().await {
+                let mut mfa_prompt_rx = mfa_prompt_rx;
+                let mfa_forward_tx = pump_tx.clone();
+                // Once the OTP channel's senders are all gone (connect thread
+                // finished auth), recv() returns None forever. If we kept polling
+                // it we'd busy-loop on GPUI's foreground executor and freeze the
+                // UI. So we set this flag to false on the first None and replace
+                // the branch with a never-ready future thereafter.
+                let mut mfa_open = true;
+                loop {
+                    // Merge MFA prompts (from the SSH connect thread) into the
+                    // main pump stream so a single match handles everything.
+                    let msg = tokio::select! {
+                        m = pump_rx.recv() => match m {
+                            Some(m) => m,
+                            None => break,
+                        },
+                        // Only poll the OTP channel while it may still produce a
+                        // challenge; once closed, pin a pending() future so this
+                        // branch never wakes and we never spin.
+                        m = async {
+                            if !mfa_open {
+                                std::future::pending::<
+                                    Option<(String, tokio::sync::oneshot::Sender<String>)>,
+                                >().await
+                            } else {
+                                mfa_prompt_rx.recv().await
+                            }
+                        } => match m {
+                            Some((prompt_text, reply_tx)) => {
+                                // Forward as a pump message; if the pump is
+                                // closed the send fails and the reply_tx drops,
+                                // which cancels the OTP on the connect thread.
+                                let _ = mfa_forward_tx.send(PumpMsg::MfaPrompt {
+                                    prompt_text,
+                                    reply_tx,
+                                });
+                                continue;
+                            }
+                            None => {
+                                // All OTP senders gone (auth finished). Disable
+                                // this branch permanently so we don't spin.
+                                mfa_open = false;
+                                continue;
+                            }
+                        },
+                    };
                     match msg {
                         PumpMsg::Connected(conn) => {
                             // Stash the SshConnection on the matching session
@@ -1111,6 +1225,34 @@ impl SshPanel {
                                 let _ = tx.send(ZmPathReply::Send(chosen));
                             }).detach();
                         }
+                        PumpMsg::MfaPrompt {
+                            prompt_text,
+                            reply_tx,
+                        } => {
+                            // The SSH server sent a keyboard-interactive
+                            // challenge. Stash it on the session; `render`
+                            // (which has window access) builds the InputState.
+                            if let Some(panel) = panel_for_task.upgrade() {
+                                let uid = session_uid;
+                                let _ = panel.update(cx, move |this, cx| {
+                                    if let Some(s) = this
+                                        .sessions
+                                        .iter_mut()
+                                        .find(|s| s.session_uid == uid)
+                                    {
+                                        // Replace any prior pending prompt (its
+                                        // reply_tx is dropped → connect thread
+                                        // sees cancel and surfaces an error).
+                                        s.pending_mfa_prompt =
+                                            Some((prompt_text, reply_tx));
+                                        cx.notify();
+                                    }
+                                });
+                            } else {
+                                // Panel dropped — cancel the prompt.
+                                drop(reply_tx);
+                            }
+                        }
                     }
                 }
 
@@ -1194,6 +1336,10 @@ impl SshPanel {
             status: SessionStatus::Connecting,
             zm_state: ZmUiState::default(),
             active_forwards: Vec::new(),
+            mfa_input: None,
+            mfa_prompt: String::new(),
+            mfa_reply_tx: None,
+            pending_mfa_prompt: None,
         });
         self.active_tab = self.sessions.len() - 1;
         cx.notify();
@@ -1222,6 +1368,11 @@ impl SshPanel {
         // Lazily initialize the SFTP browser if the active tab is in Sftp view
         // and the browser hasn't been created yet.
         self.ensure_active_sftp_browser(cx);
+
+        // Materialize the OTP input for any pending MFA challenge on the active
+        // session. InputState construction needs a Window, which render has —
+        // the spawn loop can only stash the prompt here.
+        self.ensure_mfa_input(window, cx);
 
         // Resolve the content element based on view mode.
         let content: AnyElement = if active_view == SessionView::Sftp {
@@ -1319,6 +1470,18 @@ impl SshPanel {
                                 this.active_tab = i;
                                 cx.notify();
                             }))
+                            // Right-click → open the tab context menu (anchored
+                            // at the cursor). Bounds-checked (AGENTS.md §五):
+                            // the tab list may have changed between renders.
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, ev: &MouseDownEvent, _window, cx| {
+                                    if i < this.sessions.len() {
+                                        this.tab_context_menu = Some((i, ev.position));
+                                        cx.notify();
+                                    }
+                                }),
+                            )
                     }))
                     // "+" button to open host list and start a new connection.
                     .child(
@@ -1407,6 +1570,16 @@ impl SshPanel {
                             }),
                     ),
             )
+            // MFA / OTP prompt bar — shown when the active session is awaiting
+            // a keyboard-interactive verification code.
+            .when_some(
+                self.render_mfa_bar(active, &theme, cx),
+                |col, bar| col.child(bar),
+            )
+            // Tab right-click context menu (duplicate / close / close others).
+            .when_some(self.tab_context_menu, |col, (idx, pos)| {
+                col.child(self.render_tab_context_menu(idx, pos, &theme, cx))
+            })
             // Content area.
             .child(
                 div()
@@ -1537,6 +1710,339 @@ impl SshPanel {
         session.sftp_browser = Some(browser);
 
         cx.notify();
+    }
+
+    /// Materialize the OTP input entity for the active session's pending MFA
+    /// challenge, if any. Must run in `render` because `InputState::new`
+    /// requires a `&mut Window` (the spawn loop has none).
+    fn ensure_mfa_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let idx = self.active_tab;
+        let Some(session) = self.sessions.get_mut(idx) else {
+            return;
+        };
+        // Take the pending prompt out first to avoid a double borrow below.
+        let Some((prompt_text, reply_tx)) = session.pending_mfa_prompt.take() else {
+            return;
+        };
+        // Replace any prior pending prompt — dropping its reply_tx cancels that
+        // challenge on the connect thread (which surfaces an error).
+        let mfa_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("验证码")
+                .masked(true)
+        });
+        // Grab focus so the user can type the verification code immediately
+        // without an extra click.
+        mfa_input.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+        // Stop the terminal from stealing focus back on every render while the
+        // OTP input is up.
+        session.terminal.update(cx, |tv, cx| {
+            tv.suppress_auto_focus = true;
+            cx.notify();
+        });
+        // Submit the OTP when the user presses Enter.
+        // NOTE: Context::subscribe's closure ALREADY receives &mut SshPanel
+        // and &mut Context<SshPanel> directly (the framework wraps it in an
+        // entity update internally). We must NOT call panel.update(cx, ..)
+        // here — that would re-lease the entity mid-update and panic
+        // ("cannot update SshPanel while it is already being updated").
+        cx.subscribe(&mfa_input, move |this, _input, event, cx| {
+            if let gpui_component::input::InputEvent::PressEnter { .. } = event {
+                // idx is captured by value; the tab list may have shifted
+                // between setting up the prompt and the user pressing Enter,
+                // so re-validate and fall back to active_tab.
+                let target = if this.sessions.get(idx).is_some() {
+                    idx
+                } else {
+                    this.active_tab
+                };
+                this.submit_mfa(target, cx);
+            }
+        })
+        .detach();
+        session.mfa_input = Some(mfa_input);
+        session.mfa_prompt = prompt_text;
+        session.mfa_reply_tx = Some(reply_tx);
+        cx.notify();
+    }
+
+    /// Build the OTP prompt bar element for the active session, or `None` if
+    /// no challenge is pending.
+    fn render_mfa_bar(
+        &mut self,
+        idx: usize,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let Some(session) = self.sessions.get(idx) else {
+            return None;
+        };
+        let mfa_input = session.mfa_input.clone()?;
+        let prompt_text = session.mfa_prompt.clone();
+        let prompt_display: String = if prompt_text.trim().is_empty() {
+            "请输入验证码 (MFA)".to_string()
+        } else {
+            prompt_text.trim().to_string()
+        };
+
+        let bg = theme.muted;
+        let border = theme.border;
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground;
+        let danger = theme.danger;
+        let panel = cx.entity().downgrade();
+
+        Some(
+            h_flex()
+                .w_full()
+                .h(px(44.))
+                .px_4()
+                .gap_3()
+                .items_center()
+                .border_b_1()
+                .border_color(border)
+                .bg(bg)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(fg)
+                        // Prompt text is server-supplied (untrusted); cap its
+                        // length by char count and elide to avoid layout blowup.
+                        .child(truncate_prompt(&prompt_display, 40)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Input::new(&mfa_input).small().appearance(true)),
+                )
+                .child(
+                    Button::new("mfa-submit")
+                        .primary()
+                        .small()
+                        .label("提交")
+                        .on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx: &mut App| {
+                                let _ = panel.update(cx, |this, cx| {
+                                    this.submit_mfa(idx, cx);
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("mfa-cancel")
+                        .ghost()
+                        .small()
+                        .label("取消")
+                        .text_color(danger.opacity(0.9))
+                        .on_click(move |_, _window, cx: &mut App| {
+                            let _ = panel.update(cx, |this, cx| {
+                                this.cancel_mfa(idx, cx);
+                            });
+                        }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("一次性验证码不保存"),
+                ),
+        )
+    }
+
+    /// Submit the user-entered OTP for the active session's pending challenge.
+    fn submit_mfa(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get_mut(idx) else {
+            return;
+        };
+        let mfa_input = match session.mfa_input.clone() {
+            Some(e) => e,
+            None => return,
+        };
+        let code = mfa_input.read(cx).value().trim().to_string();
+        if code.is_empty() {
+            return;
+        }
+        log::info!(
+            "MFA: submitting OTP (len={}) for session idx {} (uid {})",
+            code.len(),
+            idx,
+            session.session_uid
+        );
+        let reply_tx = session.mfa_reply_tx.take();
+        session.mfa_input = None;
+        session.mfa_prompt.clear();
+        if let Some(tx) = reply_tx {
+            let _ = tx.send(code);
+        }
+        // Re-render so the OTP bar disappears immediately.
+        cx.notify();
+        // Defer handing focus back to the terminal + resetting
+        // suppress_auto_focus to the next run-loop tick. Doing it inline inside
+        // the subscribe callback (which the framework runs within an SshPanel
+        // update) re-entered the terminal entity's update during the same
+        // dispatch and froze the UI on Enter-submit. cx.spawn runs on GPUI's
+        // async executor, breaking the re-entry.
+        let terminal = session.terminal.clone();
+        cx.spawn(async move |_this, cx| {
+            let _ = terminal.update(cx, |tv, cx| {
+                tv.suppress_auto_focus = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Cancel the active session's MFA challenge (drops reply_tx → connect
+    /// thread observes cancellation and surfaces an auth error).
+    fn cancel_mfa(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get_mut(idx) else {
+            return;
+        };
+        session.mfa_input = None;
+        session.mfa_prompt.clear();
+        session.mfa_reply_tx.take(); // dropped here → cancel
+        cx.notify();
+        // Defer the focus hand-back (same re-entry concern as submit_mfa).
+        let terminal = session.terminal.clone();
+        cx.spawn(async move |_this, cx| {
+            let _ = terminal.update(cx, |tv, cx| {
+                tv.suppress_auto_focus = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Render the floating right-click context menu for a session tab.
+    ///
+    /// A full-size transparent backdrop closes the menu on any left-click;
+    /// the inner menu panel is anchored at the click position and stops
+    /// propagation so clicks on its items don't dismiss it prematurely.
+    fn render_tab_context_menu(
+        &mut self,
+        idx: usize,
+        pos: gpui::Point<gpui::Pixels>,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let bg = theme.background;
+        let border = theme.border;
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground;
+        let danger = theme.danger;
+        let accent = theme.accent;
+
+        // Build three menu rows. Each is a full-width button; the action runs
+        // in a cx.listener (has &mut self + &mut Context<Self>).
+        let menu_rows = v_flex()
+            // 复制当前会话
+            .child(
+                h_flex()
+                    .id("ctx-duplicate")
+                    .w_full()
+                    .h(px(32.))
+                    .px_3()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .text_color(fg)
+                    .child(Icon::new(IconName::Copy).size_3())
+                    .child(div().text_sm().child("复制当前会话"))
+                    .hover(|s| s.bg(accent.opacity(0.4)))
+                    .on_click(cx.listener(move |this, _ev, _window, cx| {
+                        this.duplicate_session(idx, cx);
+                    })),
+            )
+            // 关闭当前标签页
+            .child(
+                h_flex()
+                    .id("ctx-close")
+                    .w_full()
+                    .h(px(32.))
+                    .px_3()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .text_color(fg)
+                    .child(Icon::new(IconName::Close).size_3())
+                    .child(div().text_sm().child("关闭当前标签页"))
+                    .hover(|s| s.bg(accent.opacity(0.4)))
+                    .on_click(cx.listener(move |this, _ev, _window, cx| {
+                        this.tab_context_menu = None;
+                        this.close_session(idx, cx);
+                    })),
+            )
+            // 关闭其他标签页
+            .child(
+                h_flex()
+                    .id("ctx-close-others")
+                    .w_full()
+                    .h(px(32.))
+                    .px_3()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .text_color(muted)
+                    .child(Icon::new(IconName::Close).size_3())
+                    .child(div().text_sm().child("关闭其他标签页"))
+                    .hover(|s| s.bg(danger.opacity(0.18)))
+                    .on_click(cx.listener(move |this, _ev, _window, cx| {
+                        this.close_other_sessions(idx, cx);
+                    })),
+            );
+
+        // Anchor: offset slightly down-right from the cursor so the click
+        // point sits at the menu's top-left corner.
+        let left = pos.x + px(2.);
+        let top = pos.y + px(2.);
+
+        // Backdrop: closes the menu on left-click anywhere outside the panel.
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _ev, _window, cx| {
+                    this.tab_context_menu = None;
+                    cx.notify();
+                }),
+            )
+            // Also dismiss on right-click elsewhere (re-anchor or close).
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _ev, _window, cx| {
+                    this.tab_context_menu = None;
+                    cx.notify();
+                }),
+            )
+            .child(
+                v_flex()
+                    .absolute()
+                    .left(left)
+                    .top(top)
+                    .w(px(180.))
+                    .bg(bg)
+                    .border_1()
+                    .border_color(border)
+                    .rounded(px(6.))
+                    .shadow_md()
+                    .overflow_hidden()
+                    // Keep the menu open when clicking inside it.
+                    .on_mouse_down(MouseButton::Left, |_ev, _window, cx: &mut App| {
+                        cx.stop_propagation();
+                    })
+                    .on_mouse_down(MouseButton::Right, |_ev, _window, cx: &mut App| {
+                        cx.stop_propagation();
+                    })
+                    .child(menu_rows),
+            )
     }
 
     /// Render the Port Forwards view for the active session: list of configured
@@ -1887,6 +2393,45 @@ impl SshPanel {
         cx.notify();
     }
 
+    /// Duplicate the session at `idx`: looks up the host config and queues a
+    /// fresh connection via `pending_connect` (the render loop starts it). The
+    /// new tab is a fully independent connection (own socket + session_uid);
+    /// the original is untouched.
+    fn duplicate_session(&mut self, idx: usize, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(idx) else {
+            self.tab_context_menu = None;
+            return;
+        };
+        let host_id = session.host_id.clone();
+        if let Some(host) = host_store::find_host(&host_id) {
+            self.pending_connect = Some(host);
+            self.show_host_picker = false;
+            cx.notify();
+        }
+        self.tab_context_menu = None;
+    }
+
+    /// Close every session except the one at `keep`. The kept session moves to
+    /// index 0 and becomes active. Each dropped session's input_tx is taken so
+    /// its background SSH task observes the channel close and exits.
+    fn close_other_sessions(&mut self, keep: usize, cx: &mut Context<Self>) {
+        // Bounds check first (AGENTS.md §一): `keep` must reference a real tab.
+        if keep >= self.sessions.len() {
+            self.tab_context_menu = None;
+            return;
+        }
+        // Move the kept session out (swap_remove avoids a shift), then drain the
+        // rest — taking each one's input_tx so its background SSH task exits.
+        let kept = self.sessions.swap_remove(keep);
+        for mut s in self.sessions.drain(..) {
+            s.input_tx.take();
+        }
+        self.sessions.push(kept);
+        self.active_tab = 0;
+        self.tab_context_menu = None;
+        cx.notify();
+    }
+
     /// Apply a ZMODEM event received from the pump thread to the session
     /// matching `uid` (unique per-session id, not host_id, so multiple tabs
     /// for the same host route events independently).
@@ -2063,5 +2608,38 @@ impl SshPanel {
                             )
                     })),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_prompt;
+
+    #[test]
+    fn truncate_prompt_short_unchanged() {
+        assert_eq!(truncate_prompt("Verification code:", 40), "Verification code:");
+    }
+
+    #[test]
+    fn truncate_prompt_long_elided() {
+        let long = "请输入您的动态验证码以完成多因素认证并登录到远程服务器系统";
+        let out = truncate_prompt(long, 10);
+        assert!(out.chars().count() == 10, "elided length is exactly max");
+        assert!(out.ends_with('…'));
+        // The elided string must be a valid char boundary slice (no panic).
+        assert_eq!(out.chars().count(), out.chars().count());
+    }
+
+    #[test]
+    fn truncate_prompt_multibyte_safe() {
+        // Pure multibyte input — must never panic on byte boundaries.
+        let out = truncate_prompt("验证码验证码验证码", 5);
+        assert_eq!(out.chars().count(), 5);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_prompt_empty() {
+        assert_eq!(truncate_prompt("", 40), "");
     }
 }

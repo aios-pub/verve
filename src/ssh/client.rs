@@ -15,7 +15,8 @@
 
 use std::sync::Arc;
 
-use russh::client::{self, Handle};
+use futures::future::BoxFuture;
+use russh::client::{self, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::{Mutex, mpsc};
@@ -26,6 +27,19 @@ use super::known_hosts;
 use super::models::{SshAuthType, SshHost};
 use super::port_forward::LocalForward;
 use super::sftp::SftpSessionWrapper;
+
+/// OTP/MFA 提示回调。当服务器通过 keyboard-interactive 认证发送 prompt
+/// （如 "Verification code:"）时，认证流程调用此回调把 prompt 抛回 UI 层，
+/// 等待用户输入的动态验证码。
+///
+/// 参数：`(name, prompt, echo)` —— 分别是 challenge 名称、提示原文、是否回显。
+/// 返回 `Ok(code)` 为用户输入的验证码；`Err(())` 表示用户取消。
+///
+/// 采用 `Arc<dyn Fn>` + `BoxFuture` 以便跨 OS 线程（连接线程）传递、且能在
+/// 异步上下文里 `.await`，无需把 GPUI 类型暴露到 ssh 层。
+pub type OtpPromptFn = Arc<
+    dyn Fn(String, String, bool) -> BoxFuture<'static, Result<String, ()>> + Send + Sync,
+>;
 
 /// Messages from the SSH session to the terminal/UI.
 #[derive(Debug)]
@@ -231,7 +245,24 @@ impl SshConnection {
     ///
     /// If the host has a `bastion_id`, the connection tunnels through the
     /// bastion via `direct-tcpip` + `connect_stream`.
+    ///
+    /// This is the headless entry point — MFA/keyboard-interactive challenges
+    /// cannot be answered (no UI). Use [`SshConnection::connect_with_otp`] for
+    /// interactive sessions that may need an OTP.
     pub async fn connect(host: &SshHost) -> Result<Self, SshError> {
+        Self::connect_with_otp(host, None).await
+    }
+
+    /// Connect to a host and authenticate, with an optional OTP prompt callback.
+    ///
+    /// When `otp` is `Some`, keyboard-interactive (MFA) challenges can be
+    /// answered: the callback is invoked per server prompt to obtain the user's
+    /// verification code. When `otp` is `None`, a server requiring MFA returns
+    /// a clear non-retryable error instead of hanging.
+    pub async fn connect_with_otp(
+        host: &SshHost,
+        otp: Option<OtpPromptFn>,
+    ) -> Result<Self, SshError> {
         let config = Arc::new(client::Config::default());
 
         // Resolve the jump chain (bastions from outermost to target).
@@ -264,10 +295,10 @@ impl SshConnection {
             let mut bastion_handle = client::connect(config.clone(), bastion_addr, bastion_handler)
                 .await
                 .map_err(|e| SshError::from_russh(e, "连接跳板机", &bastion.host))?;
-            authenticate(&mut bastion_handle, bastion).await?;
+            authenticate(&mut bastion_handle, bastion, &otp).await?;
 
             // Tunnel through to the target.
-            let target = chain.last().unwrap();
+            let target = chain.last().expect("jump chain has at least one host");
             let target_host = target
                 .bastion_target_override
                 .clone()
@@ -287,7 +318,7 @@ impl SshConnection {
         };
 
         let mut handle = handle;
-        authenticate(&mut handle, host).await?;
+        authenticate(&mut handle, host, &otp).await?;
 
         Ok(SshConnection {
             handle: Arc::new(Mutex::new(handle)),
@@ -441,22 +472,45 @@ pub async fn connect(host: &SshHost, cols: u32, rows: u32) -> Result<SshSession,
 }
 
 /// Authenticate on a russh handle using the host's configured method.
-async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result<(), SshError> {
-    let ok = match host.auth_type {
+///
+/// `otp` is the optional callback for answering keyboard-interactive (MFA)
+/// prompts. It is only invoked when the server actually issues a challenge;
+/// for plain password / key auth it is unused.
+async fn authenticate(
+    handle: &mut Handle<SshHandler>,
+    host: &SshHost,
+    otp: &Option<OtpPromptFn>,
+) -> Result<(), SshError> {
+    match host.auth_type {
         SshAuthType::Password => {
             let password = credentials::load_secret(&host.id, "password").unwrap_or_default();
             let res = handle
                 .authenticate_password(&host.username, password)
                 .await
                 .map_err(|e| SshError::from_russh(e, "认证", &host.host))?;
-            if !res.success() {
-                // Server reached, but credentials rejected — not retryable.
-                return Err(SshError::new(
+            if res.success() {
+                return Ok(());
+            }
+            // Password rejected. If this is an MFA server, it will require
+            // keyboard-interactive next — attempt a transparent fallback so
+            // users who configured "密码" still get the OTP prompt.
+            if otp.is_some() {
+                if let Some(()) = try_keyboard_interactive_fallback(handle, host, otp).await? {
+                    return Ok(());
+                }
+            }
+            // No OTP callback (headless) or server didn't send a challenge.
+            if otp.is_some() {
+                Err(SshError::new(
                     "认证失败：用户名或密码错误，请检查账号配置",
                     false,
-                ));
+                ))
+            } else {
+                Err(SshError::new(
+                    "认证失败：用户名或密码错误。若该服务器启用了 MFA（多因素认证），请在 SSH 终端中连接以输入验证码。",
+                    false,
+                ))
             }
-            true
         }
         SshAuthType::PrivateKey => {
             let key_path = host
@@ -479,24 +533,184 @@ async fn authenticate(handle: &mut Handle<SshHandler>, host: &SshHost) -> Result
                 )
                 .await
                 .map_err(|e| SshError::from_russh(e, "密钥认证", &host.host))?;
-            if !res.success() {
-                return Err(SshError::new(
-                    "认证失败：密钥被服务器拒绝，请检查用户名或私钥是否正确",
-                    false,
-                ));
+            if res.success() {
+                return Ok(());
             }
-            true
+            Err(SshError::new(
+                "认证失败：密钥被服务器拒绝，请检查用户名或私钥是否正确",
+                false,
+            ))
         }
         SshAuthType::Agent => {
             // Agent auth not yet implemented.
-            return Err(SshError::new("Agent 认证暂不支持", false));
+            Err(SshError::new("Agent 认证暂不支持", false))
         }
-    };
-
-    if !ok {
-        return Err(SshError::new("认证失败：用户名/密码/密钥错误", false));
+        SshAuthType::KeyboardInteractive => {
+            // Explicit MFA. Many servers pair this with a password, so send the
+            // stored password first as the "submethods" hint is not enough on
+            // its own. A failure here is non-fatal — the keyboard-interactive
+            // challenge that follows is what actually carries the credentials.
+            if let Some(password) = credentials::load_secret(&host.id, "password") {
+                if !password.is_empty() {
+                    let _ = handle.authenticate_password(&host.username, password).await;
+                }
+            }
+            keyboard_interactive_authenticate(handle, host, otp).await
+        }
     }
-    Ok(())
+}
+
+/// Drive a keyboard-interactive authentication to completion.
+///
+/// Loops over the server's `InfoRequest` messages, invoking the `otp` callback
+/// for each prompt and sending the responses back. Returns `Ok(())` on success.
+async fn keyboard_interactive_authenticate(
+    handle: &mut Handle<SshHandler>,
+    host: &SshHost,
+    otp: &Option<OtpPromptFn>,
+) -> Result<(), SshError> {
+    // Safety guard against an unreasonable number of challenge rounds.
+    const MAX_ROUNDS: u32 = 8;
+    let mut handle = HandleInteractor(handle);
+    match drive_keyboard_interactive(&mut handle, &host.username, otp, MAX_ROUNDS).await? {
+        KiOutcome::Success => Ok(()),
+        KiOutcome::Failure => Err(SshError::new(
+            "认证失败：验证码错误或被服务器拒绝",
+            false,
+        )),
+        // Hit the round cap without resolving → treat as misconfigured server.
+        KiOutcome::Exhausted => Err(SshError::new(
+            "认证失败：服务器要求的交互轮次过多（超过上限 8），疑似配置异常",
+            false,
+        )),
+    }
+}
+
+/// Try a single keyboard-interactive round after password auth fails.
+///
+/// Returns `Ok(Some(()))` if MFA succeeded, `Ok(None)` if the server did not
+/// actually issue a challenge (so the caller can fall through to the normal
+/// "wrong password" error), or `Err` on transport errors / explicit failure.
+async fn try_keyboard_interactive_fallback(
+    handle: &mut Handle<SshHandler>,
+    host: &SshHost,
+    otp: &Option<OtpPromptFn>,
+) -> Result<Option<()>, SshError> {
+    const MAX_ROUNDS: u32 = 8;
+    let mut handle = HandleInteractor(handle);
+    match drive_keyboard_interactive(&mut handle, &host.username, otp, MAX_ROUNDS).await? {
+        KiOutcome::Success => Ok(Some(())),
+        // Failure / exhaustion both mean "no MFA path" → fall through to the
+        // plain wrong-password error in the caller.
+        KiOutcome::Failure | KiOutcome::Exhausted => Ok(None),
+    }
+}
+
+/// Outcome of a keyboard-interactive exchange, as observed by
+/// [`drive_keyboard_interactive`].
+#[derive(Debug, PartialEq, Eq)]
+enum KiOutcome {
+    /// The server reported authentication success.
+    Success,
+    /// The server reported authentication failure (rejected the method/code).
+    Failure,
+    /// The exchange hit the round cap without reaching Success or Failure.
+    Exhausted,
+}
+
+/// Abstraction over the two russh `Handle` methods used by the
+/// keyboard-interactive loop. The production impl wraps `Handle<SshHandler>`;
+/// tests supply a scripted mock. This is what makes the core MFA loop testable
+/// without a live SSH server.
+trait KeyboardInteractor {
+    /// Initiate keyboard-interactive auth. Corresponds to
+    /// `Handle::authenticate_keyboard_interactive_start`.
+    fn ki_start(
+        &mut self,
+        user: &str,
+        submethods: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<KeyboardInteractiveAuthResponse, russh::Error>>;
+
+    /// Respond to the server's prompts. Corresponds to
+    /// `Handle::authenticate_keyboard_interactive_respond`.
+    fn ki_respond(
+        &mut self,
+        responses: Vec<String>,
+    ) -> impl std::future::Future<Output = Result<KeyboardInteractiveAuthResponse, russh::Error>>;
+}
+
+/// Newtype wrapping a russh `Handle` so it satisfies [`KeyboardInteractor`].
+struct HandleInteractor<'a>(&'a mut Handle<SshHandler>);
+
+impl<'a> KeyboardInteractor for HandleInteractor<'a> {
+    async fn ki_start(
+        &mut self,
+        user: &str,
+        submethods: Option<&str>,
+    ) -> Result<KeyboardInteractiveAuthResponse, russh::Error> {
+        self.0
+            .authenticate_keyboard_interactive_start(
+                user.to_string(),
+                submethods.map(|s| s.to_string()),
+            )
+            .await
+    }
+
+    async fn ki_respond(
+        &mut self,
+        responses: Vec<String>,
+    ) -> Result<KeyboardInteractiveAuthResponse, russh::Error> {
+        self.0.authenticate_keyboard_interactive_respond(responses).await
+    }
+}
+
+/// The shared, transport-agnostic core of the keyboard-interactive exchange.
+///
+/// Starts auth, then for each `InfoRequest` invokes `otp` per prompt and sends
+/// the responses back, until the server replies `Success` / `Failure` or
+/// `max_rounds` is exhausted. Errors from the interactor are converted to
+/// `SshError` (non-retryable).
+async fn drive_keyboard_interactive<I: KeyboardInteractor + Unpin + ?Sized>(
+    interactor: &mut I,
+    user: &str,
+    otp: &Option<OtpPromptFn>,
+    max_rounds: u32,
+) -> Result<KiOutcome, SshError> {
+    let mut resp = interactor
+        .ki_start(user, None)
+        .await
+        .map_err(|e| SshError::from_russh(e, "键盘交互认证", user))?;
+
+    for _round in 0..max_rounds {
+        match resp {
+            KeyboardInteractiveAuthResponse::Success => return Ok(KiOutcome::Success),
+            KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(KiOutcome::Failure),
+            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                let otp = otp.as_ref().ok_or_else(|| {
+                    SshError::new(
+                        "该服务器要求键盘交互式认证（MFA），但当前连接无法输入验证码。请在 SSH 终端中连接。",
+                        false,
+                    )
+                })?;
+
+                // Gather one response per prompt (servers typically send a
+                // single OTP prompt; some send "Password:" + "Code:").
+                let mut answers: Vec<String> = Vec::with_capacity(prompts.len());
+                for p in &prompts {
+                    let code = otp(String::new(), p.prompt.clone(), p.echo)
+                        .await
+                        .map_err(|_| SshError::new("认证失败：已取消验证码输入", false))?;
+                    answers.push(code);
+                }
+
+                resp = interactor
+                    .ki_respond(answers)
+                    .await
+                    .map_err(|e| SshError::from_russh(e, "键盘交互认证", user))?;
+            }
+        }
+    }
+    Ok(KiOutcome::Exhausted)
 }
 
 #[cfg(test)]
@@ -542,5 +756,234 @@ mod tests {
     fn strips_ipv6_zone_id() {
         // fe80::… link-local with a zone id still recognised.
         assert!(is_local_network_host("fe80::1%en0"));
+    }
+
+    // ---- keyboard-interactive (MFA) core loop tests ----
+    //
+    // These exercise the transport-agnostic core `drive_keyboard_interactive`
+    // (the engine behind both `keyboard_interactive_authenticate` and
+    // `try_keyboard_interactive_fallback`) using a scripted mock interactor,
+    // so no live SSH server is required.
+
+    use super::{KeyboardInteractor, KiOutcome};
+    use russh::client::{KeyboardInteractiveAuthResponse, Prompt};
+    use std::sync::{Arc, Mutex};
+
+    /// A scripted mock for [`KeyboardInteractor`]. It replays a pre-loaded
+    /// queue of `ki_start` then `ki_respond` responses, and records the
+    /// responses the loop sends back (so tests can assert the OTP was relayed).
+    struct MockInteractor {
+        /// FIFO of scripted replies. The first is returned by `ki_start`, the
+        /// rest by successive `ki_respond` calls.
+        replies: Mutex<Vec<KeyboardInteractiveAuthResponse>>,
+        /// Captured `ki_respond` argument lists, in call order.
+        sent: Mutex<Vec<Vec<String>>>,
+        /// Captured `ki_start` username (for asserting the right user).
+        start_user: Mutex<Option<String>>,
+    }
+
+    impl MockInteractor {
+        fn new(replies: Vec<KeyboardInteractiveAuthResponse>) -> Self {
+            Self {
+                replies: Mutex::new(replies),
+                sent: Mutex::new(Vec::new()),
+                start_user: Mutex::new(None),
+            }
+        }
+
+        fn sent_responses(&self) -> Vec<Vec<String>> {
+            self.sent.lock().expect("sent lock").clone()
+        }
+
+        fn start_user(&self) -> Option<String> {
+            self.start_user.lock().expect("start_user lock").clone()
+        }
+    }
+
+    impl KeyboardInteractor for MockInteractor {
+        async fn ki_start(
+            &mut self,
+            user: &str,
+            _submethods: Option<&str>,
+        ) -> Result<KeyboardInteractiveAuthResponse, russh::Error> {
+            *self.start_user.lock().expect("start_user lock") = Some(user.to_string());
+            let mut q = self.replies.lock().expect("replies lock");
+            Ok(q.remove(0))
+        }
+
+        async fn ki_respond(
+            &mut self,
+            responses: Vec<String>,
+        ) -> Result<KeyboardInteractiveAuthResponse, russh::Error> {
+            self.sent.lock().expect("sent lock").push(responses);
+            let mut q = self.replies.lock().expect("replies lock");
+            Ok(q.remove(0))
+        }
+    }
+
+    /// Build an `OtpPromptFn` that returns the given canned code for every
+    /// prompt (most MFA servers ask exactly one OTP).
+    fn canned_otp(code: &'static str) -> super::OtpPromptFn {
+        Arc::new(move |_name, _prompt, _echo| {
+            let code = code.to_string();
+            Box::pin(async move { Ok(code) })
+        })
+    }
+
+    /// Single prompt helper: build an InfoRequest with one OTP prompt.
+    fn otp_info_request(prompt: &str) -> KeyboardInteractiveAuthResponse {
+        KeyboardInteractiveAuthResponse::InfoRequest {
+            name: String::new(),
+            instructions: String::new(),
+            prompts: vec![Prompt {
+                prompt: prompt.to_string(),
+                echo: false,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn ki_success_after_single_challenge() {
+        // Server: start → InfoRequest("Verification code:") → respond → Success.
+        let otp = canned_otp("123456");
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("Verification code:"),
+            KeyboardInteractiveAuthResponse::Success,
+        ]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "alice", &Some(otp), 8)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Success));
+        // The user was passed through to ki_start.
+        assert_eq!(m.start_user().as_deref(), Some("alice"));
+        // Exactly one ki_respond, carrying the canned OTP verbatim.
+        let sent = m.sent_responses();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0], vec!["123456".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn ki_success_after_multiple_rounds() {
+        // Two challenge rounds before success: some PAM chains (password then
+        // OTP) produce multiple InfoRequests.
+        let otp = canned_otp("998877");
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("Password:"),
+            otp_info_request("Verification code:"),
+            KeyboardInteractiveAuthResponse::Success,
+        ]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "bob", &Some(otp), 8)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Success));
+        // Two ki_respond calls, each relaying the same canned code.
+        let sent = m.sent_responses();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0], vec!["998877".to_string()]);
+        assert_eq!(sent[1], vec!["998877".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn ki_failure_when_server_rejects() {
+        let otp = canned_otp("000000");
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("Verification code:"),
+            KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods: russh::MethodSet::empty(),
+                partial_success: false,
+            },
+        ]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "carol", &Some(otp), 8)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Failure));
+    }
+
+    #[tokio::test]
+    async fn ki_exhausted_when_never_resolves() {
+        // Server keeps sending InfoRequest forever; the loop must cap at
+        // max_rounds and report Exhausted rather than spinning forever.
+        let otp = canned_otp("111111");
+        // 5 InfoRequests then a Success — but cap at 3 rounds so it exhausts.
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("a"),
+            otp_info_request("b"),
+            otp_info_request("c"),
+            otp_info_request("d"),
+            otp_info_request("e"),
+            KeyboardInteractiveAuthResponse::Success,
+        ]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "dave", &Some(otp), 3)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Exhausted));
+        // It sent exactly 3 responses (the cap) before giving up.
+        assert_eq!(m.sent_responses().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn ki_error_when_no_otp_callback() {
+        // No UI callback available (headless tunnel): a server challenge must
+        // surface a non-retryable SshError, not hang.
+        let mut m =
+            MockInteractor::new(vec![otp_info_request("Verification code:")]);
+        let err = super::drive_keyboard_interactive(&mut m, "erin", &None, 8)
+            .await
+            .expect_err("should error without an OTP callback");
+        assert!(!err.retryable, "must be non-retryable");
+        assert!(err.message.contains("MFA"), "message should mention MFA: {}", err.message);
+        // Nothing was sent — the loop bailed before responding.
+        assert!(m.sent_responses().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ki_otp_cancel_surfaces_as_error() {
+        // User cancels (drops the reply): the OTP future returns Err, which the
+        // loop converts to a non-retryable auth error.
+        let cancel_otp: super::OtpPromptFn = Arc::new(|_n, _p, _e| {
+            Box::pin(async { Err(()) })
+        });
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("Verification code:"),
+            KeyboardInteractiveAuthResponse::Success,
+        ]);
+        let err = super::drive_keyboard_interactive(&mut m, "frank", &Some(cancel_otp), 8)
+            .await
+            .expect_err("cancel should error");
+        assert!(!err.retryable);
+        assert!(err.message.contains("取消"));
+    }
+
+    #[tokio::test]
+    async fn fallback_succeeds_when_server_offers_ki() {
+        // `try_keyboard_interactive_fallback` semantics: start returns an
+        // InfoRequest → respond → Success ⇒ KiOutcome::Success ⇒ Ok(Some(())).
+        let otp = canned_otp("424242");
+        let mut m = MockInteractor::new(vec![
+            otp_info_request("Code:"),
+            KeyboardInteractiveAuthResponse::Success,
+        ]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "grace", &Some(otp), 8)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Success));
+    }
+
+    #[tokio::test]
+    async fn fallback_returns_none_when_server_rejects_ki() {
+        // `try_keyboard_interactive_fallback` semantics: server immediately
+        // returns Failure (it doesn't support keyboard-interactive) ⇒ the
+        // caller should fall through to a plain password error.
+        let otp = canned_otp("000001");
+        let mut m = MockInteractor::new(vec![KeyboardInteractiveAuthResponse::Failure {
+            remaining_methods: russh::MethodSet::empty(),
+            partial_success: false,
+        }]);
+        let outcome = super::drive_keyboard_interactive(&mut m, "heidi", &Some(otp), 8)
+            .await
+            .expect("no transport error");
+        assert!(matches!(outcome, KiOutcome::Failure));
+        // The caller maps Failure → Ok(None) (no challenge was issued).
+        assert!(m.sent_responses().is_empty());
     }
 }

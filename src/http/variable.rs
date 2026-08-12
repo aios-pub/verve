@@ -52,6 +52,9 @@ pub fn substitute(input: &str, vars: &BTreeMap<String, String>) -> String {
 /// - `{{$random}}`    → 10-char alphanumeric string (A-Za-z0-9), new each call.
 ///   Useful for unique-per-request headers like `x-request-id`.
 /// - `{{$uuid}}`      → a lowercase UUID v4 string.
+/// - `{{$sparkid}}`   → a 21-char Base58, time-sortable id (sparkid). Shorter
+///   than a UUID and lexicographically ordered; handy when a backend expects a
+///   compact, sortable identifier.
 /// - `{{$timestamp}}` → Unix seconds since the epoch.
 ///
 /// Returns `None` for anything else (left intact by `substitute`).
@@ -59,6 +62,7 @@ fn dynamic_variable(name: &str) -> Option<String> {
     match name {
         "$random" => Some(random_alphanumeric(10)),
         "$uuid" => Some(uuid::Uuid::new_v4().to_string()),
+        "$sparkid" => Some(sparkid::SparkId::new().to_string()),
         "$timestamp" => Some(current_unix_seconds()),
         _ => None,
     }
@@ -202,6 +206,20 @@ mod tests {
         for &pos in &[8usize, 13, 18, 23] {
             assert_eq!(bytes[pos], b'-', "expected '-' at position {pos}");
         }
+    }
+
+    #[test]
+    fn dynamic_sparkid_is_valid() {
+        let m = vars(&[]);
+        let v = substitute("{{$sparkid}}", &m);
+        assert_eq!(v.len(), 21, "expected 21-char sparkid, got {v}");
+        // Bitcoin Base58 alphabet (excludes 0, O, I, l to stay unambiguous).
+        const BASE58: &[u8] =
+            b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        assert!(
+            v.bytes().all(|b| BASE58.contains(&b)),
+            "expected Base58 chars only, got {v}"
+        );
     }
 
     #[test]

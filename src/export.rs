@@ -274,7 +274,7 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
     }
 
     json!({
-        "project_id": &project.id[..6.min(project.id.len())],
+        "project_id": crate::state::models::id_suffix(&project.id, 6),
         "name": project.name,
         "intro": project.description,
         "global": {
@@ -304,7 +304,7 @@ fn build_postman_doc(project: &Project) -> serde_json::Value {
 
 /// Recursively emit a folder node + its API children + sub-folder nodes.
 fn folder_to_postman_nodes(folder: &Folder, parent_id: &str, out: &mut Vec<serde_json::Value>) {
-    let folder_id = format!("folder_{}", &folder.id[..8.min(folder.id.len())]);
+    let folder_id = format!("folder_{}", crate::state::models::id_suffix(&folder.id, 8));
     // Map folder.base_url → server_id:
     // - Some("{{<server name>}}") (any server placeholder) → server_id "1"
     //   (the single default server we emit in `global.servers`).

@@ -11077,6 +11077,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sparkid"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "511892369be19211db0b96c166cbcfcbc173a20d4ae354100a1570aaa93b9df2"
+dependencies = [
+ "rand 0.9.4",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13316,6 +13325,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "smol",
+ "sparkid",
  "sys-locale",
  "tokio",
  "tokio-tungstenite 0.23.1",

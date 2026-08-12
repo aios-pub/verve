@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::state::models::new_id;
+use crate::state::models::{id_suffix, new_id};
 
 /// One document share.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,9 +374,11 @@ pub fn now_ts() -> i64 {
 
 /// Generate a short 8-char id suitable for URLs (`/s/<id>`).
 pub fn short_id() -> String {
-    // Take the first 8 hex chars of a uuid v4 — plenty of entropy for a
+    // Trailing 8 chars of a sparkid cover its random tail, so two codes minted
+    // in the same timestamp tick still differ (the leading 8 are the timestamp
+    // prefix and would collide). 8 Base58 chars (~46 bits) is ample for a
     // single-user offline tool's share URLs.
-    new_id().chars().take(8).collect()
+    id_suffix(&new_id(), 8)
 }
 
 #[cfg(test)]

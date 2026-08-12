@@ -245,6 +245,7 @@ sys-locale = "0.3"
 # when an open `.md` file is modified by an external program so the editor can
 # auto-reload (clean buffer) or prompt to reload (dirty buffer).
 notify = "7.0"
+sparkid = "2.2.1"
 
 [features]
 default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config"]

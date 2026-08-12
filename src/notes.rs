@@ -212,7 +212,10 @@ fn unique_note_path(dir: &Path, note: &Note, existing: &HashSet<String>) -> Path
     if !existing.contains(&primary) {
         return dir.join(primary);
     }
-    let short_id: String = note.id.chars().take(8).collect();
+    // Trailing 8 chars disambiguate same-title notes reliably: sparkid's
+    // leading chars are a timestamp prefix that collides for notes minted in
+    // the same tick (also fine for legacy uuid ids, whose tail is random hex).
+    let short_id: String = crate::state::models::id_suffix(&note.id, 8);
     let with_id = format!("{base}-{short_id}.md");
     if !existing.contains(&with_id) {
         return dir.join(with_id);
@@ -477,7 +480,10 @@ fn now_str() -> String {
 fn new_note(title: String, parent_id: Option<String>) -> Note {
     let now = now_str();
     Note {
-        id: uuid::Uuid::new_v4().to_string(),
+        // sparkid: 21-char Base58, time-sortable (timestamp prefix + monotonic
+        // counter + random tail). Shorter than a UUID, lexicographically ordered,
+        // and the time-prefix also makes the filename-dedup short_id meaningful.
+        id: sparkid::SparkId::new().to_string(),
         title: if title.is_empty() {
             rust_i18n::t!("notes.untitled").to_string()
         } else {
@@ -738,7 +744,7 @@ mod tests {
 
     fn sample_note(title: &str) -> Note {
         Note {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: sparkid::SparkId::new().to_string(),
             title: title.to_string(),
             content: format!("# {title}\n\n正文 mixed with 中文"),
             created_at: "2026-08-12 10:00:00".to_string(),

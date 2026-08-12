@@ -832,7 +832,7 @@ pub fn migrate_one(
 
     // 8. Build the task record (PRD §3.5, §8.2.7).
     let record = TaskRecord {
-        task_id: uuid::Uuid::new_v4().to_string(),
+        task_id: crate::state::models::new_id(),
         source_path: source.to_string_lossy().into_owned(),
         target_external_path: abs_dest.to_string_lossy().into_owned(),
         symlink_path: source.to_string_lossy().into_owned(),

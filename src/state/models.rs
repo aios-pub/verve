@@ -1688,7 +1688,7 @@ impl WorkspaceMeta {
     /// Create a new (non-default) workspace with a fresh id + `verve/<id>` branch.
     pub fn new(name: impl Into<String>) -> Self {
         let id = new_id();
-        let short = id[..8.min(id.len())].to_string();
+        let short = id_suffix(&id, 8);
         Self {
             id,
             name: name.into(),
@@ -1730,9 +1730,20 @@ impl WorkspacesIndex {
     }
 }
 
-/// Generate a new unique id (uuid v4, simple form).
+/// Generate a new unique id (sparkid: 21-char Base58, time-sortable).
 pub fn new_id() -> String {
-    uuid::Uuid::new_v4().simple().to_string()
+    sparkid::SparkId::new().to_string()
+}
+
+/// Take the trailing `n` chars of `id`. Use this — not the leading chars — when
+/// shortening a sparkid for a short code, label, or dedup key: sparkid's
+/// leading chars are a timestamp prefix and collide for near-simultaneous ids,
+/// whereas the trailing chars cover the random tail. (Also safe for legacy uuid
+/// ids, whose tail is random hex.) Returns fewer than `n` chars if `id` is
+/// shorter than `n`.
+pub fn id_suffix(id: &str, n: usize) -> String {
+    let skip = id.chars().count().saturating_sub(n);
+    id.chars().skip(skip).collect()
 }
 
 /// Build a `BTreeMap` of the effective variables for a single request, applying

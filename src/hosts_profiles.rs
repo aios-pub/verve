@@ -97,7 +97,7 @@ pub fn save(store: &HostsProfileStore) -> Result<()> {
 }
 
 fn default_store() -> HostsProfileStore {
-    let default_id = uuid::Uuid::new_v4().to_string();
+    let default_id = crate::state::models::new_id();
     HostsProfileStore {
         profiles: vec![HostsProfile {
             id: default_id.clone(),
@@ -114,7 +114,7 @@ fn default_store() -> HostsProfileStore {
 
 /// Create a new empty profile.
 pub fn create_profile(store: &mut HostsProfileStore, name: String) -> &HostsProfile {
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = crate::state::models::new_id();
     let profile = HostsProfile {
         id: id.clone(),
         name: if name.is_empty() {
@@ -144,7 +144,7 @@ pub fn delete_profile(store: &mut HostsProfileStore, id: &str) {
 /// Add a new entry to the active (or specified) profile.
 pub fn add_entry(store: &mut HostsProfileStore, profile_id: &str) {
     let entry = HostEntryEdit {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: crate::state::models::new_id(),
         ip: "127.0.0.1".to_string(),
         host: String::new(),
         comment: None,

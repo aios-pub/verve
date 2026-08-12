@@ -48,6 +48,10 @@ pub struct NotesStore {
     /// Note ids whose child lists are currently collapsed in the sidebar.
     #[serde(default)]
     pub collapsed: Vec<String>,
+    /// In-memory id → path cache (not persisted; rebuilt by `load`). Lets
+    /// `save_note` find the old file in O(1) after a title rename.
+    #[serde(skip)]
+    pub file_paths: NoteFilePaths,
 }
 
 /// Push a command ID to the recent-commands list, deduping and truncating to 5.
@@ -60,6 +64,12 @@ pub fn push_recent_command(recent: &mut Vec<String>, id: &str) {
 fn default_view_mode() -> String {
     "live".to_string()
 }
+
+/// In-memory cache mapping note id → on-disk `.md` path. Rebuilt by `load()`
+/// and maintained incrementally by `save_note` / `delete_notes_files`, so note
+/// writes can locate the (possibly renamed) old file in O(1) instead of
+/// scanning the whole directory.
+pub type NoteFilePaths = HashMap<String, PathBuf>;
 
 // ---- paths ----------------------------------------------------------------
 
@@ -253,46 +263,51 @@ fn atomic_write_text(path: &Path, content: &str) -> Result<()> {
 // ---- per-note & meta persistence ------------------------------------------
 
 /// Persist a single note to its own `.md` file (atomic write). A title change
-/// renames the file automatically: the old file is removed before the new one
-/// is written.
-pub fn save_note(note: &Note) -> Result<()> {
+/// renames the file automatically: the old file is removed (via `paths` in
+/// O(1)) before the new one is written, and `paths` is updated.
+pub fn save_note(note: &Note, paths: &mut NoteFilePaths) -> Result<()> {
     let dir = data_dir()?;
     let notes_dir = notes_dir_path(&dir);
     fs::create_dir_all(&notes_dir).with_context(|| format!("create {:?}", notes_dir))?;
-    save_note_to_dir(&notes_dir, note)
+    save_note_to_dir(&notes_dir, note, paths)
 }
 
-fn save_note_to_dir(notes_dir: &Path, note: &Note) -> Result<()> {
-    delete_note_file_by_id(notes_dir, &note.id);
+fn save_note_to_dir(notes_dir: &Path, note: &Note, paths: &mut NoteFilePaths) -> Result<()> {
+    // Remove the old file in O(1) via the cached path — a title rename changes
+    // the filename, so it can't be derived. Fall back to a directory scan only
+    // when the id isn't cached (e.g. a file created externally since `load`).
+    if let Some(old) = paths.get(&note.id) {
+        if old.exists() {
+            let _ = fs::remove_file(old);
+        }
+    } else {
+        delete_note_file_by_id(notes_dir, &note.id);
+    }
     let existing = collect_md_filenames(notes_dir);
     let path = unique_note_path(notes_dir, note, &existing);
     let md = note_to_markdown(note)?;
-    atomic_write_text(&path, &md)
+    atomic_write_text(&path, &md)?;
+    paths.insert(note.id.clone(), path);
+    Ok(())
 }
 
 /// Delete the on-disk file backing a note (no-op if it is already gone).
-pub fn delete_note_file(id: &str) {
+pub fn delete_note_file(id: &str, paths: &mut NoteFilePaths) {
+    if let Some(p) = paths.remove(id) {
+        let _ = fs::remove_file(&p);
+        return;
+    }
     let Ok(dir) = data_dir() else { return };
     delete_note_file_by_id(&notes_dir_path(&dir), id);
 }
 
-/// Delete the on-disk files backing each note id in a single directory sweep.
-pub fn delete_notes_files(ids: &[String]) {
-    let Ok(dir) = data_dir() else { return };
-    let ndir = notes_dir_path(&dir);
-    let Ok(it) = fs::read_dir(&ndir) else { return };
-    let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    for entry in it.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "md") {
-            if let Ok(text) = fs::read_to_string(&path) {
-                if parse_note_markdown(&text)
-                    .map(|n| id_set.contains(n.id.as_str()))
-                    .unwrap_or(false)
-                {
-                    let _ = fs::remove_file(&path);
-                }
-            }
+/// Delete the on-disk files backing each note id in O(ids) using the path
+/// cache. (Ids absent from the cache are skipped — they reappear on the next
+/// `load`. The cache is kept complete by `load` + the fs watcher at runtime.)
+pub fn delete_notes_files(ids: &[String], paths: &mut NoteFilePaths) {
+    for id in ids {
+        if let Some(p) = paths.remove(id) {
+            let _ = fs::remove_file(&p);
         }
     }
 }
@@ -364,13 +379,17 @@ pub fn load() -> NotesStore {
     let _ = fs::create_dir_all(&notes_dir);
 
     let mut notes: Vec<Note> = Vec::new();
+    let mut file_paths: NoteFilePaths = HashMap::new();
     if let Ok(it) = fs::read_dir(&notes_dir) {
         for entry in it.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "md") {
                 match fs::read_to_string(&path) {
                     Ok(text) => match parse_note_markdown(&text) {
-                        Some(n) => notes.push(n),
+                        Some(n) => {
+                            file_paths.insert(n.id.clone(), path.clone());
+                            notes.push(n);
+                        }
                         None => log::warn!("skip malformed note {:?}", path),
                     },
                     Err(e) => log::warn!("read note {:?} failed: {e:?}", path),
@@ -388,6 +407,7 @@ pub fn load() -> NotesStore {
         view_mode: meta.view_mode,
         recent_commands: meta.recent_commands,
         collapsed: meta.collapsed,
+        file_paths,
     }
 }
 
@@ -410,8 +430,9 @@ fn migrate_from_json_if_needed(dir: &Path) -> Result<()> {
         }
     };
     fs::create_dir_all(&notes_dir)?;
+    let mut paths: NoteFilePaths = HashMap::new();
     for note in &old.notes {
-        if let Err(e) = save_note_to_dir(&notes_dir, note) {
+        if let Err(e) = save_note_to_dir(&notes_dir, note, &mut paths) {
             log::warn!("migrate note {} failed: {e:?}", note.id);
         }
     }
@@ -436,8 +457,11 @@ pub fn save(store: &NotesStore) -> Result<()> {
     let dir = data_dir()?;
     let notes_dir = notes_dir_path(&dir);
     fs::create_dir_all(&notes_dir)?;
+    // Clone the cache so the (immutable) store isn't mutated; this legacy
+    // full-write path isn't hot — see `save_note` for normal use.
+    let mut paths = store.file_paths.clone();
     for note in &store.notes {
-        if let Err(e) = save_note_to_dir(&notes_dir, note) {
+        if let Err(e) = save_note_to_dir(&notes_dir, note, &mut paths) {
             log::warn!("save note {} failed: {e:?}", note.id);
         }
     }
@@ -781,25 +805,50 @@ mod tests {
         let (_env, _dir) = setup_test_env();
         let note = sample_note("独立笔记");
         let id = note.id.clone();
-        save_note(&note).unwrap();
+        let mut paths = NoteFilePaths::new();
+        save_note(&note, &mut paths).unwrap();
+        assert!(paths.contains_key(&id), "path cache updated after save");
 
         let loaded = load();
         assert_eq!(loaded.notes.len(), 1);
         assert_eq!(loaded.notes[0].id, id);
         assert_eq!(loaded.notes[0].content, note.content);
+        assert!(loaded.file_paths.contains_key(&id), "load rebuilds path cache");
     }
 
     #[test]
     fn rename_via_title_change() {
         let (_env, _dir) = setup_test_env();
         let mut note = sample_note("旧标题");
-        save_note(&note).unwrap();
+        let mut paths = NoteFilePaths::new();
+        save_note(&note, &mut paths).unwrap();
         note.title = "新标题".to_string();
-        save_note(&note).unwrap();
+        save_note(&note, &mut paths).unwrap();
 
         let loaded = load();
         assert_eq!(loaded.notes.len(), 1, "old file should be removed");
         assert_eq!(loaded.notes[0].title, "新标题");
+    }
+
+    /// A title rename removes the old file via the cached path (O(1)), not a
+    /// directory scan — after two saves with different titles there must be
+    /// exactly one `.md` on disk, and the stale path no longer exists.
+    #[test]
+    fn save_note_uses_cached_path_for_rename() {
+        let (_env, dir) = setup_test_env();
+        let mut note = sample_note("first");
+        let mut paths = NoteFilePaths::new();
+        save_note(&note, &mut paths).unwrap();
+        let old_path = paths.get(&note.id).cloned().expect("cached");
+        note.title = "second".to_string();
+        save_note(&note, &mut paths).unwrap();
+        assert!(!old_path.exists(), "old file removed via cache, not scan");
+        let md_count = fs::read_dir(dir.join("notes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .count();
+        assert_eq!(md_count, 1);
     }
 
     #[test]
@@ -807,10 +856,12 @@ mod tests {
         let (_env, _dir) = setup_test_env();
         let note = sample_note("待删除");
         let id = note.id.clone();
-        save_note(&note).unwrap();
-        delete_note_file(&id);
+        let mut paths = NoteFilePaths::new();
+        save_note(&note, &mut paths).unwrap();
+        delete_note_file(&id, &mut paths);
         let loaded = load();
         assert!(loaded.notes.is_empty());
+        assert!(!paths.contains_key(&id), "path cache cleared after delete");
     }
 
     #[test]

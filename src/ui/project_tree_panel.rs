@@ -86,6 +86,9 @@ pub struct ProjectTreePanel {
     /// The tree node id the cursor is hovering over while dragging (drop
     /// target highlight). Cleared on drop.
     pub drop_target: Option<String>,
+    /// Tree node id (`request:<id>` / `folder:<id>`) currently awaiting a
+    /// move destination via the "移动至" picker overlay. `None` = closed.
+    pub move_picker_node: Option<String>,
     _subs: Vec<gpui::Subscription>,
     focus_handle: FocusHandle,
 }
@@ -109,6 +112,7 @@ impl ProjectTreePanel {
             collapsed_folders: std::collections::HashSet::new(),
             dragging_node: None,
             drop_target: None,
+            move_picker_node: None,
             _subs: Vec::new(),
             focus_handle: cx.focus_handle(),
         };
@@ -780,6 +784,11 @@ impl Render for ProjectTreePanel {
                                 )
                             })
                             .separator()
+                            .menu_with_enable(
+                                "移动至",
+                                Box::new(TreeAction::MoveTo(node.clone())),
+                                true,
+                            )
                             .menu_with_enable(
                                 "Rename",
                                 Box::new(TreeAction::Rename(node.clone())),
@@ -1518,6 +1527,58 @@ impl ProjectTreePanel {
         });
     }
 
+    /// Open the "移动至" destination picker for a tree node (`request:<id>` or
+    /// `folder:<id>`). The picker is a centered overlay listing every folder
+    /// (plus a "根目录" root option); selecting one performs the move via the
+    /// model's `move_request` / `move_folder` + `MoveTarget`.
+    pub fn start_move_to(&mut self, node: String, cx: &mut Context<Self>) {
+        // Sync AppState selection to the moved node so the highlight follows
+        // (mirrors start_rename).
+        if let Some(req_id) = parse_request_id(&node) {
+            let req_id = req_id.to_string();
+            if self.state.read(cx).selected_request.as_deref() != Some(&req_id) {
+                self.on_select_request(req_id, cx);
+            }
+        } else if let Some(fid) = parse_folder_id(&node) {
+            let fid = fid.to_string();
+            if self.state.read(cx).selected_folder.as_deref() != Some(&fid) {
+                self.on_select_folder(fid, cx);
+            }
+        }
+        self.move_picker_node = Some(node);
+        cx.notify();
+    }
+
+    /// Execute the move requested by the "移动至" picker: relocate the source
+    /// node (`request:<id>` / `folder:<id>`) into the chosen destination, then
+    /// close the picker. Reuses the model's `move_request` / `move_folder` and
+    /// the `MoveTarget` enum (same path drag-and-drop uses).
+    pub fn apply_move_to(&mut self, source_node: String, dest: MoveTarget, cx: &mut Context<Self>) {
+        let src_req = parse_request_id(&source_node).map(|s| s.to_string());
+        let src_folder = parse_folder_id(&source_node).map(|s| s.to_string());
+
+        let moved = self.state.update(cx, |s, cx| {
+            let project = match s.active_project_mut() {
+                Some(p) => p,
+                None => return false,
+            };
+            let ok = if let Some(req_id) = src_req {
+                project.move_request(&req_id, &dest)
+            } else if let Some(fid) = src_folder {
+                project.move_folder(&fid, &dest)
+            } else {
+                false
+            };
+            if ok {
+                s.notify_workspace(cx);
+            }
+            ok
+        });
+        let _ = moved;
+        self.move_picker_node = None;
+        cx.notify();
+    }
+
     /// Resolve the current display name for a tree node id.
     fn current_name_for_node(&self, node: &str, cx: &mut Context<Self>) -> Option<String> {
         let project = self.state.read(cx).active_project()?;
@@ -1751,7 +1812,12 @@ impl ProjectTreePanel {
                 self.show_info("复制到其它分支", "分支功能开发中。", window, cx);
             }
             TreeAction::MoveTo(_) => {
-                self.show_info("移动至", "请拖拽或右键选择目标文件夹。", window, cx);
+                // Defer so the popup/context menu has fully closed before we
+                // open the destination picker overlay.
+                let node = node.to_string();
+                cx.defer_in(window, move |this, window, cx| {
+                    this.start_move_to(node, window, cx);
+                });
             }
             TreeAction::Copy(_) => {
                 if let Some(id) = req_id {

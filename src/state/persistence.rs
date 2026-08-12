@@ -272,9 +272,12 @@ pub fn save_notes(store: &crate::notes::NotesStore) -> Result<()> {
 }
 
 /// Persist a single note to its own `.md` file (atomic write; title changes
-/// rename the file automatically).
-pub fn save_note_one(note: &crate::notes::Note) -> Result<()> {
-    crate::notes::save_note(note)
+/// rename the file automatically via the `paths` cache in O(1)).
+pub fn save_note_one(
+    note: &crate::notes::Note,
+    paths: &mut crate::notes::NoteFilePaths,
+) -> Result<()> {
+    crate::notes::save_note(note, paths)
 }
 
 /// Persist notes UI state + sidebar ordering to `notes.meta.json`.
@@ -282,9 +285,10 @@ pub fn save_notes_meta(store: &crate::notes::NotesStore) -> Result<()> {
     crate::notes::save_meta(store)
 }
 
-/// Delete the on-disk `.md` files for each note id (used by cascade deletes).
-pub fn delete_notes_files(ids: &[String]) {
-    crate::notes::delete_notes_files(ids)
+/// Delete the on-disk `.md` files for each note id (used by cascade deletes),
+/// in O(ids) using the path cache.
+pub fn delete_notes_files(ids: &[String], paths: &mut crate::notes::NoteFilePaths) {
+    crate::notes::delete_notes_files(ids, paths)
 }
 
 // ---------------------------------------------------------------------------

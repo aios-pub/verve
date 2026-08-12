@@ -343,7 +343,7 @@ impl NotesPanel {
     /// and refresh UI meta. No-op if the id is unknown.
     fn persist_note_meta(&mut self, id: &str) {
         if let Some(note) = self.store.notes.iter().find(|n| n.id == id).cloned() {
-            let _ = crate::state::persistence::save_note_one(&note);
+            let _ = crate::state::persistence::save_note_one(&note, &mut self.store.file_paths);
         }
         let _ = crate::state::persistence::save_notes_meta(&self.store);
         self.last_self_save = Some(Instant::now());
@@ -407,6 +407,9 @@ impl NotesPanel {
         let keep_active = self.store.active_note.clone();
         let reloaded = crate::state::persistence::load_notes();
         self.store.notes = reloaded.notes;
+        // Refresh the id→path cache from the reloaded store (external edits may
+        // have added/removed/renamed files).
+        self.store.file_paths = reloaded.file_paths;
         let still_present = keep_active
             .as_ref()
             .is_some_and(|id| self.store.notes.iter().any(|n| &n.id == id));
@@ -490,7 +493,7 @@ impl NotesPanel {
         // Collect subtree ids before the cascade removes them from memory.
         let to_remove = notes::note_ids_in_subtree(&self.store, id);
         delete_note_cascade(&mut self.store, id);
-        crate::state::persistence::delete_notes_files(&to_remove);
+        crate::state::persistence::delete_notes_files(&to_remove, &mut self.store.file_paths);
         if let Some(note) = self.store.notes.first() {
             let content = note.content.clone();
             self.store.active_note = Some(note.id.clone());

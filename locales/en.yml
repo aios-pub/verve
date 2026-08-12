@@ -80,6 +80,7 @@ notes:
   collapse_list: "Collapse Notes"
   expand_list: "Expand Notes"
   note_count: "%{count} notes"
+  title_char_count: "%{count} chars"
   confirm_delete: Confirm Delete Note
   confirm_delete_msg: "Delete note \"%{title}\"? This cannot be undone."
   confirm_delete_cascade: "Delete note \"%{title}\" and its %{count} sub-note(s)? This cannot be undone."

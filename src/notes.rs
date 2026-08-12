@@ -175,7 +175,7 @@ fn note_to_markdown(note: &Note) -> Result<String> {
 
 /// Parse a note from a Markdown document with YAML frontmatter. Returns
 /// `None` (rather than panicking) when the file is malformed.
-fn parse_note_markdown(text: &str) -> Option<Note> {
+pub(crate) fn parse_note_markdown(text: &str) -> Option<Note> {
     let (yaml, body) = split_frontmatter(text)?;
     let fm: NoteFrontmatter = serde_yaml::from_str(yaml).ok()?;
     // Drop the single blank line that separates the frontmatter fence from

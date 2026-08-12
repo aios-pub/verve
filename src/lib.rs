@@ -26,6 +26,7 @@ pub mod import;
 pub mod k8s;
 pub mod mock;
 pub mod notes;
+pub mod notes_index;
 pub mod notes_pdf;
 pub mod proxy;
 pub mod relocate;

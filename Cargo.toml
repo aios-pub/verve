@@ -246,6 +246,8 @@ sys-locale = "0.3"
 # auto-reload (clean buffer) or prompt to reload (dirty buffer).
 notify = "7.0"
 sparkid = "2.2.1"
+tantivy = "0.26"
+tantivy-jieba = "0.20"
 
 [features]
 default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config"]

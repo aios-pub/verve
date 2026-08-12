@@ -20,6 +20,7 @@ use crate::state::{AppEvent, AppState};
 use crate::wysiwyg::editor::count_words;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Ignore watcher events arriving within this window after our own write,
@@ -65,6 +66,16 @@ pub struct NotesPanel {
     /// Time of the last save initiated by this panel; used to ignore the
     /// watcher events triggered by our own writes.
     last_self_save: Option<Instant>,
+    /// Full-text search index (tantivy). `None` when the on-disk index could
+    /// not be opened/built — search then falls back to the in-memory matcher.
+    notes_index: Option<Arc<crate::notes_index::NotesIndex>>,
+    /// Lifecycle of the index, surfaced in the UI so the user can tell while a
+    /// full rebuild is in progress (search falls back to memory meanwhile).
+    index_status: crate::notes_index::IndexStatus,
+    /// Sender to the single background index worker. `None` until the index is
+    /// opened (or if it failed to open) — mutations are then simply dropped,
+    /// which is fine because search falls back to the in-memory matcher.
+    index_tx: Option<std::sync::mpsc::Sender<IndexCmd>>,
 }
 
 fn note_node(id: &str) -> String {
@@ -72,6 +83,243 @@ fn note_node(id: &str) -> String {
 }
 fn parse_note_id(node: &str) -> Option<&str> {
     node.strip_prefix("note:")
+}
+
+/// A mutation to apply to the notes full-text index. All mutations are sent
+/// through a single channel to one background worker (see
+/// [`NotesPanel::spawn_index_worker`]) which applies them **in send order**.
+/// This is what makes background indexing safe: a newer upsert can never be
+/// overwritten by an older one, and a rebuild never interleaves with a
+/// concurrent upsert (which would duplicate documents).
+enum IndexCmd {
+    Upsert(Note),
+    Delete(String),
+    /// Wipe and rebuild from the on-disk markdown in this dir. The worker
+    /// refreshes `index_status` when it finishes (Ready/Failed).
+    Rebuild(std::path::PathBuf),
+}
+
+// ---------------------------------------------------------------------------
+// Full-text note search
+// ---------------------------------------------------------------------------
+
+/// A single full-text search hit, ready to render.
+struct NoteSearchResult {
+    note_id: String,
+    /// Display title (never empty — falls back to the localized "untitled").
+    title: String,
+    /// Byte range of the match within `title` (char-boundary safe), if any.
+    title_match: Option<(usize, usize)>,
+    /// Content excerpt around the first content match.
+    snippet: Option<String>,
+    /// Byte range of the match within `snippet` (when `snippet` is present).
+    snippet_match: Option<(usize, usize)>,
+}
+
+/// Case-insensitive substring search. Returns the first match as a byte range
+/// **into `haystack`** (the original-case string), with both ends guaranteed to
+/// be UTF-8 char boundaries.
+///
+/// Matching folds each original character to its first lowercase form (enough
+/// for ASCII + CJK, which is what notes contain). Multi-codepoint case foldings
+/// (e.g. 'İ') are approximated by their first lowercase char; this only affects
+/// exotic inputs and never panics. `None` for an empty needle.
+fn find_ci(haystack: &str, needle: &str) -> Option<(usize, usize)> {
+    let n: Vec<char> = needle
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    if n.is_empty() {
+        return None;
+    }
+    // Lowercased view of the haystack, parallel to `indices` (one entry per
+    // original char). `indices[i]` is the byte offset in `haystack` where the
+    // i-th original char starts — always a char boundary.
+    let h_lower: Vec<char> = haystack
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    let indices: Vec<usize> = haystack.char_indices().map(|(b, _)| b).collect();
+    let last = h_lower.len().saturating_sub(n.len());
+    for i in 0..=last {
+        let mut ok = true;
+        for j in 0..n.len() {
+            if h_lower.get(i + j) != n.get(j) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            // Start of the match = char boundary at original index `i`.
+            let start = *indices.get(i)?;
+            // End = char boundary just past the last matched char; fall back to
+            // `haystack.len()` (also a char boundary) when off the end.
+            let end = *indices.get(i + n.len()).unwrap_or(&haystack.len());
+            return Some((start, end));
+        }
+    }
+    None
+}
+
+/// Build a short excerpt of `content` centered on `[match_start, match_end)`.
+/// `match_start` / `match_end` must be char-boundary byte offsets into `content`
+/// (as returned by [`find_ci`]). Returns `(snippet, hl_start, hl_end)` where the
+/// highlight range is relative to the returned snippet and is char-boundary safe.
+fn build_content_snippet(
+    content: &str,
+    match_start: usize,
+    match_end: usize,
+) -> (String, usize, usize) {
+    const CHARS_BEFORE: usize = 16;
+    const CHARS_AFTER: usize = 40;
+
+    // Snippet start: at most CHARS_BEFORE original chars before `match_start`.
+    let mut starts: Vec<usize> = content
+        .char_indices()
+        .map(|(b, _)| b)
+        .filter(|b| *b <= match_start)
+        .collect();
+    let snip_start = if starts.len() > CHARS_BEFORE {
+        *starts.get(starts.len() - 1 - CHARS_BEFORE).unwrap_or(&0)
+    } else {
+        0
+    };
+    // Drop the temp vec so `content` borrows below are cleaner (optional).
+    starts.clear();
+
+    // Snippet end: CHARS_AFTER original chars after `match_end`.
+    let mut end_byte = content.len();
+    let mut count = 0usize;
+    for (b, _) in content.char_indices() {
+        if b < match_end {
+            continue;
+        }
+        count += 1;
+        if count > CHARS_AFTER {
+            end_byte = b;
+            break;
+        }
+    }
+
+    let leading = snip_start > 0;
+    let trailing = end_byte < content.len();
+    let before = content.get(snip_start..match_start).unwrap_or("");
+    let matched = content.get(match_start..match_end).unwrap_or("");
+    let after = content.get(match_end..end_byte).unwrap_or("");
+
+    let mut text = String::new();
+    if leading {
+        text.push('…');
+    }
+    text.push_str(before);
+    let hl_start = text.len();
+    text.push_str(matched);
+    let hl_end = text.len();
+    text.push_str(after);
+    if trailing {
+        text.push('…');
+    }
+    (text, hl_start, hl_end)
+}
+
+/// Build a highlight-ready [`NoteSearchResult`] for a single note — locates
+/// the query in the title and/or content and builds a content snippet. Used by
+/// both the in-memory matcher and the tantivy index path (which already ranked
+/// the note but still needs the highlight spans).
+fn result_for_note(note: &crate::notes::Note, q: &str, untitled: &str) -> NoteSearchResult {
+    let title_match = find_ci(&note.title, q);
+    let snippet = find_ci(&note.content, q).map(|(s, e)| build_content_snippet(&note.content, s, e));
+    NoteSearchResult {
+        note_id: note.id.clone(),
+        title: if note.title.is_empty() {
+            untitled.to_string()
+        } else {
+            note.title.clone()
+        },
+        title_match,
+        snippet: snippet.as_ref().map(|(t, _, _)| t.clone()),
+        snippet_match: snippet.map(|(_, hs, he)| (hs, he)),
+    }
+}
+
+/// In-memory full-text search across notes, returning at most `limit` hits.
+///
+/// Title matches are listed first (in store order), then content-only matches,
+/// so the most relevant results surface at the top. This is the fallback path
+/// used while the tantivy index is still building or unavailable; the index
+/// path (see [`NotesPanel::collect_search_results`]) takes over once Ready.
+fn search_notes(notes: &[crate::notes::Note], query: &str, limit: usize) -> Vec<NoteSearchResult> {
+    let q = query.trim();
+    if q.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let untitled = rust_i18n::t!("notes.untitled").to_string();
+
+    // Partition into title-matches vs content-only matches.
+    let mut with_title: Vec<&crate::notes::Note> = Vec::new();
+    let mut content_only: Vec<&crate::notes::Note> = Vec::new();
+    for note in notes.iter() {
+        let tm = find_ci(&note.title, q).is_some();
+        let cm = find_ci(&note.content, q).is_some();
+        if !tm && !cm {
+            continue;
+        }
+        if tm {
+            with_title.push(note);
+        } else {
+            content_only.push(note);
+        }
+    }
+
+    let mut out: Vec<NoteSearchResult> = Vec::new();
+    for note in with_title.iter().chain(content_only.iter()) {
+        if out.len() >= limit {
+            break;
+        }
+        out.push(result_for_note(note, q, &untitled));
+    }
+    out
+}
+
+/// Render a single text line, highlighting the byte range `range` (if valid)
+/// with `hl_bg`/`hl_fg`. The rest of the text uses `base` color. All slicing
+/// goes through `.get(..)` / `is_char_boundary`, so a malformed range simply
+/// falls back to a plain (un-highlighted) line — never panics.
+fn render_highlighted(
+    text: &str,
+    range: Option<(usize, usize)>,
+    base: Hsla,
+    hl_fg: Hsla,
+    hl_bg: Hsla,
+) -> Div {
+    let mut row = h_flex().items_center().min_w_0();
+    let valid = range.filter(|(s, e)| {
+        s <= e && *s <= text.len() && *e <= text.len() && text.is_char_boundary(*s) && text.is_char_boundary(*e)
+    });
+    match valid {
+        Some((s, e)) => {
+            let before = text.get(..s).unwrap_or("");
+            let mid = text.get(s..e).unwrap_or("");
+            let after = text.get(e..).unwrap_or("");
+            if !before.is_empty() {
+                row = row.child(div().min_w_0().truncate().text_color(base).child(before.to_string()));
+            }
+            if !mid.is_empty() {
+                row = row.child(div().text_color(hl_fg).bg(hl_bg).child(mid.to_string()));
+            }
+            if !after.is_empty() {
+                row = row.child(div().min_w_0().truncate().text_color(base).child(after.to_string()));
+            }
+            row
+        }
+        None => row.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(base)
+                .child(text.to_string()),
+        ),
+    }
 }
 
 impl NotesPanel {
@@ -93,7 +341,8 @@ impl NotesPanel {
         });
 
         let search = cx.new(|cx| {
-            let mut input = InputState::new(window, cx);
+            let mut input =
+                InputState::new(window, cx).placeholder(rust_i18n::t!("notes.search_ph"));
             input.set_value(String::new(), window, cx);
             input
         });
@@ -161,9 +410,13 @@ impl NotesPanel {
             watcher,
             watcher_rx: wrx,
             last_self_save: None,
+            notes_index: None,
+            index_status: crate::notes_index::IndexStatus::Building,
+            index_tx: None,
         };
         panel.rebuild_tree(cx);
         panel.start_external_change_loop(cx);
+        panel.start_index_build(cx);
         panel
     }
 
@@ -345,6 +598,10 @@ impl NotesPanel {
     fn persist_note_meta(&mut self, id: &str) {
         if let Some(note) = self.store.notes.iter().find(|n| n.id == id).cloned() {
             let _ = crate::state::persistence::save_note_one(&note, &mut self.store.file_paths);
+            // Keep the full-text index in sync (queued to the background
+            // worker, non-blocking). This is the single chokepoint for
+            // create/edit/title/pin/move/duplicate/import.
+            self.index_upsert(note);
         }
         let _ = crate::state::persistence::save_notes_meta(&self.store);
         self.last_self_save = Some(Instant::now());
@@ -372,6 +629,145 @@ impl NotesPanel {
             }
         })
         .detach();
+    }
+
+    // -- full-text search index ---------------------------------------------
+
+    /// Bootstrap the full-text index in the background: open/create it, rebuild
+    /// from the on-disk markdown, then start the single serial worker that owns
+    /// the writer and drains all subsequent mutations in order. Flips the status
+    /// to Ready (or Failed on error).
+    fn start_index_build(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = crate::state::persistence::data_dir().ok() else {
+            self.index_status = crate::notes_index::IndexStatus::Failed;
+            return;
+        };
+        let index_dir = dir.join("notes.index");
+        let notes_dir = dir.join("notes");
+        self.index_status = crate::notes_index::IndexStatus::Building;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            // open_or_create + rebuild_from_disk are CPU/IO-bound → run on the
+            // blocking pool, never the UI thread.
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let idx = crate::notes_index::NotesIndex::open_or_create(&index_dir)?;
+                    idx.rebuild_from_disk(&notes_dir)?;
+                    Ok::<_, anyhow::Error>(idx)
+                })
+                .await;
+            let _ = this.update(cx, |panel, cx| {
+                match result {
+                    Ok(idx) => {
+                        let arc = Arc::new(idx);
+                        // Start the single serial worker before publishing the
+                        // sender, so the very first upsert can't be missed.
+                        let (tx, rx) = std::sync::mpsc::channel::<IndexCmd>();
+                        panel.spawn_index_worker(arc.clone(), rx, cx);
+                        panel.notes_index = Some(arc);
+                        panel.index_tx = Some(tx);
+                        panel.index_status = crate::notes_index::IndexStatus::Ready;
+                    }
+                    Err(e) => {
+                        log::warn!("notes index build failed: {e:?}");
+                        panel.notes_index = None;
+                        panel.index_tx = None;
+                        panel.index_status = crate::notes_index::IndexStatus::Failed;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Spawn the single background worker that owns the index writer. It polls
+    /// `rx` and applies commands **strictly in send order**, so background
+    /// indexing stays correct under rapid edits: no newer upsert is clobbered
+    /// by an older one, and a rebuild never interleaves with an upsert.
+    /// Stops automatically when the panel is dropped (`this.update` fails) or
+    /// the sender is dropped (channel disconnects).
+    fn spawn_index_worker(
+        &mut self,
+        idx: Arc<crate::notes_index::NotesIndex>,
+        rx: std::sync::mpsc::Receiver<IndexCmd>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+                // Drain everything queued since the last tick, in order.
+                loop {
+                    let cmd = match rx.try_recv() {
+                        Ok(c) => c,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    };
+                    let rebuild_ok: Option<bool> = match cmd {
+                        IndexCmd::Upsert(note) => {
+                            if let Err(e) = idx.upsert(&note) {
+                                log::warn!("notes index upsert failed: {e:?}");
+                            }
+                            None
+                        }
+                        IndexCmd::Delete(id) => {
+                            if let Err(e) = idx.delete(&id) {
+                                log::warn!("notes index delete failed: {e:?}");
+                            }
+                            None
+                        }
+                        // A rebuild is heavier (reads all md files); running it
+                        // on this same worker guarantees it never overlaps an
+                        // upsert. The caller already set status = Building.
+                        IndexCmd::Rebuild(dir) => Some(idx.rebuild_from_disk(&dir).is_ok()),
+                    };
+                    if let Some(ok) = rebuild_ok {
+                        let _ = this.update(cx, |panel, cx| {
+                            panel.index_status = if ok {
+                                crate::notes_index::IndexStatus::Ready
+                            } else {
+                                crate::notes_index::IndexStatus::Failed
+                            };
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Queue a full rebuild from the on-disk markdown (used after external file
+    /// changes reload the store). Flips status to Building immediately; the
+    /// worker resets it to Ready/Failed when the rebuild finishes. No-op if the
+    /// worker isn't running.
+    fn schedule_index_rebuild(&mut self, cx: &mut Context<Self>) {
+        let Some(tx) = &self.index_tx else {
+            return;
+        };
+        let Some(dir) = crate::state::persistence::data_dir().ok() else {
+            return;
+        };
+        self.index_status = crate::notes_index::IndexStatus::Building;
+        cx.notify();
+        let _ = tx.send(IndexCmd::Rebuild(dir.join("notes")));
+    }
+
+    /// Queue a single-note upsert to the background worker (non-blocking).
+    fn index_upsert(&self, note: Note) {
+        if let Some(tx) = &self.index_tx {
+            let _ = tx.send(IndexCmd::Upsert(note));
+        }
+    }
+
+    /// Queue a single-note deletion to the background worker (non-blocking).
+    fn index_delete(&self, note_id: String) {
+        if let Some(tx) = &self.index_tx {
+            let _ = tx.send(IndexCmd::Delete(note_id));
+        }
     }
 
     /// Drain queued watcher events and, if any are relevant (and not our own
@@ -419,6 +815,9 @@ impl NotesPanel {
         } else {
             reloaded.active_note
         };
+        // External edits changed the on-disk markdown (the index's source of
+        // truth) — rebuild the full-text index from disk to match.
+        self.schedule_index_rebuild(cx);
         self.rebuild_tree(cx);
         cx.notify();
     }
@@ -488,6 +887,14 @@ impl NotesPanel {
     }
 
     fn delete_note(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Refuse to delete a note that still has children — sub-notes must be
+        // removed bottom-up. The confirm dialog enforces this; this guard is a
+        // defensive backstop for any other caller.
+        if has_children(&self.store, id) {
+            self.pending_delete = None;
+            cx.notify();
+            return;
+        }
         if self.editing_title_id.is_some() {
             self.commit_title_edit(cx);
         }
@@ -495,6 +902,11 @@ impl NotesPanel {
         let to_remove = notes::note_ids_in_subtree(&self.store, id);
         delete_note_cascade(&mut self.store, id);
         crate::state::persistence::delete_notes_files(&to_remove, &mut self.store.file_paths);
+        // Drop the deleted notes (whole subtree) from the full-text index
+        // (queued to the background worker, non-blocking).
+        for rid in &to_remove {
+            self.index_delete(rid.clone());
+        }
         if let Some(note) = self.store.notes.first() {
             let content = note.content.clone();
             self.store.active_note = Some(note.id.clone());
@@ -705,7 +1117,7 @@ impl NotesPanel {
         let format = fmt.to_string();
         let format_for_dialog = format.clone();
         let format_for_save = format.clone();
-        let window_handle: gpui::AnyWindowHandle = window.window_handle().into();
+        let window_handle: gpui::AnyWindowHandle = window.window_handle();
 
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
@@ -842,7 +1254,7 @@ impl NotesPanel {
         let format = fmt.to_string();
         let format_for_dialog = format.clone();
         let format_for_save = format.clone();
-        let window_handle: gpui::AnyWindowHandle = window.window_handle().into();
+        let window_handle: gpui::AnyWindowHandle = window.window_handle();
 
         let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         std::thread::spawn(move || {
@@ -889,9 +1301,118 @@ impl NotesPanel {
 
     // -- rendering -----------------------------------------------------------
 
+    /// Resolve the search hits for `query`, preferring the tantivy index (when
+    /// Ready) for jieba + n-gram recall and relevance ranking, and falling back
+    /// to the in-memory matcher while the index is Building/Failed/unavailable
+    /// so results stay complete at all times.
+    fn collect_search_results(&self, query: &str, limit: usize) -> Vec<NoteSearchResult> {
+        let q = query.trim();
+        if q.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        if self.index_status == crate::notes_index::IndexStatus::Ready {
+            if let Some(idx) = &self.notes_index {
+                if let Ok(hits) = idx.search(q, limit) {
+                    let untitled = rust_i18n::t!("notes.untitled").to_string();
+                    let mut out = Vec::with_capacity(hits.len());
+                    for h in hits {
+                        if let Some(note) = self.store.notes.iter().find(|n| n.id == h.note_id) {
+                            out.push(result_for_note(note, q, &untitled));
+                        }
+                    }
+                    return out;
+                }
+                // Index query errored — fall through to the in-memory matcher.
+            }
+        }
+        search_notes(&self.store.notes, q, limit)
+    }
+
+    /// Full-text search results list (shown in the sidebar in place of the tree
+    /// while a non-empty query is active). Each row highlights the matched span
+    /// in the title and/or a content excerpt, and opens the note on click.
+    /// Capped at 10 hits.
+    fn render_search_results(&self, query: &str, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let view = cx.entity().clone();
+
+        let results = self.collect_search_results(query, 10);
+        let hl_bg = theme.warning.opacity(0.35);
+        let hl_fg = theme.foreground;
+
+        if results.is_empty() {
+            return v_flex()
+                .w_full()
+                .child(
+                    div()
+                        .px_3()
+                        .py_4()
+                        .text_center()
+                        .text_color(theme.muted_foreground)
+                        .text_size(px(12.))
+                        .child(rust_i18n::t!("notes.search_no_results").to_string()),
+                )
+                .into_any_element();
+        }
+
+        let mut col = v_flex().w_full().py_1().gap(px(1.));
+        for (i, r) in results.iter().enumerate() {
+            let nid = r.note_id.clone();
+            let view_for_click = view.clone();
+            let title = r.title.clone();
+            let title_match = r.title_match;
+            let snippet = r.snippet.clone();
+            let snippet_match = r.snippet_match;
+            let fg = theme.foreground;
+            let muted = theme.muted_foreground;
+            let hover_bg = theme.muted.opacity(0.6);
+
+            let row = div()
+                .id(("notes-search-row", i))
+                .w_full()
+                .px_2()
+                .py_1()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(move |c| c.bg(hover_bg))
+                .on_mouse_down(MouseButton::Left, move |_, window, cx: &mut App| {
+                    let nid = nid.clone();
+                    let _ = view_for_click.update(cx, |this, cx| {
+                        this.select_note(&nid, window, cx);
+                        // Clear the query so the tree comes back with the note
+                        // selected — i.e. actually "locate" it in the list.
+                        this.search
+                            .update(cx, |s, cx| s.set_value("", window, cx));
+                    });
+                })
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(render_highlighted(&title, title_match, fg, hl_fg, hl_bg)),
+                )
+                .when(snippet.is_some(), |c| {
+                    let s = snippet.as_deref().unwrap_or("");
+                    c.child(
+                        div().text_size(px(11.)).child(render_highlighted(
+                            s,
+                            snippet_match,
+                            muted,
+                            hl_fg,
+                            hl_bg,
+                        )),
+                    )
+                });
+            col = col.child(row);
+        }
+        col.into_any_element()
+    }
+
     fn render_note_list(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let view = cx.entity().clone();
+        // Non-empty query → show full-text search results instead of the tree.
+        let query = self.search.read(cx).value().to_string();
 
         v_flex()
             .h_full()
@@ -930,6 +1451,28 @@ impl NotesPanel {
                     )
                     .child(Input::new(&self.search).w(px(100.)).small()),
             )
+            // Index-build status bar — only visible while a full rebuild is in
+            // progress, so the user can tell why search may briefly use the
+            // in-memory fallback. Disappears on Ready/Failed.
+            .when(
+                self.index_status == crate::notes_index::IndexStatus::Building,
+                |this| {
+                    this.child(
+                        h_flex()
+                            .w_full()
+                            .px_2()
+                            .py_1()
+                            .gap_1()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .text_color(theme.muted_foreground)
+                            .text_size(px(11.))
+                            .child(gpui_component::spinner::Spinner::new())
+                            .child(rust_i18n::t!("notes.index_building").to_string()),
+                    )
+                },
+            )
             .child(
                 div()
                     .id("notes-list-scroll")
@@ -938,7 +1481,11 @@ impl NotesPanel {
                     .min_h_0()
                     .overflow_y_scroll()
                     .py_1()
-                    .child(
+                    .child(if !query.trim().is_empty() {
+                        // Full-text search results replace the tree while a
+                        // query is active (see `render_search_results`).
+                        self.render_search_results(&query, cx)
+                    } else {
                         tree(&self.tree, move |ix, entry, _selected, _window, cx| {
                             let item = entry.item();
                             let note_id = parse_note_id(item.id.as_ref()).unwrap_or("").to_string();
@@ -1375,8 +1922,8 @@ impl NotesPanel {
                                         })
                                 )
                         })
-                        .into_any_element(),
-                    ),
+                        .into_any_element()
+                    }),
             )
             .into_any_element()
     }
@@ -1389,17 +1936,59 @@ impl NotesPanel {
             .map(|n| count_descendants(&self.store, &n.id))
             .unwrap_or(0);
 
-        let msg = if descendant_count > 0 {
-            rust_i18n::t!(
-                "notes.confirm_delete_cascade",
-                title = note_title.as_str(),
-                count = descendant_count
-            )
-            .to_string()
+        let (title, body, buttons) = if descendant_count > 0 {
+            // Blocked: the note still has sub-notes. Refuse to delete and tell
+            // the user to remove sub-notes first (bottom-up, deepest first).
+            let title = rust_i18n::t!("notes.cannot_delete").to_string();
+            let body = rust_i18n::t!("notes.delete_blocked_msg", count = descendant_count)
+                .to_string();
+            let buttons = h_flex()
+                .w_full()
+                .gap_2()
+                .justify_end()
+                .child(
+                    Button::new("del-ok")
+                        .small()
+                        .ghost()
+                        .child(rust_i18n::t!("common.ok").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pending_delete = None;
+                            cx.notify();
+                        })),
+                )
+                .into_any_element();
+            (title, body, buttons)
         } else {
-            rust_i18n::t!("notes.confirm_delete_msg", title = note_title.as_str()).to_string()
+            let title = rust_i18n::t!("notes.confirm_delete").to_string();
+            let body =
+                rust_i18n::t!("notes.confirm_delete_msg", title = note_title.as_str()).to_string();
+            let id = note_id.to_string();
+            let buttons = h_flex()
+                .w_full()
+                .gap_2()
+                .justify_end()
+                .child(
+                    Button::new("del-cancel")
+                        .small()
+                        .ghost()
+                        .child(rust_i18n::t!("common.cancel").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pending_delete = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("del-confirm")
+                        .small()
+                        .danger()
+                        .child(rust_i18n::t!("common.delete").to_string())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.delete_note(&id, window, cx);
+                        })),
+                )
+                .into_any_element();
+            (title, body, buttons)
         };
-        let id = note_id.to_string();
 
         div()
             .absolute()
@@ -1421,39 +2010,15 @@ impl NotesPanel {
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(rust_i18n::t!("notes.confirm_delete").to_string()),
+                            .child(title),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
                             .text_color(theme.muted_foreground)
-                            .child(msg),
+                            .child(body),
                     )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .justify_end()
-                            .child(
-                                Button::new("del-cancel")
-                                    .small()
-                                    .ghost()
-                                    .child(rust_i18n::t!("common.cancel").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.pending_delete = None;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("del-confirm")
-                                    .small()
-                                    .danger()
-                                    .child(rust_i18n::t!("common.delete").to_string())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.delete_note(&id, window, cx);
-                                    })),
-                            ),
-                    ),
+                    .child(buttons),
             )
             .into_any_element()
     }
@@ -1779,4 +2344,107 @@ fn show_export_error(window_handle: gpui::AnyWindowHandle, detail: &str, cx: &mu
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    // NOTE: do NOT `use super::*` here — the top of this file does `use gpui::*`,
+    // whose re-exported `test` macro would shadow the built-in `#[test]`.
+    use super::{build_content_snippet, find_ci, search_notes};
+    use crate::notes::Note;
+
+    fn note(id: &str, title: &str, content: &str) -> Note {
+        Note {
+            id: id.to_string(),
+            title: title.to_string(),
+            content: content.to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            tags: Vec::new(),
+            parent_id: None,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn find_ci_ascii_case_insensitive() {
+        // Byte offsets match the original-case haystack.
+        assert_eq!(find_ci("Hello World", "world"), Some((6, 11)));
+        assert_eq!(find_ci("Hello World", "WORLD"), Some((6, 11)));
+        assert_eq!(find_ci("Hello World", "xy"), None);
+        assert_eq!(find_ci("abc", ""), None);
+    }
+
+    #[test]
+    fn find_ci_cjk_returns_char_boundary_offsets() {
+        // "笔记应用" — each CJK char is 3 bytes. "应用" starts at byte 6.
+        let hay = "笔记应用";
+        let Some((s, e)) = find_ci(hay, "应用") else {
+            panic!("expected a match");
+        };
+        assert_eq!(s, 6);
+        assert_eq!(e, 12);
+        assert!(hay.is_char_boundary(s));
+        assert!(hay.is_char_boundary(e));
+    }
+
+    #[test]
+    fn find_ci_mixed_case_and_cjk() {
+        let hay = "Rust 笔记";
+        let r = find_ci(hay, "RUST");
+        assert_eq!(r, Some((0, 4)));
+        let r = find_ci(hay, "笔记");
+        assert!(hay.is_char_boundary(r.unwrap().0));
+    }
+
+    #[test]
+    fn build_snippet_centers_on_match_and_uses_char_boundaries() {
+        // The match ("测试") sits well past 16 chars in, so the excerpt should
+        // carry a leading ellipsis.
+        let content = "这是一段很长的笔记内容前缀填充用来定位摘要的截取逻辑，然后测试是否正确。后面还有很多字符。";
+        let (s, e) = find_ci(content, "测试").unwrap();
+        let (snippet, hs, he) = build_content_snippet(content, s, e);
+        // Highlight region must be valid char boundaries in the snippet.
+        assert!(snippet.is_char_boundary(hs));
+        assert!(snippet.is_char_boundary(he));
+        // The highlighted slice must equal the query.
+        assert_eq!(&snippet[hs..he], "测试");
+        // Leading ellipsis because content starts before the window.
+        assert!(snippet.starts_with('…'));
+    }
+
+    #[test]
+    fn search_notes_ranks_title_first_and_caps_limit() {
+        let notes = vec![
+            note("1", "Rust 指南", "学习编程语言"), // content-only match for "编程"
+            note("2", "编程入门", "基础内容"),      // title match for "编程"
+            note("3", "其它", "无关内容"),          // no match
+        ];
+        let out = search_notes(&notes, "编程", 10);
+        assert_eq!(out.len(), 2);
+        // Title match first.
+        assert_eq!(out[0].note_id, "2");
+        assert!(out[0].title_match.is_some());
+        // Content-only match second, with a snippet.
+        assert_eq!(out[1].note_id, "1");
+        assert!(out[1].title_match.is_none());
+        assert!(out[1].snippet.is_some());
+    }
+
+    #[test]
+    fn search_notes_respects_limit() {
+        let mut notes = Vec::new();
+        for i in 0..15 {
+            notes.push(note(&format!("n{i}"), &format!("标题{i}"), "正文匹配词"));
+        }
+        let out = search_notes(&notes, "匹配词", 10);
+        assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn search_notes_empty_query_returns_nothing() {
+        let notes = vec![note("1", "title", "content")];
+        assert!(search_notes(&notes, "", 10).is_empty());
+        assert!(search_notes(&notes, "   ", 10).is_empty());
+    }
 }

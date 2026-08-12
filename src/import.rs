@@ -1177,7 +1177,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             mock_base.value,
-            "https://mock.apipost.net/mock/35ff847188e5000"
+            "https://mock.aios.pub/mock/35ff847188e5000"
         );
 
         // 本地环境: "默认服务" = localhost:3002

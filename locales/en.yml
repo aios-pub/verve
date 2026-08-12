@@ -69,6 +69,8 @@ notes:
   new_note: New Note
   new_sub_note: New Sub-note
   search_ph: "Search notes..."
+  search_no_results: "No matching notes"
+  index_building: "Building search index…"
   untitled: Untitled Note
   live_view: Live
   source_view: Source
@@ -83,7 +85,8 @@ notes:
   word_count: "%{count} words"
   confirm_delete: Confirm Delete Note
   confirm_delete_msg: "Delete note \"%{title}\"? This cannot be undone."
-  confirm_delete_cascade: "Delete note \"%{title}\" and its %{count} sub-note(s)? This cannot be undone."
+  cannot_delete: Cannot Delete Note
+  delete_blocked_msg: "This note still has %{count} sub-note(s). Please delete all sub-notes before deleting it."
   last_updated: "Updated %{time}"
   empty: 'No notes yet. Click "New Note" to start writing.'
   empty_editor: Select a note from the left or create a new one

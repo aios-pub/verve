@@ -69,6 +69,8 @@ notes:
   new_note: 新建笔记
   new_sub_note: 新建子笔记
   search_ph: 搜索笔记…
+  search_no_results: 未找到匹配的笔记
+  index_building: 正在建立搜索索引…
   untitled: 无标题笔记
   live_view: 实时渲染
   source_view: 源码
@@ -83,7 +85,8 @@ notes:
   word_count: "%{count} 字"
   confirm_delete: 确认删除笔记
   confirm_delete_msg: 确定要删除笔记「%{title}」吗？此操作不可撤销。
-  confirm_delete_cascade: 确定要删除笔记「%{title}」及其 %{count} 个子笔记吗？此操作不可撤销。
+  cannot_delete: 无法删除笔记
+  delete_blocked_msg: "该笔记仍包含 %{count} 个子笔记，请先删除所有子笔记后再删除此笔记。"
   last_updated: 更新于 %{time}
   empty: 还没有笔记。点击「新建笔记」开始记录。
   empty_editor: 从左侧选择笔记或新建一个

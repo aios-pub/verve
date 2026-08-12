@@ -18,6 +18,13 @@ use crate::notes::{
 };
 use crate::state::{AppEvent, AppState};
 
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::time::Instant;
+
+/// Ignore watcher events arriving within this window after our own write,
+/// since `notify` surfaces our own saves too.
+const NOTES_SELF_SAVE_FILTER_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
 // ---------------------------------------------------------------------------
 // The panel
 // ---------------------------------------------------------------------------
@@ -50,6 +57,13 @@ pub struct NotesPanel {
     list_collapsed: bool,
     /// Per-row open "..." menu, by node id (e.g. "note:<uuid>").
     row_menu_open: Option<String>,
+    /// FS watcher for the notes directory — picks up external edits so the
+    /// sidebar reflects files changed/added/removed outside the app.
+    watcher: Option<RecommendedWatcher>,
+    watcher_rx: std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    /// Time of the last save initiated by this panel; used to ignore the
+    /// watcher events triggered by our own writes.
+    last_self_save: Option<Instant>,
 }
 
 fn note_node(id: &str) -> String {
@@ -104,6 +118,26 @@ impl NotesPanel {
         let title_sub = cx.subscribe(&title_input, Self::on_title_event);
         let tree_sub = cx.observe(&tree, Self::on_tree_notify);
 
+        // FS watcher for the notes directory (detects external edits). notify
+        // init failing is rare; when it does, external sync is simply disabled.
+        let (wtx, wrx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+        let watcher = match notify::recommended_watcher(wtx) {
+            Ok(mut w) => {
+                if let Ok(dir) = crate::state::persistence::data_dir() {
+                    let notes_dir = dir.join("notes");
+                    let _ = std::fs::create_dir_all(&notes_dir);
+                    if let Err(err) = w.watch(&notes_dir, RecursiveMode::Recursive) {
+                        eprintln!("notes_panel: failed to watch notes dir: {err}");
+                    }
+                }
+                Some(w)
+            }
+            Err(err) => {
+                eprintln!("notes_panel: fs watcher unavailable: {err}");
+                None
+            }
+        };
+
         let mut panel = Self {
             state,
             store,
@@ -123,8 +157,12 @@ impl NotesPanel {
                 .map(|l| l.notes_collapsed)
                 .unwrap_or(false),
             row_menu_open: None,
+            watcher,
+            watcher_rx: wrx,
+            last_self_save: None,
         };
         panel.rebuild_tree(cx);
+        panel.start_external_change_loop(cx);
         panel
     }
 
@@ -181,7 +219,7 @@ impl NotesPanel {
         } else {
             self.store.collapsed.push(note_id.to_string());
         }
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_meta();
         self.rebuild_tree(cx);
     }
 
@@ -242,7 +280,7 @@ impl NotesPanel {
         // New empty sub-note → body in "edit mode" (first block focused), like
         // `new_note`. Title stays "Untitled" (rename via double-click).
         self.reload_editor("", window, cx, true);
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(&new_id);
         self.rebuild_tree(cx);
         // Select the new note in the tree.
         let target = TreeItem::new(note_node(&new_id), "");
@@ -275,7 +313,7 @@ impl NotesPanel {
         notes::update_note_title(&mut self.store, &id, new_title);
         // Write to disk for local safety, but do NOT emit Persisted — git sync
         // follows the configured interval, not every edit.
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(&id);
         self.rebuild_tree(cx);
         cx.notify();
     }
@@ -292,6 +330,92 @@ impl NotesPanel {
             s.set_value(current.to_string(), window, cx);
             s.focus(window, cx);
         });
+        cx.notify();
+    }
+
+    /// Write only UI meta — use when no note content/frontmatter changed.
+    fn persist_meta(&mut self) {
+        let _ = crate::state::persistence::save_notes_meta(&self.store);
+        self.last_self_save = Some(Instant::now());
+    }
+
+    /// Write the note `id` to its own `.md` file (a title change renames it)
+    /// and refresh UI meta. No-op if the id is unknown.
+    fn persist_note_meta(&mut self, id: &str) {
+        if let Some(note) = self.store.notes.iter().find(|n| n.id == id).cloned() {
+            let _ = crate::state::persistence::save_note_one(&note);
+        }
+        let _ = crate::state::persistence::save_notes_meta(&self.store);
+        self.last_self_save = Some(Instant::now());
+    }
+
+    // -- external-change watcher --------------------------------------------
+
+    /// Background loop draining `watcher_rx`; reloads the sidebar when the
+    /// notes directory is touched from outside the app. Stops automatically
+    /// when the panel entity is dropped (`this.update` fails).
+    fn start_external_change_loop(&mut self, cx: &mut Context<Self>) {
+        if self.watcher.is_none() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(80))
+                    .await;
+                let Ok(()) = this.update(cx, |panel, cx| {
+                    panel.drain_watcher_events(cx);
+                }) else {
+                    return; // panel dropped
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// Drain queued watcher events and, if any are relevant (and not our own
+    /// write), reload notes from disk into the sidebar. The active note is
+    /// preserved when it still exists; the editor is intentionally left alone
+    /// so external changes don't disrupt in-progress edits.
+    fn drain_watcher_events(&mut self, cx: &mut Context<Self>) {
+        use notify::EventKind;
+        let mut relevant = false;
+        while let Ok(item) = self.watcher_rx.try_recv() {
+            if !relevant {
+                relevant = item
+                    .map(|ev| {
+                        matches!(
+                            ev.kind,
+                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                                | EventKind::Any
+                        )
+                    })
+                    .unwrap_or(false);
+            }
+        }
+        if !relevant {
+            return;
+        }
+        // Ignore the echo of our own recent save.
+        if self
+            .last_self_save
+            .is_some_and(|t| t.elapsed() < NOTES_SELF_SAVE_FILTER_WINDOW)
+        {
+            return;
+        }
+        // Reload notes from disk, preserving the active selection when possible.
+        let keep_active = self.store.active_note.clone();
+        let reloaded = crate::state::persistence::load_notes();
+        self.store.notes = reloaded.notes;
+        let still_present = keep_active
+            .as_ref()
+            .is_some_and(|id| self.store.notes.iter().any(|n| &n.id == id));
+        self.store.active_note = if still_present {
+            keep_active
+        } else {
+            reloaded.active_note
+        };
+        self.rebuild_tree(cx);
         cx.notify();
     }
 
@@ -314,7 +438,7 @@ impl NotesPanel {
             // Write to local disk for crash safety, but do NOT emit Persisted.
             // Git sync runs on the configured interval (settings.git.sync_interval)
             // rather than firing on every edit.
-            let _ = crate::state::persistence::save_notes(&self.store);
+            self.persist_note_meta(&active_id);
         }
     }
 
@@ -327,7 +451,7 @@ impl NotesPanel {
         // insert tables/images, etc. immediately. The title stays "Untitled"
         // (rename via double-click in the list).
         self.reload_editor("", window, cx, true);
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(&new_id);
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(&new_id), "");
         self.tree.update(cx, |t, cx| {
@@ -363,7 +487,10 @@ impl NotesPanel {
         if self.editing_title_id.is_some() {
             self.commit_title_edit(cx);
         }
+        // Collect subtree ids before the cascade removes them from memory.
+        let to_remove = notes::note_ids_in_subtree(&self.store, id);
         delete_note_cascade(&mut self.store, id);
+        crate::state::persistence::delete_notes_files(&to_remove);
         if let Some(note) = self.store.notes.first() {
             let content = note.content.clone();
             self.store.active_note = Some(note.id.clone());
@@ -371,7 +498,7 @@ impl NotesPanel {
         } else {
             self.reload_editor("", window, cx, true);
         }
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_meta();
         self.pending_delete = None;
         self.rebuild_tree(cx);
         // Deletions must reach the git remote immediately — otherwise the
@@ -398,7 +525,7 @@ impl NotesPanel {
         self.store.active_note = None;
         self.tree.update(cx, |t, cx| t.set_selected_item(None, cx));
         self.reload_editor("", window, cx, false);
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_meta();
         self.rebuild_tree(cx);
         cx.notify();
     }
@@ -495,7 +622,7 @@ impl NotesPanel {
     fn duplicate_note_by_id(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(new_id) = notes::duplicate_note(&mut self.store, id) {
             self.row_menu_open = None;
-            let _ = crate::state::persistence::save_notes(&self.store);
+            self.persist_note_meta(&new_id);
             self.rebuild_tree(cx);
             self.select_note(&new_id, window, cx);
         }
@@ -505,7 +632,7 @@ impl NotesPanel {
     fn toggle_pin_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
         notes::toggle_pin(&mut self.store, id);
         self.row_menu_open = None;
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(id);
         self.rebuild_tree(cx);
         cx.notify();
     }
@@ -514,7 +641,7 @@ impl NotesPanel {
     fn move_note_to_root_by_id(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         notes::move_note_to_root(&mut self.store, id);
         self.row_menu_open = None;
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(id);
         self.rebuild_tree(cx);
         // Keep the note selected after move.
         if self.store.active_note.as_deref() == Some(id) {
@@ -534,7 +661,7 @@ impl NotesPanel {
         let new_id = create_child_note(&mut self.store, parent_id, String::new());
         // New empty sub-note → body in "edit mode" (first block focused).
         self.reload_editor("", window, cx, true);
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(&new_id);
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(&new_id), "");
         self.tree.update(cx, |t, cx| {
@@ -670,7 +797,7 @@ impl NotesPanel {
         let new_id = note.id.clone();
         notes::update_note_content(&mut self.store, &new_id, content);
         self.store.active_note = Some(new_id.clone());
-        let _ = crate::state::persistence::save_notes(&self.store);
+        self.persist_note_meta(&new_id);
         self.editor_needs_reload = true;
         self.rebuild_tree(cx);
         let target = TreeItem::new(note_node(&new_id), "");

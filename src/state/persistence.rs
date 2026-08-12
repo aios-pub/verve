@@ -271,6 +271,22 @@ pub fn save_notes(store: &crate::notes::NotesStore) -> Result<()> {
     crate::notes::save(store)
 }
 
+/// Persist a single note to its own `.md` file (atomic write; title changes
+/// rename the file automatically).
+pub fn save_note_one(note: &crate::notes::Note) -> Result<()> {
+    crate::notes::save_note(note)
+}
+
+/// Persist notes UI state + sidebar ordering to `notes.meta.json`.
+pub fn save_notes_meta(store: &crate::notes::NotesStore) -> Result<()> {
+    crate::notes::save_meta(store)
+}
+
+/// Delete the on-disk `.md` files for each note id (used by cascade deletes).
+pub fn delete_notes_files(ids: &[String]) {
+    crate::notes::delete_notes_files(ids)
+}
+
 // ---------------------------------------------------------------------------
 // Panel layout persistence (resizable panel sizes).
 // ---------------------------------------------------------------------------

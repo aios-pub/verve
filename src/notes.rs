@@ -1,9 +1,13 @@
-//! Notes persistence — stores user markdown notes as JSON in `~/.verve/notes.json`.
+//! Notes persistence — each note is a Markdown file under `~/.verve/notes/`,
+//! with YAML frontmatter holding its metadata (id/title/timestamps/tags/parent/pinned).
 //!
 //! Notes form a tree: each note has an optional `parent_id`; root notes have `None`.
+//! UI-only state (active note, view mode, …) lives in `notes.meta.json`. The
+//! legacy single-file `notes.json` is migrated automatically on first load.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -57,37 +61,387 @@ fn default_view_mode() -> String {
     "live".to_string()
 }
 
-fn notes_path(dir: &Path) -> std::path::PathBuf {
+// ---- paths ----------------------------------------------------------------
+
+fn notes_dir_path(dir: &Path) -> PathBuf {
+    dir.join("notes")
+}
+fn meta_path(dir: &Path) -> PathBuf {
+    dir.join("notes.meta.json")
+}
+fn old_json_path(dir: &Path) -> PathBuf {
     dir.join("notes.json")
 }
+fn bak_path(dir: &Path) -> PathBuf {
+    dir.join("notes.json.bak")
+}
 
-/// Load notes from disk, or return an empty store when the file is missing/corrupt.
+// ---- frontmatter (de)serialization ----------------------------------------
+
+/// Metadata written as YAML frontmatter at the top of each note file. The
+/// field spelling (`parent`, not `parent_id`) matches the on-disk convention.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NoteFrontmatter {
+    id: String,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pinned: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
+}
+
+impl From<&Note> for NoteFrontmatter {
+    fn from(n: &Note) -> Self {
+        NoteFrontmatter {
+            id: n.id.clone(),
+            title: n.title.clone(),
+            created_at: n.created_at.clone(),
+            updated_at: n.updated_at.clone(),
+            tags: n.tags.clone(),
+            parent: n.parent_id.clone(),
+            pinned: n.pinned,
+        }
+    }
+}
+
+impl NoteFrontmatter {
+    fn into_note(self, content: String) -> Note {
+        Note {
+            id: self.id,
+            title: self.title,
+            content,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            tags: self.tags,
+            parent_id: self.parent,
+            pinned: self.pinned,
+        }
+    }
+}
+
+/// Split a Markdown document into `(frontmatter_yaml, body)`. The frontmatter
+/// is delimited by a leading `---` and a closing `---`/`...` on its own line.
+/// Returns `None` when no valid frontmatter block is present. Newline-splitting
+/// stays on ASCII `\n` boundaries, so offsets are always valid char boundaries.
+fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
+    // Tolerate a UTF-8 BOM written by some external editors.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let after_open = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))?;
+    // Walk lines (keeping their trailing newline) so byte offsets land on `\n`.
+    let mut pos = 0usize;
+    for line in after_open.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        if trimmed == "---" || trimmed == "..." {
+            let yaml = &after_open[..pos];
+            let body = &after_open[pos + line.len()..];
+            return Some((yaml, body));
+        }
+        pos += line.len();
+    }
+    None
+}
+
+/// Serialize a note into a Markdown document with YAML frontmatter.
+fn note_to_markdown(note: &Note) -> Result<String> {
+    let fm = NoteFrontmatter::from(note);
+    let yaml = serde_yaml::to_string(&fm)?;
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(yaml.trim_end());
+    out.push_str("\n---\n\n");
+    out.push_str(&note.content);
+    Ok(out)
+}
+
+/// Parse a note from a Markdown document with YAML frontmatter. Returns
+/// `None` (rather than panicking) when the file is malformed.
+fn parse_note_markdown(text: &str) -> Option<Note> {
+    let (yaml, body) = split_frontmatter(text)?;
+    let fm: NoteFrontmatter = serde_yaml::from_str(yaml).ok()?;
+    // Drop the single blank line that separates the frontmatter fence from
+    // the body (see `note_to_markdown`).
+    let body = body.strip_prefix('\n').unwrap_or(body);
+    Some(fm.into_note(body.to_string()))
+}
+
+// ---- filename helpers -----------------------------------------------------
+
+/// Turn a note title into a safe single-segment filename (no extension),
+/// replacing path separators / control chars and clamping the length by char
+/// count so multi-byte titles stay on UTF-8 boundaries.
+fn sanitize_filename(title: &str) -> String {
+    const MAX_LEN: usize = 80;
+    let cleaned: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches(['_', ' ', '.']).to_string();
+    let fallback = rust_i18n::t!("notes.untitled").to_string();
+    let name = if trimmed.is_empty() { fallback } else { trimmed };
+    name.chars().take(MAX_LEN).collect()
+}
+
+/// Compute a non-conflicting `.md` path for `note` inside `dir`.
+fn unique_note_path(dir: &Path, note: &Note, existing: &HashSet<String>) -> PathBuf {
+    let base = sanitize_filename(&note.title);
+    let primary = format!("{base}.md");
+    if !existing.contains(&primary) {
+        return dir.join(primary);
+    }
+    let short_id: String = note.id.chars().take(8).collect();
+    let with_id = format!("{base}-{short_id}.md");
+    if !existing.contains(&with_id) {
+        return dir.join(with_id);
+    }
+    dir.join(format!("{short_id}.md"))
+}
+
+fn collect_md_filenames(dir: &Path) -> HashSet<String> {
+    let mut set = HashSet::new();
+    if let Ok(it) = fs::read_dir(dir) {
+        for entry in it.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "md") {
+                if let Some(name) = entry.file_name().to_str() {
+                    set.insert(name.to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Remove the on-disk file whose frontmatter `id` matches, if any. Used to
+/// delete a note, or to clear the old filename before writing a renamed one.
+fn delete_note_file_by_id(dir: &Path, id: &str) {
+    let Ok(it) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in it.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "md") {
+            if let Ok(text) = fs::read_to_string(&path) {
+                if parse_note_markdown(&text).is_some_and(|n| n.id == id) {
+                    let _ = fs::remove_file(&path);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn atomic_write_text(path: &Path, content: &str) -> Result<()> {
+    let tmp = path.with_extension("md.tmp");
+    fs::write(&tmp, content).with_context(|| format!("write {:?}", tmp))?;
+    fs::rename(&tmp, path).with_context(|| format!("rename {:?}", path))?;
+    Ok(())
+}
+
+// ---- per-note & meta persistence ------------------------------------------
+
+/// Persist a single note to its own `.md` file (atomic write). A title change
+/// renames the file automatically: the old file is removed before the new one
+/// is written.
+pub fn save_note(note: &Note) -> Result<()> {
+    let dir = data_dir()?;
+    let notes_dir = notes_dir_path(&dir);
+    fs::create_dir_all(&notes_dir).with_context(|| format!("create {:?}", notes_dir))?;
+    save_note_to_dir(&notes_dir, note)
+}
+
+fn save_note_to_dir(notes_dir: &Path, note: &Note) -> Result<()> {
+    delete_note_file_by_id(notes_dir, &note.id);
+    let existing = collect_md_filenames(notes_dir);
+    let path = unique_note_path(notes_dir, note, &existing);
+    let md = note_to_markdown(note)?;
+    atomic_write_text(&path, &md)
+}
+
+/// Delete the on-disk file backing a note (no-op if it is already gone).
+pub fn delete_note_file(id: &str) {
+    let Ok(dir) = data_dir() else { return };
+    delete_note_file_by_id(&notes_dir_path(&dir), id);
+}
+
+/// Delete the on-disk files backing each note id in a single directory sweep.
+pub fn delete_notes_files(ids: &[String]) {
+    let Ok(dir) = data_dir() else { return };
+    let ndir = notes_dir_path(&dir);
+    let Ok(it) = fs::read_dir(&ndir) else { return };
+    let id_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    for entry in it.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "md") {
+            if let Ok(text) = fs::read_to_string(&path) {
+                if parse_note_markdown(&text)
+                    .map(|n| id_set.contains(n.id.as_str()))
+                    .unwrap_or(false)
+                {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
+/// UI-only state kept alongside the notes directory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct NotesMeta {
+    #[serde(default)]
+    active_note: Option<String>,
+    #[serde(default = "default_view_mode")]
+    view_mode: String,
+    #[serde(default)]
+    recent_commands: Vec<String>,
+    #[serde(default)]
+    collapsed: Vec<String>,
+    /// Stable ordering of notes in the sidebar (list of note ids). Notes not
+    /// present here fall back to `created_at` descending.
+    #[serde(default)]
+    note_order: Vec<String>,
+}
+
+/// Persist UI state + sidebar ordering to `notes.meta.json`.
+pub fn save_meta(store: &NotesStore) -> Result<()> {
+    let dir = data_dir()?;
+    let meta = NotesMeta {
+        active_note: store.active_note.clone(),
+        view_mode: store.view_mode.clone(),
+        recent_commands: store.recent_commands.clone(),
+        collapsed: store.collapsed.clone(),
+        note_order: store.notes.iter().map(|n| n.id.clone()).collect(),
+    };
+    let json = serde_json::to_string_pretty(&meta)?;
+    atomic_write_text(&meta_path(&dir), &json)
+}
+
+fn load_meta(dir: &Path) -> Option<NotesMeta> {
+    let path = meta_path(dir);
+    let contents = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Sort notes in place to honor the persisted `note_order`; ids absent from
+/// the order are appended at the end, newest-first by `created_at`.
+fn apply_note_order(notes: &mut Vec<Note>, order: &[String]) {
+    let pos: HashMap<&String, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id, i))
+        .collect();
+    notes.sort_by(|a, b| {
+        let pa = pos.get(&a.id).copied().unwrap_or(usize::MAX);
+        let pb = pos.get(&b.id).copied().unwrap_or(usize::MAX);
+        pa.cmp(&pb)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
+}
+
+// ---- load / migrate -------------------------------------------------------
+
+/// Load notes from disk (one `.md` per note), or return an empty store on a
+/// first run. Migrates the legacy `notes.json` automatically.
 pub fn load() -> NotesStore {
     let Ok(dir) = data_dir() else {
         return NotesStore::default();
     };
-    let path = notes_path(&dir);
-    match fs::read_to_string(&path) {
-        Ok(contents) => match serde_json::from_str::<NotesStore>(&contents) {
-            Ok(store) => store,
-            Err(e) => {
-                log::warn!("notes.json corrupt, starting fresh: {e:?}");
-                NotesStore::default()
+    let _ = migrate_from_json_if_needed(&dir);
+
+    let notes_dir = notes_dir_path(&dir);
+    let _ = fs::create_dir_all(&notes_dir);
+
+    let mut notes: Vec<Note> = Vec::new();
+    if let Ok(it) = fs::read_dir(&notes_dir) {
+        for entry in it.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                match fs::read_to_string(&path) {
+                    Ok(text) => match parse_note_markdown(&text) {
+                        Some(n) => notes.push(n),
+                        None => log::warn!("skip malformed note {:?}", path),
+                    },
+                    Err(e) => log::warn!("read note {:?} failed: {e:?}", path),
+                }
             }
-        },
-        Err(_) => NotesStore::default(),
+        }
+    }
+
+    let meta = load_meta(&dir).unwrap_or_default();
+    apply_note_order(&mut notes, &meta.note_order);
+
+    NotesStore {
+        notes,
+        active_note: meta.active_note,
+        view_mode: meta.view_mode,
+        recent_commands: meta.recent_commands,
+        collapsed: meta.collapsed,
     }
 }
 
-/// Persist notes to disk.
+/// One-time migration: when `notes.json` exists but `notes/` does not, write
+/// one `.md` per note, persist UI state to `notes.meta.json`, and rename the
+/// old file to `notes.json.bak`. Idempotent.
+fn migrate_from_json_if_needed(dir: &Path) -> Result<()> {
+    let notes_dir = notes_dir_path(dir);
+    let old_json = old_json_path(dir);
+    let bak = bak_path(dir);
+    if notes_dir.exists() || bak.exists() || !old_json.exists() {
+        return Ok(());
+    }
+    let contents = fs::read_to_string(&old_json)?;
+    let old: NotesStore = match serde_json::from_str(&contents) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("notes.json corrupt, skip migration: {e:?}");
+            return Ok(());
+        }
+    };
+    fs::create_dir_all(&notes_dir)?;
+    for note in &old.notes {
+        if let Err(e) = save_note_to_dir(&notes_dir, note) {
+            log::warn!("migrate note {} failed: {e:?}", note.id);
+        }
+    }
+    let meta = NotesMeta {
+        active_note: old.active_note.clone(),
+        view_mode: old.view_mode.clone(),
+        recent_commands: old.recent_commands.clone(),
+        collapsed: old.collapsed.clone(),
+        note_order: old.notes.iter().map(|n| n.id.clone()).collect(),
+    };
+    let json = serde_json::to_string_pretty(&meta)?;
+    atomic_write_text(&meta_path(dir), &json)?;
+    fs::rename(&old_json, &bak)
+        .with_context(|| format!("rename {:?} -> {:?}", old_json, bak))?;
+    log::info!("migrated {} notes from notes.json to notes/", old.notes.len());
+    Ok(())
+}
+
+/// Persist all notes + UI state. Prefer the per-note `save_note` / `save_meta`
+/// in hot paths; this full write is kept for compatibility with older callers.
 pub fn save(store: &NotesStore) -> Result<()> {
     let dir = data_dir()?;
-    let path = notes_path(&dir);
-    let json = serde_json::to_string_pretty(store)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, json).with_context(|| format!("write notes {:?}", tmp))?;
-    fs::rename(&tmp, &path).with_context(|| format!("rename notes {:?}", path))?;
-    Ok(())
+    let notes_dir = notes_dir_path(&dir);
+    fs::create_dir_all(&notes_dir)?;
+    for note in &store.notes {
+        if let Err(e) = save_note_to_dir(&notes_dir, note) {
+            log::warn!("save note {} failed: {e:?}", note.id);
+        }
+    }
+    save_meta(store)
 }
 
 // ---- constructors ----------------------------------------------------------
@@ -191,6 +545,12 @@ fn collect_descendants(store: &NotesStore, root_id: &str) -> Vec<String> {
 /// Count descendants of a note (not counting the note itself).
 pub fn count_descendants(store: &NotesStore, id: &str) -> usize {
     collect_descendants(store, id).len() - 1
+}
+
+/// Public accessor for the id of a note plus all its descendants, so callers
+/// can collect on-disk file ids before an in-memory cascade delete.
+pub fn note_ids_in_subtree(store: &NotesStore, id: &str) -> Vec<String> {
+    collect_descendants(store, id)
 }
 
 /// Duplicate a note (not its descendants) with a "(Copy)" suffix in the title.
@@ -325,5 +685,187 @@ mod tests {
             store.active_note.as_deref(),
             Some(store.notes[0].id.as_str())
         );
+    }
+
+    // ---- file-storage helpers for tests ------------------------------------
+
+    /// Point `data_dir()` at a unique temp dir for the duration of the guard.
+    struct TestEnv {
+        _dir_guard: crate::state::persistence::ThreadDataDirGuard,
+        _cleanup: DirCleanup,
+    }
+
+    struct DirCleanup(PathBuf);
+    impl Drop for DirCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_test_env() -> (TestEnv, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("verve-notes-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let env = TestEnv {
+            _dir_guard: crate::state::persistence::set_thread_data_dir(dir.clone()),
+            _cleanup: DirCleanup(dir.clone()),
+        };
+        (env, dir)
+    }
+
+    fn sample_note(title: &str) -> Note {
+        Note {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: title.to_string(),
+            content: format!("# {title}\n\n正文 mixed with 中文"),
+            created_at: "2026-08-12 10:00:00".to_string(),
+            updated_at: "2026-08-12 11:30:00".to_string(),
+            tags: vec!["架构".to_string(), "笔记".to_string()],
+            parent_id: None,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn markdown_roundtrip_basic() {
+        let note = sample_note("设计文档");
+        let md = note_to_markdown(&note).unwrap();
+        assert!(md.starts_with("---\n"), "md = {md}");
+        let parsed = parse_note_markdown(&md).expect("parse");
+        assert_eq!(parsed.id, note.id);
+        assert_eq!(parsed.title, note.title);
+        assert_eq!(parsed.content, note.content);
+        assert_eq!(parsed.tags, note.tags);
+        assert!(parsed.parent_id.is_none());
+        assert!(!parsed.pinned);
+    }
+
+    #[test]
+    fn markdown_roundtrip_child_and_pinned() {
+        let mut note = sample_note("周报");
+        note.parent_id = Some("parent-uuid".to_string());
+        note.pinned = true;
+        let md = note_to_markdown(&note).unwrap();
+        let parsed = parse_note_markdown(&md).expect("parse");
+        assert_eq!(parsed.parent_id.as_deref(), Some("parent-uuid"));
+        assert!(parsed.pinned);
+    }
+
+    #[test]
+    fn markdown_roundtrip_empty_content() {
+        let mut note = sample_note("空笔记");
+        note.content = String::new();
+        let md = note_to_markdown(&note).unwrap();
+        let parsed = parse_note_markdown(&md).expect("parse");
+        assert_eq!(parsed.content, "");
+    }
+
+    #[test]
+    fn parse_rejects_missing_frontmatter() {
+        assert!(parse_note_markdown("just some text").is_none());
+        assert!(parse_note_markdown("").is_none());
+    }
+
+    #[test]
+    fn sanitize_filename_handles_special_chars() {
+        assert_eq!(sanitize_filename("设计/文档:1"), "设计_文档_1");
+        assert_eq!(sanitize_filename(" _ hi *? "), "hi");
+        // empty → localized untitled fallback (non-empty)
+        assert!(!sanitize_filename("").is_empty());
+        // over-length multibyte title truncated on a char boundary
+        let long: String = "中".repeat(120);
+        assert_eq!(sanitize_filename(&long).chars().count(), 80);
+    }
+
+    #[test]
+    fn save_and_load_single_note() {
+        let (_env, _dir) = setup_test_env();
+        let note = sample_note("独立笔记");
+        let id = note.id.clone();
+        save_note(&note).unwrap();
+
+        let loaded = load();
+        assert_eq!(loaded.notes.len(), 1);
+        assert_eq!(loaded.notes[0].id, id);
+        assert_eq!(loaded.notes[0].content, note.content);
+    }
+
+    #[test]
+    fn rename_via_title_change() {
+        let (_env, _dir) = setup_test_env();
+        let mut note = sample_note("旧标题");
+        save_note(&note).unwrap();
+        note.title = "新标题".to_string();
+        save_note(&note).unwrap();
+
+        let loaded = load();
+        assert_eq!(loaded.notes.len(), 1, "old file should be removed");
+        assert_eq!(loaded.notes[0].title, "新标题");
+    }
+
+    #[test]
+    fn delete_note_file_removes_disk() {
+        let (_env, _dir) = setup_test_env();
+        let note = sample_note("待删除");
+        let id = note.id.clone();
+        save_note(&note).unwrap();
+        delete_note_file(&id);
+        let loaded = load();
+        assert!(loaded.notes.is_empty());
+    }
+
+    #[test]
+    fn meta_persists_active_and_order() {
+        let (_env, dir) = setup_test_env();
+        let mut store = NotesStore::default();
+        let a = create_note(&mut store, "A".to_string()).id.clone();
+        let b = create_note(&mut store, "B".to_string()).id.clone();
+        store.active_note = Some(b.clone());
+        save_meta(&store).unwrap();
+
+        let meta = load_meta(&dir).expect("meta");
+        assert_eq!(meta.active_note.as_deref(), Some(b.as_str()));
+        assert_eq!(meta.note_order, vec![b, a]); // create inserts at front
+    }
+
+    #[test]
+    fn migrate_converts_json_to_markdown_files() {
+        let (_env, dir) = setup_test_env();
+        // Seed a legacy notes.json with a parent + child.
+        let mut store = NotesStore::default();
+        let root = create_note(&mut store, "根笔记".to_string());
+        let root_id = root.id.clone();
+        create_child_note(&mut store, &root_id, "子笔记".to_string());
+        let json = serde_json::to_string_pretty(&store).unwrap();
+        fs::write(dir.join("notes.json"), json).unwrap();
+
+        migrate_from_json_if_needed(&dir).expect("migrate");
+
+        let md_count = fs::read_dir(dir.join("notes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .count();
+        assert_eq!(md_count, 2);
+        assert!(dir.join("notes.json.bak").exists());
+        assert!(!dir.join("notes.json").exists());
+
+        // load() reads them back, preserving the tree.
+        let loaded = load();
+        assert_eq!(loaded.notes.len(), 2);
+        let child = loaded
+            .notes
+            .iter()
+            .find(|n| n.title == "子笔记")
+            .expect("child present");
+        assert_eq!(child.parent_id.as_deref(), Some(root_id.as_str()));
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let (_env, dir) = setup_test_env();
+        fs::write(dir.join("notes.json"), "{}").unwrap();
+        migrate_from_json_if_needed(&dir).unwrap();
+        // Second call must be a no-op (bak now exists).
+        migrate_from_json_if_needed(&dir).unwrap();
     }
 }

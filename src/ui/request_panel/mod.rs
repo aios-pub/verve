@@ -576,40 +576,42 @@ impl RequestPanel {
                 // empty — so the three states are distinguishable:
                 //   inherit (None) / explicit-disable (Some(None)) / override (Some(Some)).
                 let (base_display, path_display) = {
-                    if r.url.starts_with("http://") || r.url.starts_with("https://") {
-                        // Absolute URL carries its own scheme; reset the mode to
-                        // inherit (no override applies) and split host→base input.
-                        self.req_base_mode = None;
-                        // Split at the first '/' after the host.
-                        let scheme_end = if r.url.starts_with("https://") { 8 } else { 7 };
-                        if let Some(slash) = r.url[scheme_end..].find('/') {
-                            let base = r.url[..scheme_end + slash].to_string();
-                            let path = r.url[scheme_end + slash..].to_string();
-                            (base, path)
-                        } else {
-                            (r.url.clone(), String::new())
+                    // An explicit per-request override always takes precedence
+                    // over URL-based splitting, so a user-selected prefix URL is
+                    // never silently discarded on reload (even when the stored URL
+                    // is absolute). Only in the inherit case (None) do we split an
+                    // absolute URL into host→base for display.
+                    match &r.base_url_override {
+                        // Explicitly disable any prefix for this request.
+                        Some(None) => {
+                            self.req_base_mode = Some(None);
+                            (String::new(), r.url.clone())
                         }
-                    } else {
-                        // Relative path — the base input reflects the persisted mode.
-                        match &r.base_url_override {
-                            // Explicitly disable any prefix for this request.
-                            Some(None) => {
-                                self.req_base_mode = Some(None);
+                        // Override with a specific value (literal or {{var}}).
+                        Some(Some(u)) => {
+                            self.req_base_mode = Some(Some(u.clone()));
+                            if u.trim().is_empty() {
                                 (String::new(), r.url.clone())
+                            } else {
+                                (u.clone(), r.url.clone())
                             }
-                            // Override with a specific value (literal or {{var}}).
-                            Some(Some(u)) => {
-                                self.req_base_mode = Some(Some(u.clone()));
-                                if u.trim().is_empty() {
-                                    (String::new(), r.url.clone())
+                        }
+                        // Inherit: the mode stays None. For display, split an
+                        // absolute URL into host→base input, or resolve the
+                        // folder chain's base_url for a relative path.
+                        None => {
+                            self.req_base_mode = None;
+                            if r.url.starts_with("http://") || r.url.starts_with("https://") {
+                                // Split at the first '/' after the host.
+                                let scheme_end = if r.url.starts_with("https://") { 8 } else { 7 };
+                                if let Some(slash) = r.url[scheme_end..].find('/') {
+                                    let base = r.url[..scheme_end + slash].to_string();
+                                    let path = r.url[scheme_end + slash..].to_string();
+                                    (base, path)
                                 } else {
-                                    (u.clone(), r.url.clone())
+                                    (r.url.clone(), String::new())
                                 }
-                            }
-                            // Inherit: show the folder-resolved base_url purely
-                            // for display; the mode stays inherit (None).
-                            None => {
-                                self.req_base_mode = None;
+                            } else {
                                 let base = {
                                     let st = self.state.read(cx);
                                     st.active_project().and_then(|p| {
@@ -1700,19 +1702,25 @@ impl Render for RequestPanel {
                                                         },
                                                     )
                                             })
-                                            .children(env_urls.iter().enumerate().map(
-                                                |(i, (k, v))| {
-                                                    let val_display =
-                                                        v.trim_end_matches('/').to_string();
-                                                    let key = k.clone();
-                                                    // Store the {{key}} placeholder so the value
-                                                    // follows env var changes; the literal value is
-                                                    // only shown in the dropdown as a preview.
-                                                    let placeholder = format!("{{{{{}}}}}", key);
-                                                    let tc = theme_c.clone();
-                                                    let pe = panel_entity.clone();
+                                            .child(
+                                                div()
+                                                    .id("req-base-scroll")
+                                                    .max_h(px(300.))
+                                                    .overflow_y_scroll()
+                                                    .children(env_urls.iter().enumerate().map(
+                                                        |(i, (k, v))| {
+                                                            let val_display =
+                                                                v.trim_end_matches('/').to_string();
+                                                            let key = k.clone();
+                                                            // Store the {{key}} placeholder so the value
+                                                            // follows env var changes; the literal value is
+                                                            // only shown in the dropdown as a preview.
+                                                            let placeholder =
+                                                                format!("{{{{{}}}}}", key);
+                                                            let tc = theme_c.clone();
+                                                            let pe = panel_entity.clone();
 
-                                                    div()
+                                                            div()
                                                         .id(("req-base-opt", i))
                                                         .px_2()
                                                         .py_1()
@@ -1728,10 +1736,7 @@ impl Render for RequestPanel {
                                                                         .font_weight(
                                                                             FontWeight::SEMIBOLD,
                                                                         )
-                                                                        .child(format!(
-                                                                            "{{{{{}}}}}",
-                                                                            key
-                                                                        )),
+                                                                        .child(key.clone()),
                                                                 )
                                                                 .child(
                                                                     div()
@@ -1771,8 +1776,9 @@ impl Render for RequestPanel {
                                                                 window.refresh();
                                                             },
                                                         )
-                                                },
-                                            )),
+                                                        },
+                                                    )),
+                                            ),
                                     )
                                     .into_any_element()
                             },

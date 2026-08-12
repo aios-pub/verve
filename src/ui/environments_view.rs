@@ -714,6 +714,7 @@ impl Render for EnvironmentsView {
                                                     .flex_1()
                                                     .min_h_0()
                                                     .overflow_y_scroll()
+                                                    .overflow_x_scroll()
                                                     .child(
                                                         div().w_full().min_w(px(640.)).child(
                                                             crate::ui::kv_table::KvTable::new(
@@ -722,7 +723,8 @@ impl Render for EnvironmentsView {
                                                                 handlers,
                                                             )
                                                             .show_description(true)
-                                                            .show_required(true),
+                                                            .show_required(true)
+                                                            .value_width(px(280.)),
                                                         ),
                                                     ),
                                             ),
@@ -760,6 +762,7 @@ impl Render for EnvironmentsView {
                                         .flex_1()
                                         .min_h_0()
                                         .overflow_y_scroll()
+                                        .overflow_x_scroll()
                                         .child(
                                             div().w_full().min_w(px(640.)).child(
                                                 crate::ui::kv_table::KvTable::new(
@@ -768,7 +771,8 @@ impl Render for EnvironmentsView {
                                                     handlers,
                                                 )
                                                 .show_description(true)
-                                                .show_required(true),
+                                                .show_required(true)
+                                                .value_width(px(280.)),
                                             ),
                                         ),
                                 )

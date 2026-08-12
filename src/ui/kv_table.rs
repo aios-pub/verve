@@ -46,10 +46,10 @@ fn estimate_display_units(s: &str) -> usize {
         .sum()
 }
 
-/// How many display units fit on one line of the 160px value column
-/// (small input: ~144px text area, ~8px/ascii). Conservative on purpose so a
-/// long value collapses to one line rather than unexpectedly wrapping tall.
-const VALUE_COL_UNITS: usize = 18;
+/// Approximate pixels per display unit in a `small` value input (~8px per
+/// ascii char). Used to derive how many units fit a value column of a given
+/// width, so the focus-expansion only triggers when content truly overflows.
+const VALUE_UNIT_PX: f32 = 8.0;
 
 /// One editable row held by the owning view.
 #[derive(Clone)]
@@ -153,6 +153,9 @@ pub struct KvTable {
     /// Whether to show the required (`*`) toggle — independent of `show_type`
     /// so required can be enabled for all param scopes (headers/cookies/etc).
     pub show_required: bool,
+    /// Fixed width of the value column. Defaults to 160px; wider for tables
+    /// that hold long values (e.g. environment-variable URLs).
+    pub value_width: Option<Pixels>,
     pub handlers: KvHandlers,
 }
 
@@ -165,6 +168,7 @@ impl KvTable {
             show_type: false,
             show_description: false,
             show_required: false,
+            value_width: None,
             handlers,
         }
     }
@@ -188,6 +192,12 @@ impl KvTable {
         self.show_required = show;
         self
     }
+
+    /// Set a custom fixed width for the value column (default 160px).
+    pub fn value_width(mut self, width: impl Into<Pixels>) -> Self {
+        self.value_width = Some(width.into());
+        self
+    }
 }
 
 impl RenderOnce for KvTable {
@@ -198,6 +208,12 @@ impl RenderOnce for KvTable {
         let show_required = self.show_required;
         let _id = self.id.clone();
         let theme = cx.theme().clone();
+        // Fixed value-column width (default 160px) and the corresponding
+        // display-unit capacity used by the focus-expansion overflow check.
+        // Derived from the width so a wider column (e.g. env-variable URLs)
+        // doesn't trigger an expansion for content that already fits.
+        let value_w = self.value_width.unwrap_or(px(160.));
+        let col_capacity = (((value_w.as_f32() - 16.0) / VALUE_UNIT_PX).floor() as usize).max(8);
         v_flex()
             .w_full()
             .gap_1()
@@ -236,7 +252,7 @@ impl RenderOnce for KvTable {
                         // single line so the table stays compact.
                         let val_str = row.value.read(cx).value().to_string();
                         let units = estimate_display_units(&val_str);
-                        let overflows = units > VALUE_COL_UNITS;
+                        let overflows = units > col_capacity;
                         let value_focused = row.value.read(cx).focus_handle(cx).is_focused(window);
                         // For form-data file rows that already reference a
                         // file, show the chosen file name as a read-only label
@@ -254,7 +270,7 @@ impl RenderOnce for KvTable {
                                     .map(|s| s.to_string())
                             });
                         div()
-                            .w(px(160.))
+                            .w(value_w)
                             .flex_shrink_0()
                             .child(if let Some(name) = file_name {
                                 div()
@@ -287,7 +303,7 @@ impl RenderOnce for KvTable {
                                     // capped at 8 lines; taller content scrolls
                                     // inside the multi-line editor.
                                     let est_lines =
-                                        ((units as f64) / (VALUE_COL_UNITS as f64)).ceil() as usize;
+                                        ((units as f64) / (col_capacity as f64)).ceil() as usize;
                                     let est_lines = est_lines.max(1);
                                     let h_px = (est_lines * 20 + 4).min(160);
                                     input.h(px(h_px as f32))

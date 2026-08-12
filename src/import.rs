@@ -1118,7 +1118,7 @@ mod tests {
                         "env_id": "2",
                         "name": "Mock环境",
                         "server_list": [
-                            {"server_id": "1", "name": "默认服务", "uri": "https://mock.apipost.net/mock/35ff847188e5000"}
+                            {"server_id": "1", "name": "默认服务", "uri": "https://mock.aios.pub/mock/35ff847188e5000"}
                         ],
                         "env_var_list": {}
                     },

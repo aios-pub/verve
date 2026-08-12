@@ -101,6 +101,8 @@ pub struct RequestPanel {
     pub req_base_mode: Option<Option<String>>,
     /// Whether the base URL popover is open.
     pub req_baseurl_open: bool,
+    /// Whether the tab-bar overflow ("»") dropdown popover is open.
+    pub tab_overflow_open: bool,
     pub name: Entity<InputState>,
     pub method_select: Entity<SelectState<Vec<String>>>,
     pub params_rows: Vec<KvRow>,
@@ -349,6 +351,7 @@ impl RequestPanel {
             req_base_url,
             req_base_mode: None,
             req_baseurl_open: false,
+            tab_overflow_open: false,
             name,
             method_select,
             params_rows: Vec::new(),
@@ -544,6 +547,8 @@ impl RequestPanel {
             // Reload the active request/folder so the URL base_url display
             // and all variable-dependent fields pick up the new env values.
             self.pending_reload = true;
+            // Close the overflow dropdown so it doesn't linger on stale state.
+            self.tab_overflow_open = false;
             cx.notify();
         }
     }
@@ -1326,6 +1331,57 @@ impl Render for RequestPanel {
         let active_tab_id = self.state.read(cx).active_tab_id.clone();
         let has_tabs = !open_tabs.is_empty();
 
+        // --- Overflow handling: fold tabs that don't fit into a "»" dropdown ---
+        // Estimate how many tabs fit from the window width (rail + sidebar ≈
+        // 340px). Conservative per-tab width (150px) so the "»" appears slightly
+        // early rather than clipping tabs.
+        let avail_w = (window.viewport_size().width.as_f32() - 340.0).max(180.0);
+        let per_tab = 150.0_f32;
+        let max_visible = ((avail_w / per_tab).floor() as usize)
+            .max(1)
+            .min(open_tabs.len());
+        let overflow = open_tabs.len() > max_visible;
+        // Indices of the tabs to render in the visible strip. When overflowing,
+        // guarantee the active tab is among them (swap it into the last slot if
+        // it would otherwise be hidden) so the active highlight is always on
+        // screen and Cmd+W closes the tab the user is looking at.
+        let active_idx = open_tabs
+            .iter()
+            .position(|(id, _, _)| active_tab_id.as_deref() == Some(id.as_str()));
+        let visible: Vec<usize> = if !overflow {
+            (0..open_tabs.len()).collect()
+        } else {
+            let mut v: Vec<usize> = (0..max_visible).collect();
+            if let Some(ai) = active_idx {
+                if ai >= max_visible {
+                    if let Some(slot) = v.get_mut(max_visible - 1) {
+                        *slot = ai;
+                    }
+                }
+            }
+            v
+        };
+        let hidden_count = open_tabs.len().saturating_sub(visible.len());
+
+        // Precompute per-tab metadata that needs `cx` (method color) up front so
+        // the builder closures below only use `cx.listener` (an immutable borrow)
+        // and don't conflict with each other or the sibling `.when(has_folder,…)`
+        // closure that borrows `self` mutably.
+        let tabs_meta: Vec<(String, String, gpui::Hsla, RequestMethod)> = open_tabs
+            .iter()
+            .map(|(id, name, method)| {
+                (
+                    id.clone(),
+                    name.clone(),
+                    crate::ui::method_colors::badge_color(*method, cx),
+                    *method,
+                )
+            })
+            .collect();
+        let panel_entity = cx.entity();
+        let tab_overflow_open = self.tab_overflow_open;
+        let theme_c = theme.clone();
+
         v_flex()
             .size_full()
             .min_h_0()
@@ -1345,73 +1401,237 @@ impl Render for RequestPanel {
                         .border_b_1()
                         .border_color(theme.border)
                         .bg(theme.tab_bar)
-                        .children(open_tabs.iter().enumerate().map(|(i, (id, name, method))| {
-                            let is_active = active_tab_id.as_deref() == Some(id);
-                            let method_color = crate::ui::method_colors::badge_color(*method, cx);
-                            let method_label = method.badge_label();
-                            let display_name = if name.chars().count() > 14 {
-                                let truncated: String = name.chars().take(14).collect();
-                                format!("{}…", truncated)
-                            } else {
-                                name.clone()
-                            };
-                            let id_focus = id.clone();
-                            let id_close = id.clone();
-                            let panel_entity = cx.entity();
+                        // Visible tab strip: takes the available width, clips any
+                        // residual overflow (the "»" dropdown handles the rest).
+                        .child(
                             h_flex()
-                                .id(("req-tab", i))
+                                .id("req-tab-strip")
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
                                 .items_center()
-                                .gap(px(6.))
-                                .px(px(8.))
-                                .py(px(3.))
-                                .rounded(px(6.))
-                                .cursor_pointer()
-                                .when(is_active, |d| {
-                                    d.bg(theme.background).border_1().border_color(theme.border)
-                                })
-                                .when(!is_active, |d| {
-                                    d.text_color(theme.muted_foreground)
-                                        .hover(|s| s.bg(theme.accent.opacity(0.15)))
-                                })
-                                // Colored method badge.
-                                .child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(method_color)
-                                        .child(method_label),
-                                )
-                                // Tab name.
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .when(is_active, |d| d.text_color(theme.foreground))
-                                        .child(display_name),
-                                )
-                                // Close button.
-                                .child(
-                                    Button::new(("req-tab-close", i))
-                                        .ghost()
-                                        .xsmall()
-                                        .label("×")
-                                        .text_size(px(14.))
-                                        .on_click(cx.listener(move |_, _, _, cx| {
-                                            let id_close_clone = id_close.clone();
-                                            let _ = panel_entity.update(cx, move |this, cx| {
-                                                this.state.update(cx, |s, cx| {
-                                                    s.close_tab(&id_close_clone, cx);
-                                                });
-                                                cx.notify();
-                                            });
-                                        })),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    // Click on the tab body (not close button) focuses it.
-                                    this.state.update(cx, |s, cx| {
-                                        s.set_active_tab(&id_focus, cx);
-                                    });
-                                }))
-                        })),
+                                .gap(px(2.))
+                                .children(
+                                    visible
+                                        .iter()
+                                        .filter_map(|i| tabs_meta.get(*i).map(|t| (*i, t)))
+                                        .map(|(i, (id, name, method_color, method))| {
+                                            let is_active =
+                                                active_tab_id.as_deref() == Some(id.as_str());
+                                            let method_label = method.badge_label();
+                                            let display_name = if name.chars().count() > 14 {
+                                                let truncated: String =
+                                                    name.chars().take(14).collect();
+                                                format!("{}…", truncated)
+                                            } else {
+                                                name.clone()
+                                            };
+                                            let id_focus = id.clone();
+                                            let id_close = id.clone();
+                                            let panel_entity = panel_entity.clone();
+                                            h_flex()
+                                                .id(("req-tab", i))
+                                                .flex_shrink_0()
+                                                .items_center()
+                                                .gap(px(6.))
+                                                .px(px(8.))
+                                                .py(px(3.))
+                                                .rounded(px(6.))
+                                                .cursor_pointer()
+                                                .when(is_active, |d| {
+                                                    d.bg(theme.background)
+                                                        .border_1()
+                                                        .border_color(theme.border)
+                                                })
+                                                .when(!is_active, |d| {
+                                                    d.text_color(theme.muted_foreground).hover(
+                                                        |s| s.bg(theme.accent.opacity(0.15)),
+                                                    )
+                                                })
+                                                // Colored method badge.
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(*method_color)
+                                                        .child(method_label),
+                                                )
+                                                // Tab name.
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .when(is_active, |d| {
+                                                            d.text_color(theme.foreground)
+                                                        })
+                                                        .child(display_name),
+                                                )
+                                                // Close button.
+                                                .child(
+                                                    Button::new(("req-tab-close", i))
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .label("×")
+                                                        .text_size(px(14.))
+                                                        .on_click(cx.listener(
+                                                            move |_, _, _, cx| {
+                                                                let id_close_clone =
+                                                                    id_close.clone();
+                                                                let _ = panel_entity.update(
+                                                                    cx,
+                                                                    move |this, cx| {
+                                                                        this.state.update(cx,
+                                                                            |s, cx| {
+                                                                                s.close_tab(
+                                                                                    &id_close_clone,
+                                                                                    cx,
+                                                                                );
+                                                                            });
+                                                                        cx.notify();
+                                                                    },
+                                                                );
+                                                            },
+                                                        )),
+                                                )
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    // Click on the tab body (not close button) focuses it.
+                                                    this.state.update(cx, |s, cx| {
+                                                        s.set_active_tab(&id_focus, cx);
+                                                    });
+                                                }))
+                                        }),
+                                ),
+                        )
+                        // Overflow dropdown ("»"): lists every open tab so the
+                        // hidden ones stay reachable. Shown only when folding.
+                        .when(overflow, |bar| {
+                            bar.child(
+                                Popover::new("req-tab-overflow")
+                                    .anchor(gpui::Anchor::BottomRight)
+                                    .open(tab_overflow_open)
+                                    .on_open_change(cx.listener(|this, open, _, cx| {
+                                        this.tab_overflow_open = *open;
+                                        cx.notify();
+                                    }))
+                                    .trigger(
+                                        Button::new("req-tab-ov-trig")
+                                            .ghost()
+                                            .xsmall()
+                                            .label(format!("» {}", hidden_count))
+                                            .tooltip("其余标签页"),
+                                    )
+                                    .p(px(4.))
+                                    .child(
+                                        v_flex()
+                                            .id("req-tab-ov-scroll")
+                                            .w(px(280.))
+                                            .max_h(px(360.))
+                                            .overflow_y_scroll()
+                                            .gap(px(1.))
+                                            .children(
+                                                tabs_meta.iter().enumerate().map(
+                                                    |(i, (id, name, method_color, method))| {
+                                                        let is_active = active_tab_id.as_deref()
+                                                            == Some(id.as_str());
+                                                        let method_label = method.badge_label();
+                                                        let display_name =
+                                                            if name.chars().count() > 24 {
+                                                                let truncated: String =
+                                                                    name.chars().take(24).collect();
+                                                                format!("{}…", truncated)
+                                                            } else {
+                                                                name.clone()
+                                                            };
+                                                        let id_focus = id.clone();
+                                                        let id_close = id.clone();
+                                                        let panel_entity_close = panel_entity.clone();
+                                                        let panel_entity_row = panel_entity.clone();
+                                                        let theme_ov = theme_c.clone();
+                                                        div()
+                                                            .id(("req-tab-ov-row", i))
+                                                            .w_full()
+                                                            .px(px(8.))
+                                                            .py(px(5.))
+                                                            .rounded(px(4.))
+                                                            .cursor_pointer()
+                                                            .flex()
+                                                            .flex_row()
+                                                            .items_center()
+                                                            .gap(px(8.))
+                                                            .when(is_active, |d| {
+                                                                d.bg(theme_ov.accent.opacity(0.2))
+                                                            })
+                                                            .when(!is_active, |d| {
+                                                                d.hover(|s| s.bg(theme_ov.muted))
+                                                            })
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(10.))
+                                                                    .font_weight(FontWeight::BOLD)
+                                                                    .text_color(*method_color)
+                                                                    .child(method_label),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_size(px(12.))
+                                                                    .text_color(if is_active {
+                                                                        theme_ov.foreground
+                                                                    } else {
+                                                                        theme_ov.muted_foreground
+                                                                    })
+                                                                    .child(display_name),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .id(("req-tab-ov-close", i))
+                                                                    .ml_auto()
+                                                                    .px(px(4.))
+                                                                    .text_size(px(14.))
+                                                                    .text_color(
+                                                                        theme_ov.muted_foreground,
+                                                                    )
+                                                                    .child("×")
+                                                                    .on_mouse_down(
+                                                                        MouseButton::Left,
+                                                                        move |_, _window,
+                                                                              cx: &mut App| {
+                                                                            cx.stop_propagation();
+                                                                            let id_close_clone =
+                                                                                id_close.clone();
+                                                                            let _ =
+                                                                                panel_entity_close.update(cx, move |this, cx| {
+                                                                                    this.state.update(cx, |s, cx| {
+                                                                                        s.close_tab(&id_close_clone, cx);
+                                                                                    });
+                                                                                    this.tab_overflow_open = false;
+                                                                                    cx.notify();
+                                                                                });
+                                                                        },
+                                                                    ),
+                                                            )
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                move |_, _window, cx: &mut App| {
+                                                                    cx.stop_propagation();
+                                                                    let id_focus_clone =
+                                                                        id_focus.clone();
+                                                                    let _ = panel_entity_row.update(cx, move |this, cx| {
+                                                                        this.state.update(cx, |s, cx| {
+                                                                            s.set_active_tab(
+                                                                                &id_focus_clone,
+                                                                                cx,
+                                                                            );
+                                                                        });
+                                                                        this.tab_overflow_open = false;
+                                                                        cx.notify();
+                                                                    });
+                                                                },
+                                                            )
+                                                    },
+                                                ),
+                                            ),
+                                    ),
+                            )
+                        }),
                 )
             })
             // Folder detail view takes over the whole center column.

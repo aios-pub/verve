@@ -5,7 +5,7 @@
 //! shared HTTP client, and writes the response back into the request's
 //! `last_response`, emitting [`AppEvent::ResponseUpdated`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -180,6 +180,13 @@ pub struct RequestPanel {
     /// Whether the column-picker popover is open.
     pub iface_columns_popover_open: bool,
     _subs: Vec<gpui::Subscription>,
+    /// Subscriptions to each KV row's value `InputState` Focus/Blur events,
+    /// so focusing a value input re-renders the panel and the row can expand
+    /// to reveal overflowing content (see `reconcile_kv_focus_subs`).
+    kv_focus_subs: Vec<gpui::Subscription>,
+    /// Entity ids currently subscribed in `kv_focus_subs`; used to skip
+    /// rebuilding when the set of rows is unchanged.
+    kv_focus_ids: HashSet<gpui::EntityId>,
     focus_handle: FocusHandle,
 }
 
@@ -407,6 +414,8 @@ impl RequestPanel {
             iface_columns: crate::state::persistence::load_iface_columns(),
             iface_columns_popover_open: false,
             _subs: Vec::new(),
+            kv_focus_subs: Vec::new(),
+            kv_focus_ids: HashSet::new(),
             focus_handle: cx.focus_handle(),
         };
         // Subscribe to selection changes to load the active request.
@@ -532,6 +541,60 @@ impl RequestPanel {
                 self.commit_to_model(cx);
             }
         }
+    }
+
+    /// All KV row `value` InputState entities across every KV table the panel
+    /// owns. Used to (re)subscribe for focus-driven value expansion.
+    fn collect_kv_value_entities(&self) -> Vec<Entity<InputState>> {
+        let mut v = Vec::new();
+        for rows in [
+            &self.params_rows,
+            &self.headers_rows,
+            &self.path_rows,
+            &self.cookie_rows,
+            &self.body_rows,
+            &self.raw_visual_rows,
+            &self.mock_headers_rows,
+            &self.mock_match_query_rows,
+            &self.mock_match_header_rows,
+            &self.folder_param_rows,
+            &self.folder_header_rows,
+            &self.folder_var_rows,
+        ] {
+            for r in rows {
+                v.push(r.value.clone());
+            }
+        }
+        v
+    }
+
+    /// Subscribe to each KV value input's Focus/Blur so the panel re-renders
+    /// and `KvTable` can expand the focused, overflowing value. Rebuilds only
+    /// when the set of value entities changed (rows added/removed/request
+    /// switched), which avoids per-frame churn. Called from `render`.
+    fn reconcile_kv_focus_subs(&mut self, cx: &mut Context<Self>) {
+        let ents = self.collect_kv_value_entities();
+        let new_ids: HashSet<gpui::EntityId> = ents.iter().map(|e| e.entity_id()).collect();
+        if new_ids == self.kv_focus_ids {
+            return;
+        }
+        let subs = ents
+            .into_iter()
+            .map(|e| cx.subscribe(&e, Self::on_kv_value_focus))
+            .collect();
+        self.kv_focus_subs = subs;
+        self.kv_focus_ids = new_ids;
+    }
+
+    /// Focus/Blur on a KV value input: just trigger a re-render so each row's
+    /// height is recomputed from its current focus state.
+    fn on_kv_value_focus(
+        &mut self,
+        _src: Entity<InputState>,
+        _ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
     }
 
     pub(super) fn on_state_event(
@@ -1303,6 +1366,7 @@ impl Render for RequestPanel {
         }
         self.reconcile_pending_add(window, cx);
         self.reconcile_folder_kv(window, cx);
+        self.reconcile_kv_focus_subs(cx);
         let theme = cx.theme().clone();
         let has_request = self.request_id.is_some();
         let has_folder = self.folder_id.is_some();

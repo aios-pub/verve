@@ -20,6 +20,37 @@ use gpui_component::{
 
 use crate::state::models::{FieldType, KeyValue};
 
+/// Approximate display width of `s` inside a `small` value cell, in "units"
+/// where an ASCII char = 1 and a wide char (CJK / fullwidth / emoji) = 2.
+/// Used to guess whether the value overflows the fixed-width column so we can
+/// expand it on focus. Counts by `char` (never byte-slices), per AGENTS.md.
+fn estimate_display_units(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            let cp = c as u32;
+            if (0x1100..=0x115F).contains(&cp)
+                || (0x2E80..=0xA4CF).contains(&cp)
+                || (0xAC00..=0xD7A3).contains(&cp)
+                || (0xF900..=0xFAFF).contains(&cp)
+                || (0xFE30..=0xFE4F).contains(&cp)
+                || (0xFF00..=0xFF60).contains(&cp)
+                || (0xFFE0..=0xFFE6).contains(&cp)
+                || (0x1F300..=0x1FAFF).contains(&cp)
+                || (0x20000..=0x3FFFD).contains(&cp)
+            {
+                2
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+/// How many display units fit on one line of the 160px value column
+/// (small input: ~144px text area, ~8px/ascii). Conservative on purpose so a
+/// long value collapses to one line rather than unexpectedly wrapping tall.
+const VALUE_COL_UNITS: usize = 18;
+
 /// One editable row held by the owning view.
 #[derive(Clone)]
 pub struct KvRow {
@@ -40,7 +71,13 @@ impl KvRow {
             s
         });
         let value = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("value");
+            let mut s = InputState::new(window, cx)
+                .placeholder("value")
+                // multi_line + soft_wrap so a focused, overflowing value can
+                // expand to wrap and reveal its full content. A short value
+                // stays a single line at the natural `small` height.
+                .multi_line(true)
+                .soft_wrap(true);
             s.set_value(kv.value.clone(), window, cx);
             s
         });
@@ -154,7 +191,7 @@ impl KvTable {
 }
 
 impl RenderOnce for KvTable {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let allow_files = self.allow_files;
         let show_type = self.show_type;
         let show_description = self.show_description;
@@ -191,6 +228,16 @@ impl RenderOnce for KvTable {
                             .child(Input::new(&row.key).small().appearance(false)),
                     )
                     .child({
+                        // Whether this value overflows the fixed-width column
+                        // (approximated by display units) and whether it is
+                        // currently focused. A focused, overflowing value
+                        // expands to wrap and reveal its full content; an
+                        // unfocused overflowing value is clamped back to a
+                        // single line so the table stays compact.
+                        let val_str = row.value.read(cx).value().to_string();
+                        let units = estimate_display_units(&val_str);
+                        let overflows = units > VALUE_COL_UNITS;
+                        let value_focused = row.value.read(cx).focus_handle(cx).is_focused(window);
                         // For form-data file rows that already reference a
                         // file, show the chosen file name as a read-only label
                         // instead of the (always-empty, disabled) value input.
@@ -231,11 +278,27 @@ impl RenderOnce for KvTable {
                                     )
                                     .into_any_element()
                             } else {
-                                Input::new(&row.value)
+                                let input = Input::new(&row.value)
                                     .small()
                                     .appearance(false)
-                                    .disabled(is_file && allow_files)
-                                    .into_any_element()
+                                    .disabled(is_file && allow_files);
+                                let input = if value_focused && overflows {
+                                    // ~20px per wrapped line + 4px padding,
+                                    // capped at 8 lines; taller content scrolls
+                                    // inside the multi-line editor.
+                                    let est_lines =
+                                        ((units as f64) / (VALUE_COL_UNITS as f64)).ceil() as usize;
+                                    let est_lines = est_lines.max(1);
+                                    let h_px = (est_lines * 20 + 4).min(160);
+                                    input.h(px(h_px as f32))
+                                } else if overflows {
+                                    // Long but unfocused: keep one compact line.
+                                    input.h(px(24.))
+                                } else {
+                                    // Short value: natural single-line height.
+                                    input
+                                };
+                                input.into_any_element()
                             })
                     })
                     // Type selector dropdown (form-data / query).

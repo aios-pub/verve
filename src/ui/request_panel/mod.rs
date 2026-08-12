@@ -188,6 +188,14 @@ pub struct RequestPanel {
     /// rebuilding when the set of rows is unchanged.
     kv_focus_ids: HashSet<gpui::EntityId>,
     focus_handle: FocusHandle,
+    /// Focus handle bound to the tab-overflow popover content. The popover
+    /// renders in a deferred overlay and steals focus on open, so `Cmd+W`
+    /// (`CloseFile`) dispatches inside the overlay and never reaches the app
+    /// root's `on_close_file`. By making this handle the popover's focus
+    /// target (via `Popover::track_focus`) and tracking it on the dropdown
+    /// list, an `on_action(CloseFile)` on that list reliably fires and closes
+    /// the active tab while the dropdown is open.
+    tab_overflow_focus: FocusHandle,
 }
 
 /// Which folder kv table a row operation targets.
@@ -417,6 +425,7 @@ impl RequestPanel {
             kv_focus_subs: Vec::new(),
             kv_focus_ids: HashSet::new(),
             focus_handle: cx.focus_handle(),
+            tab_overflow_focus: cx.focus_handle(),
         };
         // Subscribe to selection changes to load the active request.
         let sub = cx.subscribe(&state, Self::on_state_event);
@@ -594,6 +603,31 @@ impl RequestPanel {
         _ev: &InputEvent,
         cx: &mut Context<Self>,
     ) {
+        cx.notify();
+    }
+
+    /// Handle `Cmd+W` (`CloseFile`) while the tab-overflow popover is open.
+    ///
+    /// The popover renders inside a deferred overlay and takes focus when it
+    /// opens, so the action dispatches inside that overlay and never reaches
+    /// the app root's `on_close_file`. The dropdown list is registered as the
+    /// popover's focus target (see `tab_overflow_focus`), so this handler —
+    /// placed on that list — reliably fires: close the active request tab and
+    /// dismiss the dropdown. When the dropdown is closed, focus is back in the
+    /// main tree and the root handler closes the tab as usual.
+    fn on_overflow_close_tab(
+        &mut self,
+        _: &crate::ui::app::CloseFile,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.state.read(cx).active_tab_id.clone();
+        if let Some(id) = active {
+            self.state.update(cx, |s, cx| {
+                s.close_tab(&id, cx);
+            });
+        }
+        self.tab_overflow_open = false;
         cx.notify();
     }
 
@@ -1444,6 +1478,7 @@ impl Render for RequestPanel {
             .collect();
         let panel_entity = cx.entity();
         let tab_overflow_open = self.tab_overflow_open;
+        let tab_ov_focus = self.tab_overflow_focus.clone();
         let theme_c = theme.clone();
 
         v_flex()
@@ -1576,6 +1611,13 @@ impl Render for RequestPanel {
                                         this.tab_overflow_open = *open;
                                         cx.notify();
                                     }))
+                                    // Make the popover focus the dropdown list
+                                    // handle on open (see `tab_overflow_focus`),
+                                    // so the `on_action(CloseFile)` below fires
+                                    // even though the popover is a deferred
+                                    // overlay outside the app root's dispatch
+                                    // path.
+                                    .track_focus(&tab_ov_focus)
                                     .trigger(
                                         Button::new("req-tab-ov-trig")
                                             .ghost()
@@ -1587,6 +1629,10 @@ impl Render for RequestPanel {
                                     .child(
                                         v_flex()
                                             .id("req-tab-ov-scroll")
+                                            .track_focus(&tab_ov_focus)
+                                            .on_action(cx.listener(
+                                                Self::on_overflow_close_tab,
+                                            ))
                                             .w(px(280.))
                                             .max_h(px(360.))
                                             .overflow_y_scroll()

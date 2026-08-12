@@ -301,6 +301,8 @@ impl NotesPanel {
         match event {
             InputEvent::PressEnter { .. } => self.commit_title_edit(cx),
             InputEvent::Blur => self.commit_title_edit(cx),
+            // Re-render so the title char counter updates as the user types.
+            InputEvent::Change => cx.notify(),
             _ => {}
         }
     }
@@ -1467,6 +1469,15 @@ impl NotesPanel {
 
         let editing_active = matches!(&self.editing_title_id, Some(eid) if Some(eid.as_str()) == active_id.as_deref());
 
+        // Title character count (汉字 counts as 1: this is a Unicode scalar
+        // count via `.chars()`, NOT a byte count). Live while editing thanks to
+        // on_title_event's InputEvent::Change → cx.notify().
+        let title_char_count: Option<usize> = if editing_active {
+            Some(self.title_input.read(cx).value().chars().count())
+        } else {
+            active_note.map(|n| n.title.chars().count())
+        };
+
         // Single WYSIWYG content pane — the embedded block editor renders its
         // own scrollable block column (velotype's Editor::render). The legacy
         // source/live split and slash-command palette are gone; the editor has
@@ -1606,6 +1617,15 @@ impl NotesPanel {
                                     ),
                             )
                         });
+                }
+                if let Some(c) = title_char_count {
+                    header = header.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(theme.muted_foreground)
+                            .child(rust_i18n::t!("notes.title_char_count", count = c).to_string()),
+                    );
                 }
                 header
             })

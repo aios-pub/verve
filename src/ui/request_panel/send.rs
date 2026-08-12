@@ -177,7 +177,22 @@ impl RequestPanel {
 
         let client = cx.http_client();
         let id_clone = id.clone();
-        self.state.update(cx, |s, _cx| s.sending = Some(id.clone()));
+        // Clear any previous response and mark "请求中" so the realtime panel
+        // doesn't show stale content (body/status/time/size) while the request
+        // is in flight. Mirrors the streaming branches' placeholder seeding;
+        // `streaming` stays false because HTTP sends aren't user-cancellable.
+        self.state.update(cx, |s, cx| {
+            s.sending = Some(id.clone());
+            if let Some(project) = s.active_project_mut() {
+                if let Some((_, r)) = project.find_request_mut(&id) {
+                    r.last_response = Some(Response {
+                        status_text: "请求中…".into(),
+                        ..Default::default()
+                    });
+                }
+            }
+            cx.emit(AppEvent::ResponseUpdated(id.clone()));
+        });
         let env_id = self
             .state
             .read(cx)

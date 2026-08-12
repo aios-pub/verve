@@ -2155,9 +2155,17 @@ impl Render for RequestPanel {
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::BOLD)
                                 .shadow_md()
-                                .label(if streaming { "停止" } else { "发送" })
+                                .label(if streaming {
+                                    "停止"
+                                } else if sending {
+                                    "请求中"
+                                } else {
+                                    "发送"
+                                })
                                 .icon(if streaming {
                                     IconName::Close
+                                } else if sending {
+                                    IconName::Loader
                                 } else {
                                     IconName::Play
                                 })

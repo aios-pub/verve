@@ -335,8 +335,9 @@ impl ResponsePanel {
         }
     }
 
-    /// Render the 响应示例 tab: success and failure examples in two separate
-    /// groups, each body editable. Editors must be reconciled first.
+    /// Render the 响应示例 tab: success and failure examples as two
+    /// side-by-side columns, each with its own vertical scroll. Every body is
+    /// editable. Editors must be reconciled first.
     fn render_example_tab(&self, theme: &gpui_component::Theme, cx: &App) -> AnyElement {
         let (success_meta, fail_metas) = self.example_metas(cx);
 
@@ -350,37 +351,52 @@ impl ResponsePanel {
             );
         }
 
-        let mut sections: Vec<AnyElement> = Vec::new();
+        // Two independent, side-by-side columns so success and failure
+        // examples each scroll on their own instead of sharing one scroll
+        // position. A column renders only when it has content: when both exist
+        // they split the width 50/50, otherwise the lone column fills it.
+        let mut columns: Vec<AnyElement> = Vec::new();
 
-        // ---- 成功示例 group ----
+        // ---- 成功示例 column ----
         if has_success {
             if let (Some(meta), Some(editor)) = (&success_meta, &self.success_editor) {
-                sections.push(
+                columns.push(
                     v_flex()
-                        .w_full()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
                         .gap_2()
-                        .child(group_header("成功示例", GroupKind::Success, theme))
-                        .child(example_card(
-                            Some(meta),
+                        // Group title stays fixed above the scroll area.
+                        .child(div().flex_shrink_0().child(group_header(
+                            "成功示例",
                             GroupKind::Success,
-                            0,
-                            editor,
                             theme,
-                        ))
+                        )))
+                        .child(
+                            v_flex()
+                                .id("resp-success-scroll")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .gap_2()
+                                .child(example_card(
+                                    Some(meta),
+                                    GroupKind::Success,
+                                    0,
+                                    editor,
+                                    theme,
+                                )),
+                        )
                         .into_any_element(),
                 );
             }
         }
 
-        // ---- 失败示例 group ----
+        // ---- 失败示例 column ----
         if has_fail {
-            let mut group = v_flex().w_full().gap_2().child(group_header(
-                "失败示例",
-                GroupKind::Failure,
-                theme,
-            ));
+            let mut cards = v_flex().w_full().gap_2();
             for (i, (meta, editor)) in fail_metas.iter().zip(self.fail_editors.iter()).enumerate() {
-                group = group.child(example_card(
+                cards = cards.child(example_card(
                     Some(meta),
                     GroupKind::Failure,
                     i,
@@ -388,15 +404,34 @@ impl ResponsePanel {
                     theme,
                 ));
             }
-            sections.push(group.into_any_element());
+            columns.push(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .gap_2()
+                    .child(div().flex_shrink_0().child(group_header(
+                        "失败示例",
+                        GroupKind::Failure,
+                        theme,
+                    )))
+                    .child(
+                        v_flex()
+                            .id("resp-fail-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .gap_2()
+                            .child(cards),
+                    )
+                    .into_any_element(),
+            );
         }
 
-        v_flex()
-            .w_full()
+        h_flex()
+            .size_full()
             .gap_4()
-            .id("resp-examples-scroll")
-            .overflow_y_scroll()
-            .children(sections)
+            .children(columns)
             .into_any_element()
     }
 }
@@ -557,6 +592,15 @@ impl Render for ResponsePanel {
             None => "暂无响应".to_string(),
         };
         let is_streaming = response.as_ref().map(|r| r.streaming).unwrap_or(false);
+        // True when the currently-shown request is in flight (a non-streaming
+        // HTTP/GraphQL send). Drives the "请求中…" loading state.
+        let sending = {
+            let st = self.state.read(cx);
+            st.sending
+                .as_deref()
+                .map(|s| Some(s) == st.selected_request.as_deref())
+                .unwrap_or(false)
+        };
         let time = response
             .as_ref()
             .map(|r| format!("{} ms", r.time_ms))
@@ -645,13 +689,30 @@ impl Render for ResponsePanel {
                     .min_h_0()
                     .p_3()
                     .child(match active_tab {
-                        RespTab::Realtime => Input::new(&self.body_view)
-                            .h_full()
-                            .bordered(false)
-                            .appearance(false)
-                            .font_family(theme.mono_font_family.clone())
-                            .text_size(theme.mono_font_size)
-                            .into_any_element(),
+                        RespTab::Realtime => {
+                            if sending && !is_streaming {
+                                // In-flight non-streaming request: the previous
+                                // body was cleared, so show a perceivable
+                                // loading indicator instead of an empty editor.
+                                v_flex()
+                                    .size_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .text_color(theme.muted_foreground)
+                                    .child(gpui_component::spinner::Spinner::new())
+                                    .child(div().text_sm().child("请求中…"))
+                                    .into_any_element()
+                            } else {
+                                Input::new(&self.body_view)
+                                    .h_full()
+                                    .bordered(false)
+                                    .appearance(false)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_size(theme.mono_font_size)
+                                    .into_any_element()
+                            }
+                        }
                         RespTab::Headers => render_headers(&headers, &theme).into_any_element(),
                         RespTab::Cookie => render_cookies(&cookies, &theme).into_any_element(),
                         RespTab::Example => {

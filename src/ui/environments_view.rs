@@ -531,10 +531,11 @@ impl Render for EnvironmentsView {
         let section_is_active = |s: &SettingsSection| active_section.as_ref() == Some(s);
 
         // Two-column layout: left sidebar (env list + global entries) + right
-        // detail panel (switches by active_section).
+        // detail panel (switches by active_section). Fill the host window's
+        // content area (the OS window is resizable) instead of a fixed size so
+        // no dark background leaks through at the bottom/right edges.
         h_flex()
-            .w(px(960.))
-            .h(px(540.))
+            .size_full()
             .relative()
             .gap_0()
             .overflow_hidden()

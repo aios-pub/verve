@@ -195,7 +195,7 @@ impl ProjectTreePanel {
         }
         // Root-level requests.
         for req in &project.requests {
-            if matches_query(&req.name, &query) {
+            if request_matches_query(req, &query) {
                 items.push(TreeItem::new(request_node(&req.id), req.name.clone()));
             }
         }
@@ -290,7 +290,7 @@ fn folder_tree_item(
         }
     }
     for req in &folder.requests {
-        if matches_query(&req.name, query) {
+        if request_matches_query(req, query) {
             children.push(TreeItem::new(request_node(&req.id), req.name.clone()));
         }
     }
@@ -308,6 +308,12 @@ fn folder_tree_item(
 
 fn matches_query(label: &str, query: &str) -> bool {
     query.is_empty() || label.to_lowercase().contains(query)
+}
+
+/// Whether a request matches the search query: case-insensitive substring
+/// match against its name OR its URL (so users can search by endpoint too).
+fn request_matches_query(req: &crate::state::models::ApiRequest, query: &str) -> bool {
+    matches_query(&req.name, query) || matches_query(&req.url, query)
 }
 
 /// A flattened, depth-aware folder entry for the "移动至" destination list.

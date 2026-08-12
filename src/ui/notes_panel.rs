@@ -305,7 +305,13 @@ fn render_highlighted(
                 row = row.child(div().min_w_0().truncate().text_color(base).child(before.to_string()));
             }
             if !mid.is_empty() {
-                row = row.child(div().text_color(hl_fg).bg(hl_bg).child(mid.to_string()));
+                row = row.child(
+                    div()
+                        .text_color(hl_fg)
+                        .bg(hl_bg)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(mid.to_string()),
+                );
             }
             if !after.is_empty() {
                 row = row.child(div().min_w_0().truncate().text_color(base).child(after.to_string()));
@@ -699,31 +705,42 @@ impl NotesPanel {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(50))
                     .await;
-                // Drain everything queued since the last tick, in order.
+                // Drain everything queued since the last tick, in order. Each
+                // command's tantivy work runs on the blocking pool (never on
+                // this async thread) and is awaited before reading the next
+                // command, so order is preserved while no runtime thread blocks.
                 loop {
                     let cmd = match rx.try_recv() {
                         Ok(c) => c,
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                     };
-                    let rebuild_ok: Option<bool> = match cmd {
-                        IndexCmd::Upsert(note) => {
-                            if let Err(e) = idx.upsert(&note) {
-                                log::warn!("notes index upsert failed: {e:?}");
+                    let idx_for_cmd = idx.clone();
+                    let rebuild_ok: Option<bool> = cx
+                        .background_executor()
+                        .spawn(async move {
+                            match cmd {
+                                IndexCmd::Upsert(note) => {
+                                    if let Err(e) = idx_for_cmd.upsert(&note) {
+                                        log::warn!("notes index upsert failed: {e:?}");
+                                    }
+                                    None
+                                }
+                                IndexCmd::Delete(id) => {
+                                    if let Err(e) = idx_for_cmd.delete(&id) {
+                                        log::warn!("notes index delete failed: {e:?}");
+                                    }
+                                    None
+                                }
+                                // A rebuild is heavier (reads all md files);
+                                // running it on the same worker guarantees it
+                                // never overlaps an upsert. Caller set Building.
+                                IndexCmd::Rebuild(dir) => {
+                                    Some(idx_for_cmd.rebuild_from_disk(&dir).is_ok())
+                                }
                             }
-                            None
-                        }
-                        IndexCmd::Delete(id) => {
-                            if let Err(e) = idx.delete(&id) {
-                                log::warn!("notes index delete failed: {e:?}");
-                            }
-                            None
-                        }
-                        // A rebuild is heavier (reads all md files); running it
-                        // on this same worker guarantees it never overlaps an
-                        // upsert. The caller already set status = Building.
-                        IndexCmd::Rebuild(dir) => Some(idx.rebuild_from_disk(&dir).is_ok()),
-                    };
+                        })
+                        .await;
                     if let Some(ok) = rebuild_ok {
                         let _ = this.update(cx, |panel, cx| {
                             panel.index_status = if ok {
@@ -1337,8 +1354,11 @@ impl NotesPanel {
         let view = cx.entity().clone();
 
         let results = self.collect_search_results(query, 10);
-        let hl_bg = theme.warning.opacity(0.35);
-        let hl_fg = theme.foreground;
+        // Colored highlight (yellow marker style): a warm background paired
+        // with its matching foreground so the matched span reads clearly in
+        // both light and dark themes — not the default black/white text.
+        let hl_bg = theme.warning.opacity(0.5);
+        let hl_fg = theme.warning_foreground;
 
         if results.is_empty() {
             return v_flex()

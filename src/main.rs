@@ -27,6 +27,10 @@ fn main() {
     }
     let _ = env_logger::Builder::from_default_env()
         .format_timestamp_secs()
+        // Silence tantivy's chatty info logs (e.g. "Preparing commit" on every
+        // index write). Notes indexing runs on a background thread and is not
+        // something the user needs to see at info level — surface only warnings.
+        .filter_module("tantivy", log::LevelFilter::Warn)
         .try_init();
 
     // Install the process-default rustls crypto provider before any TLS use.

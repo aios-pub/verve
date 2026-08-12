@@ -17,6 +17,7 @@ use crate::notes::{
     has_children,
 };
 use crate::state::{AppEvent, AppState};
+use crate::wysiwyg::editor::count_words;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::time::Instant;
@@ -301,8 +302,6 @@ impl NotesPanel {
         match event {
             InputEvent::PressEnter { .. } => self.commit_title_edit(cx),
             InputEvent::Blur => self.commit_title_edit(cx),
-            // Re-render so the title char counter updates as the user types.
-            InputEvent::Change => cx.notify(),
             _ => {}
         }
     }
@@ -1469,13 +1468,16 @@ impl NotesPanel {
 
         let editing_active = matches!(&self.editing_title_id, Some(eid) if Some(eid.as_str()) == active_id.as_deref());
 
-        // Title character count (汉字 counts as 1: this is a Unicode scalar
-        // count via `.chars()`, NOT a byte count). Live while editing thanks to
-        // on_title_event's InputEvent::Change → cx.notify().
-        let title_char_count: Option<usize> = if editing_active {
-            Some(self.title_input.read(cx).value().chars().count())
+        // Live word count of the active note's body. Computed from the editor's
+        // serialized markdown (reflects unsaved typing) with `count_words`
+        // (汉字 = 1; same metric as the editor status bar & markdown title bar).
+        // The panel re-renders on every edit via the editor observer's
+        // cx.notify(), so this stays live as the user types.
+        let content_word_count: Option<usize> = if active_note.is_some() {
+            let editor = self.editor.read(cx);
+            Some(count_words(&editor.serialized_document_text(cx)))
         } else {
-            active_note.map(|n| n.title.chars().count())
+            None
         };
 
         // Single WYSIWYG content pane — the embedded block editor renders its
@@ -1618,13 +1620,13 @@ impl NotesPanel {
                             )
                         });
                 }
-                if let Some(c) = title_char_count {
+                if let Some(c) = content_word_count {
                     header = header.child(
                         div()
                             .flex_shrink_0()
                             .text_size(px(11.))
                             .text_color(theme.muted_foreground)
-                            .child(rust_i18n::t!("notes.title_char_count", count = c).to_string()),
+                            .child(rust_i18n::t!("notes.word_count", count = c).to_string()),
                     );
                 }
                 header

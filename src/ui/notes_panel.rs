@@ -1354,11 +1354,13 @@ impl NotesPanel {
         let view = cx.entity().clone();
 
         let results = self.collect_search_results(query, 10);
-        // Colored highlight (yellow marker style): a warm background paired
-        // with its matching foreground so the matched span reads clearly in
-        // both light and dark themes — not the default black/white text.
-        let hl_bg = theme.warning.opacity(0.5);
-        let hl_fg = theme.warning_foreground;
+        // High-contrast highlight: a solid accent block with its paired
+        // accent_foreground text (the theme's designed contrast pair, as used
+        // by buttons/selections). Solid + paired = vivid in both light & dark
+        // themes — `warning_foreground` falls back to primary_foreground
+        // (near black/white), which read as a flat monochrome before.
+        let hl_bg = theme.accent;
+        let hl_fg = theme.accent_foreground;
 
         if results.is_empty() {
             return v_flex()

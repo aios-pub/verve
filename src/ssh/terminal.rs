@@ -377,6 +377,92 @@ impl TerminalView {
         Some(out)
     }
 
+    /// Read the raw characters of one **visible** row (0 = top of viewport)
+    /// directly from the alacritty grid, as a `Vec<char>` indexed by grid
+    /// column. HIDDEN cells and `\0` read as spaces (matching how rows are
+    /// rendered). Wide-char spacers are emitted as a space placeholder so the
+    /// vector stays aligned 1:1 with grid columns (i.e. `chars[col]` is the
+    /// char at grid column `col`). Returns `None` if the grid can't be locked
+    /// or the row is off-screen.
+    ///
+    /// Used by double-click word selection to find word boundaries without
+    /// needing the rendered `RowData` (which only exists transiently during
+    /// `render`).
+    fn chars_of_visible_row(&self, visible_row: usize) -> Option<Vec<char>> {
+        let term = self.term.lock().ok()?;
+        let dims: &dyn alacritty_terminal::grid::Dimensions = &*term;
+        let screen_lines = dims.screen_lines();
+        if visible_row >= screen_lines {
+            return None;
+        }
+        let grid = term.grid();
+        let num_cols = dims.columns();
+        let display_offset = grid.display_offset();
+        let bottommost = grid.bottommost_line().0;
+        // Match the viewport mapping used in render() (see terminal.rs ~1283).
+        let grid_line = alacritty_terminal::index::Line(
+            bottommost - screen_lines as i32 + 1 - display_offset as i32 + visible_row as i32,
+        );
+
+        let mut chars: Vec<char> = Vec::with_capacity(num_cols);
+        for col_idx in 0..num_cols {
+            let point = alacritty_terminal::index::Point::new(
+                grid_line,
+                alacritty_terminal::index::Column(col_idx),
+            );
+            let cell: &Cell = &grid[point];
+            // Keep 1:1 column alignment: wide-char spacers contribute a space
+            // placeholder so indices still map to grid columns.
+            let ch = if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::HIDDEN)
+                || cell.c == '\0'
+            {
+                ' '
+            } else {
+                cell.c
+            };
+            chars.push(ch);
+        }
+        Some(chars)
+    }
+
+    /// Select the word around `(row, col)` and return `(start_col, end_col)` —
+    /// the half-open `[start, end)` column range of the run of non-whitespace
+    /// chars containing `col`. If the clicked cell is whitespace, selects only
+    /// that single column (so a double-click on space clears any selection
+    /// rather than grabbing a whole run of blanks).
+    fn word_bounds(chars: &[char], col: usize) -> (usize, usize) {
+        let n = chars.len();
+        if n == 0 {
+            return (0, 0);
+        }
+        let c = col.min(n - 1);
+        // A "word" is a run of identifier-like chars: letters, digits, and
+        // underscore (Unicode-aware, so CJK/alphanumeric glyphs count too).
+        // Everything else — whitespace AND punctuation (/, =, :, ., -, etc.) —
+        // breaks words. This matches standard editor/terminal behavior, so a
+        // double-click on `/usr/bin` selects just `usr` or `bin`, and on
+        // `foo=bar` selects just `foo` or `bar`.
+        let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
+        if !is_word_char(chars[c]) {
+            // Clicked a separator/punctuation cell: select only that one cell
+            // (e.g. double-clicking `/` selects `/`, not the adjacent path
+            // segment).
+            return (c, c + 1);
+        }
+        // Expand left.
+        let mut start = c;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        // Expand right (half-open end).
+        let mut end = c + 1;
+        while end < n && is_word_char(chars[end]) {
+            end += 1;
+        }
+        (start, end)
+    }
+
     /// Feed raw bytes from SSH into the terminal parser.
     pub fn feed(&self, data: &[u8]) {
         // Log raw bytes to verify ANSI escape sequences are present.
@@ -1534,10 +1620,44 @@ impl Render for TerminalView {
                     let ly = (py - oy - 4.0).max(0.0);
                     let col = (lx / cw).floor() as usize;
                     let row = (ly / ch).floor() as usize;
-                    let pt = SelectionPoint {
-                        row: row.min(this.last_visible_rows.saturating_sub(1)),
-                        col,
-                    };
+                    let row = row.min(this.last_visible_rows.saturating_sub(1));
+
+                    // Double-click → select the word under the cursor.
+                    // Triple-click → select the whole line. Both set anchor/head
+                    // and leave `selecting` false so a subsequent drag starts a
+                    // fresh selection (standard terminal behavior).
+                    if ev.click_count >= 3 {
+                        // Select the entire row up to the last non-blank cell.
+                        let end_col = this
+                            .chars_of_visible_row(row)
+                            .map(|chars| {
+                                // Last non-whitespace column + 1 (half-open);
+                                // 0 if the whole row is blank.
+                                chars
+                                    .iter()
+                                    .rposition(|c| !c.is_whitespace())
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0)
+                            })
+                            .unwrap_or(0);
+                        this.selection_anchor = Some(SelectionPoint { row, col: 0 });
+                        this.selection_head = Some(SelectionPoint { row, col: end_col });
+                        this.selecting = false;
+                        cx.notify();
+                        return;
+                    }
+                    if ev.click_count == 2 {
+                        if let Some(chars) = this.chars_of_visible_row(row) {
+                            let (start, end) = Self::word_bounds(&chars, col);
+                            this.selection_anchor = Some(SelectionPoint { row, col: start });
+                            this.selection_head = Some(SelectionPoint { row, col: end });
+                            this.selecting = false;
+                            cx.notify();
+                            return;
+                        }
+                    }
+
+                    let pt = SelectionPoint { row, col };
                     this.selection_anchor = Some(pt);
                     this.selection_head = Some(pt);
                     this.selecting = true;
@@ -1892,5 +2012,72 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].len, line.len());
         assert_eq!(out[0].color, super::TERMINAL_FG);
+    }
+
+    // word_bounds is a pure associated fn on TerminalView (no self, no GPUI
+    // types) so we can call it via the type path without pulling in macros.
+    #[test]
+    fn word_bounds_selects_inner_token() {
+        let chars: Vec<char> = "git status".chars().collect();
+        // Click the 'i' of "git" (col 1) → selects "git" (cols 0..3).
+        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (0, 3));
+        // Click the 't' of "status" (col 5) → selects "status" (cols 4..10).
+        assert_eq!(super::TerminalView::word_bounds(&chars, 5), (4, 10));
+    }
+
+    #[test]
+    fn word_bounds_at_boundaries() {
+        let chars: Vec<char> = "git status".chars().collect();
+        // First char of a word.
+        assert_eq!(super::TerminalView::word_bounds(&chars, 0), (0, 3));
+        // Last char of a word.
+        assert_eq!(super::TerminalView::word_bounds(&chars, 9), (4, 10));
+    }
+
+    #[test]
+    fn word_bounds_on_whitespace_selects_single_cell() {
+        // Double-clicking a space should NOT grab the whole blank run.
+        let chars: Vec<char> = "a    b".chars().collect();
+        // col 2 is a space.
+        assert_eq!(super::TerminalView::word_bounds(&chars, 2), (2, 3));
+    }
+
+    #[test]
+    fn word_bounds_with_punctuation() {
+        // Punctuation breaks words: a path like /usr/bin selects only one
+        // path segment per double-click (e.g. "usr" or "bin"), not the whole.
+        let chars: Vec<char> = "/usr/bin".chars().collect();
+        // Click "u" (col 1) → selects "usr" (cols 1..4).
+        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (1, 4));
+        // Click "b" (col 5) → selects "bin" (cols 5..8).
+        assert_eq!(super::TerminalView::word_bounds(&chars, 5), (5, 8));
+        // Click "/" (col 0, a separator) → selects only that cell.
+        assert_eq!(super::TerminalView::word_bounds(&chars, 0), (0, 1));
+    }
+
+    #[test]
+    fn word_bounds_key_value_and_flags() {
+        // `KEY=value` — double-click each side selects just that side.
+        let chars: Vec<char> = "PATH=/usr/bin".chars().collect();
+        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (0, 4)); // PATH
+        assert_eq!(super::TerminalView::word_bounds(&chars, 8), (6, 9)); // usr
+        // `--rm` style flag: double-click "rm" selects "rm", not "--rm".
+        let chars: Vec<char> = "--rm".chars().collect();
+        assert_eq!(super::TerminalView::word_bounds(&chars, 3), (2, 4)); // rm
+    }
+
+    #[test]
+    fn word_bounds_underscore_joins() {
+        // Underscore is a word char, so error_code selects as one token.
+        let chars: Vec<char> = "error_code foo".chars().collect();
+        assert_eq!(super::TerminalView::word_bounds(&chars, 3), (0, 10));
+    }
+
+    #[test]
+    fn word_bounds_empty_and_oob() {
+        assert_eq!(super::TerminalView::word_bounds(&[], 5), (0, 0));
+        // Col past the end is clamped to the last cell.
+        let chars: Vec<char> = "hi".chars().collect();
+        assert_eq!(super::TerminalView::word_bounds(&chars, 99), (0, 2));
     }
 }

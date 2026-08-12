@@ -146,6 +146,8 @@ pub struct KvTable {
     pub id: SharedString,
     pub rows: Vec<KvRow>,
     pub allow_files: bool,
+    /// Whether to show the leading enabled checkbox on each row.
+    pub show_enabled: bool,
     /// Whether to show the type selector (form-data/query).
     pub show_type: bool,
     /// Whether to show the description column (manager tables).
@@ -156,6 +158,10 @@ pub struct KvTable {
     /// Fixed width of the value column. Defaults to 160px; wider for tables
     /// that hold long values (e.g. environment-variable URLs).
     pub value_width: Option<Pixels>,
+    /// When true, the description column flexes (grows/shrinks) instead of a
+    /// fixed 180px, so a wide value column can't push the delete button off
+    /// the right edge of the table.
+    pub description_flex: bool,
     pub handlers: KvHandlers,
 }
 
@@ -165,16 +171,24 @@ impl KvTable {
             id: id.into(),
             rows,
             allow_files: false,
+            show_enabled: true,
             show_type: false,
             show_description: false,
             show_required: false,
             value_width: None,
+            description_flex: false,
             handlers,
         }
     }
 
     pub fn allow_files(mut self, allow: bool) -> Self {
         self.allow_files = allow;
+        self
+    }
+
+    /// Show or hide the leading enabled checkbox on each row (default true).
+    pub fn show_enabled(mut self, show: bool) -> Self {
+        self.show_enabled = show;
         self
     }
 
@@ -198,6 +212,14 @@ impl KvTable {
         self.value_width = Some(width.into());
         self
     }
+
+    /// Make the description column flex (grow/shrink) instead of a fixed
+    /// 180px, so it absorbs slack and keeps the delete button visible even
+    /// with a wide value column.
+    pub fn description_flex(mut self, flex: bool) -> Self {
+        self.description_flex = flex;
+        self
+    }
 }
 
 impl RenderOnce for KvTable {
@@ -206,6 +228,8 @@ impl RenderOnce for KvTable {
         let show_type = self.show_type;
         let show_description = self.show_description;
         let show_required = self.show_required;
+        let show_enabled = self.show_enabled;
+        let description_flex = self.description_flex;
         let _id = self.id.clone();
         let theme = cx.theme().clone();
         // Fixed value-column width (default 160px) and the corresponding
@@ -232,11 +256,13 @@ impl RenderOnce for KvTable {
                     .w_full()
                     .gap_1()
                     .items_center()
-                    .child(Checkbox::new(("kv-enabled", ix)).checked(enabled).on_click(
-                        move |checked: &bool, window, cx| {
-                            (toggle)(ix, *checked, window, cx);
-                        },
-                    ))
+                    .when(show_enabled, |this| {
+                        this.child(Checkbox::new(("kv-enabled", ix)).checked(enabled).on_click(
+                            move |checked: &bool, window, cx| {
+                                (toggle)(ix, *checked, window, cx);
+                            },
+                        ))
+                    })
                     .child(
                         div()
                             .w(px(140.))
@@ -394,13 +420,17 @@ impl RenderOnce for KvTable {
                                 }),
                         )
                     })
-                    // Description column (manager tables).
+                    // Description column (manager tables). When `description_flex`
+                    // is set the column grows/shrinks so a wide value can't push
+                    // the trailing delete button off-screen.
                     .when(show_description, |this| {
+                        let col = if description_flex {
+                            div().flex_1().min_w(px(80.))
+                        } else {
+                            div().w(px(180.)).flex_shrink_0()
+                        };
                         this.child(
-                            div()
-                                .w(px(180.))
-                                .flex_shrink_0()
-                                .child(Input::new(&row.description).small().appearance(false)),
+                            col.child(Input::new(&row.description).small().appearance(false)),
                         )
                     })
                     // File picker button (form-data + File type).

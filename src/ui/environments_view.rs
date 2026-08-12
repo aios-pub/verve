@@ -406,12 +406,68 @@ impl Render for EnvironmentsView {
                     this.commit(cx);
                 });
             }),
-            on_delete: Arc::new(move |ix, _window, cx: &mut App| {
-                let _ = view_delete.update(cx, |this, cx| {
-                    if ix < this.rows.len() {
-                        this.rows.remove(ix);
-                    }
-                    this.commit(cx);
+            on_delete: Arc::new(move |ix, window, cx: &mut App| {
+                // Empty rows (e.g. the trailing add-slot) delete immediately;
+                // rows with content ask for confirmation first.
+                let row_info = view_delete.read(cx).rows.get(ix).map(|r| {
+                    (
+                        r.key.read(cx).value().to_string(),
+                        r.value.read(cx).value().to_string(),
+                    )
+                });
+                let has_content = row_info
+                    .as_ref()
+                    .map(|(k, v)| !k.trim().is_empty() || !v.trim().is_empty())
+                    .unwrap_or(false);
+                if !has_content {
+                    let _ = view_delete.update(cx, |this, cx| {
+                        if ix < this.rows.len() {
+                            this.rows.remove(ix);
+                        }
+                        this.commit(cx);
+                    });
+                    return;
+                }
+                let key_label = row_info
+                    .as_ref()
+                    .map(|(k, _)| k.trim().to_string())
+                    .filter(|k| !k.is_empty());
+                let view_for_dialog = view_delete.clone();
+                window.open_dialog(cx, move |dialog, _w, _cx| {
+                    let key_for_content = key_label.clone();
+                    let view_del = view_for_dialog.clone();
+                    dialog
+                        .title("确认删除")
+                        .content(move |content, _, _| {
+                            let msg = match key_for_content.as_ref() {
+                                Some(k) => {
+                                    format!("确定要删除变量「{}」吗？此操作不可撤销。", k)
+                                }
+                                None => "确定要删除该变量吗？此操作不可撤销。".to_string(),
+                            };
+                            content.child(
+                                v_flex()
+                                    .p_4()
+                                    .w(px(360.))
+                                    .gap_2()
+                                    .child(div().text_sm().child(msg)),
+                            )
+                        })
+                        .footer(
+                            gpui_component::button::Button::new("confirm-var-delete")
+                                .primary()
+                                .small()
+                                .label("删除")
+                                .on_click(move |_, window, cx| {
+                                    let _ = view_del.update(cx, |this, cx| {
+                                        if ix < this.rows.len() {
+                                            this.rows.remove(ix);
+                                        }
+                                        this.commit(cx);
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        )
                 });
             }),
             on_add: Arc::new(move |window, cx: &mut App| {
@@ -656,77 +712,82 @@ impl Render for EnvironmentsView {
                                     .gap_2()
                                     .size_full()
                                     .min_h_0()
-                                    // Toolbar: env name input + set-active + delete.
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .child(
-                                                div().flex_1().child(
-                                                    Input::new(&self.name_input)
-                                                        .small()
-                                                        .prefix(IconName::Settings),
-                                                ),
-                                            )
-                                            .child(
-                                                Button::new("env-set-active")
-                                                    .primary()
-                                                    .small()
-                                                    .label("设为当前")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.set_active(cx)
-                                                    })),
-                                            )
-                                            .child(
-                                                Button::new("env-delete")
-                                                    .ghost()
-                                                    .small()
-                                                    .icon(IconName::Delete)
-                                                    .tooltip("删除环境")
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            if let Some(id) =
-                                                                this.selected_env_id.clone()
-                                                            {
-                                                                this.request_delete_env(
-                                                                    id, window, cx,
-                                                                )
-                                                            }
-                                                        },
-                                                    )),
-                                            ),
-                                    )
-                                    // Variables section (scrollable).
+                                    // Header: toolbar + description. Structurally parallel
+                                    // to the global-section header (same row heights) so the
+                                    // variables table area lines up across the two views.
                                     .child(
                                         v_flex()
-                                            .flex_1()
-                                            .min_h_0()
                                             .gap_1()
+                                            .flex_shrink_0()
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme.foreground)
-                                                    .child("环境变量"),
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .min_h(px(30.))
+                                                    .child(
+                                                        div().flex_1().child(
+                                                            Input::new(&self.name_input)
+                                                                .small()
+                                                                .prefix(IconName::Settings),
+                                                        ),
+                                                    )
+                                                    .child(
+                                                        Button::new("env-set-active")
+                                                            .primary()
+                                                            .small()
+                                                            .label("设为当前")
+                                                            .on_click(cx.listener(
+                                                                |this, _, _, cx| {
+                                                                    this.set_active(cx)
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        Button::new("env-delete")
+                                                            .ghost()
+                                                            .small()
+                                                            .icon(IconName::Delete)
+                                                            .tooltip("删除环境")
+                                                            .on_click(cx.listener(
+                                                                |this, _, window, cx| {
+                                                                    if let Some(id) =
+                                                                        this.selected_env_id.clone()
+                                                                    {
+                                                                        this.request_delete_env(
+                                                                            id, window, cx,
+                                                                        )
+                                                                    }
+                                                                },
+                                                            )),
+                                                    ),
                                             )
                                             .child(
                                                 div()
-                                                    .id("env-vars-scroll")
-                                                    .flex_1()
-                                                    .min_h_0()
-                                                    .overflow_y_scroll()
-                                                    .overflow_x_scroll()
-                                                    .child(
-                                                        div().w_full().min_w(px(640.)).child(
-                                                            crate::ui::kv_table::KvTable::new(
-                                                                "env-vars",
-                                                                self.rows.clone(),
-                                                                handlers,
-                                                            )
-                                                            .show_description(true)
-                                                            .show_required(true)
-                                                            .value_width(px(280.)),
-                                                        ),
-                                                    ),
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .child("环境变量在该环境激活时用于变量替换"),
+                                            ),
+                                    )
+                                    // Variables table (scrollable).
+                                    .child(
+                                        div()
+                                            .id("env-vars-scroll")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .overflow_x_scroll()
+                                            .child(
+                                                div().w_full().min_w(px(640.)).child(
+                                                    crate::ui::kv_table::KvTable::new(
+                                                        "env-vars",
+                                                        self.rows.clone(),
+                                                        handlers,
+                                                    )
+                                                    .show_description(false)
+                                                    .value_width(px(360.))
+                                                    .description_flex(true)
+                                                    .show_enabled(false),
+                                                ),
                                             ),
                                     )
                                     .into_any_element()
@@ -739,15 +800,22 @@ impl Render for EnvironmentsView {
                                 .gap_2()
                                 .size_full()
                                 .min_h_0()
+                                // Header: title + description. Structurally parallel to the
+                                // environment header (same row heights) so the variables
+                                // table area lines up across the two views.
                                 .child(
                                     v_flex()
                                         .gap_1()
+                                        .flex_shrink_0()
                                         .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(theme.foreground)
-                                                .child(title),
+                                            h_flex().items_center().gap_2().min_h(px(30.)).child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme.foreground)
+                                                    .child(title),
+                                            ),
                                         )
                                         .child(
                                             div()
@@ -770,9 +838,10 @@ impl Render for EnvironmentsView {
                                                     self.rows.clone(),
                                                     handlers,
                                                 )
-                                                .show_description(true)
-                                                .show_required(true)
-                                                .value_width(px(280.)),
+                                                .show_description(false)
+                                                .value_width(px(360.))
+                                                .description_flex(true)
+                                                .show_enabled(false),
                                             ),
                                         ),
                                 )

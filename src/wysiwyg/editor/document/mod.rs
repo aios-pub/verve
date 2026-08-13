@@ -43,6 +43,10 @@ pub(super) struct ListMarker {
     kind: BlockKind,
     indent_columns: usize,
     content_indent_columns: usize,
+    /// Literal ordinal parsed from an ordered-list marker (`1.`, `2.`, …).
+    /// Captured so the editor can honor the source's start number instead of
+    /// always restarting at 1. Unused (set to `1`) for bulleted/task items.
+    ordered_start: u32,
     text: String,
 }
 
@@ -296,20 +300,22 @@ pub(super) fn parse_list_marker(line: &str) -> Option<ListMarker> {
             content_indent_columns: display_columns(
                 &line[..indent_bytes + marker.len_utf8() + separator_len],
             ),
+            ordered_start: 1,
             text,
         });
     }
 
-    let (digit_len, marker_len, text) = parse_ordered_list_marker(rest)?;
+    let (digit_len, marker_len, ordered_start, text) = parse_ordered_list_marker(rest)?;
     Some(ListMarker {
         kind: BlockKind::NumberedListItem,
         indent_columns,
         content_indent_columns: display_columns(&line[..indent_bytes + digit_len + marker_len]),
+        ordered_start,
         text: text.to_string(),
     })
 }
 
-fn parse_ordered_list_marker(rest: &str) -> Option<(usize, usize, &str)> {
+fn parse_ordered_list_marker(rest: &str) -> Option<(usize, usize, u32, &str)> {
     let digit_len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
     if !(1..=9).contains(&digit_len) {
         return None;
@@ -325,7 +331,12 @@ fn parse_ordered_list_marker(rest: &str) -> Option<(usize, usize, &str)> {
         return None;
     }
 
-    Some((digit_len, 2, &rest[digit_len + 2..]))
+    // `digit_len` counts ASCII-digit bytes (all single-byte), so `..digit_len`
+    // is guaranteed to land on a UTF-8 char boundary; at most 9 digits, so the
+    // value always fits in a `u32`. Fall back to 1 defensively.
+    let start = rest.get(..digit_len).and_then(|s| s.parse::<u32>().ok());
+    let start = start.filter(|&n| n >= 1).unwrap_or(1);
+    Some((digit_len, 2, start, &rest[digit_len + 2..]))
 }
 
 pub(super) fn strip_one_quote_level(line: &str) -> Option<String> {
@@ -1594,7 +1605,15 @@ impl Editor {
             };
 
             let item_end = collect_list_item_region(lines, index, marker.indent_columns);
+            let ordered_start = marker.ordered_start;
+            let is_numbered = marker.kind == BlockKind::NumberedListItem;
             let block = native_block(cx, marker.kind.clone(), marker.text);
+            // Preserve the literal start number so a `2.` item still renders as
+            // `2.` even when separated from the previous numbered item by
+            // intervening (non-numbered) content.
+            if is_numbered {
+                block.update(cx, |block, _cx| block.list_start = ordered_start);
+            }
             let mut body_index = index + 1;
             let mut pending_blank_lines = 0usize;
             let mut fallback_raw = false;

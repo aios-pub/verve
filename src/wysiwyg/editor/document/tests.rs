@@ -546,6 +546,35 @@ async fn separated_numbered_list_runs_restart_at_one_after_blank_line(cx: &mut T
 }
 
 #[gpui::test]
+async fn numbered_list_preserves_literal_start_across_intervening_paragraphs(
+    cx: &mut TestAppContext,
+) {
+    // Two exam questions whose option paragraphs (A./B./…) sit between the
+    // numbered items. The second item's literal `2.` must be honored even though
+    // the intervening content resets the sequential counter.
+    let editor = cx.new(|cx| {
+        Editor::from_markdown(cx, "1. q1\n\nA. a\nB. b\n\n2. q2".to_string(), None)
+    });
+
+    editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks();
+        let numbered: Vec<_> = visible
+            .iter()
+            .filter(|b| b.entity.read(cx).kind() == BlockKind::NumberedListItem)
+            .collect();
+        assert_eq!(numbered.len(), 2);
+        assert_eq!(numbered[0].entity.read(cx).display_text(), "q1");
+        assert_eq!(numbered[0].entity.read(cx).list_ordinal, Some(1));
+        assert_eq!(numbered[1].entity.read(cx).display_text(), "q2");
+        assert_eq!(numbered[1].entity.read(cx).list_ordinal, Some(2));
+        assert_eq!(
+            editor.document.markdown_text(cx),
+            "1. q1\n\nA. a\nB. b\n\n2. q2"
+        );
+    });
+}
+
+#[gpui::test]
 async fn imports_parenthesized_ordered_lists_and_serializes_canonical_dot_markers(
     cx: &mut TestAppContext,
 ) {

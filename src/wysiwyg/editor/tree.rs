@@ -296,6 +296,7 @@ impl DocumentTree {
         snapshot: &mut VisibleTreeSnapshot,
     ) {
         let mut numbered_list_ordinal = 0;
+        let mut numbered_list_start: u32 = 1;
         let mut previous_was_list_item = false;
         for (index, block) in blocks.iter().enumerate() {
             let entity_id = block.entity_id();
@@ -314,7 +315,7 @@ impl DocumentTree {
                 },
             );
 
-            let (block_id, kind, children, is_empty_paragraph) = {
+            let (block_id, kind, children, is_empty_paragraph, list_start) = {
                 let block_ref = block.read(cx);
                 (
                     block_ref.record.id,
@@ -323,6 +324,7 @@ impl DocumentTree {
                     block_ref.kind() == BlockKind::Paragraph
                         && block_ref.record.title.visible_text().is_empty()
                         && block_ref.children.is_empty(),
+                    block_ref.list_start,
                 )
             };
             let parent_is_list_item = parent_entity
@@ -334,8 +336,16 @@ impl DocumentTree {
                 .map(|child| child.read(cx).record.id)
                 .collect::<Vec<_>>();
             let list_ordinal = if kind.is_numbered_list_item() {
+                // At the start of a run, adopt the item's literal start number
+                // (CommonMark: a list's start number is its first item's
+                // number). Subsequent siblings count up from that base. This
+                // keeps `2.` as `2.` even when non-numbered content separates
+                // it from the previous numbered item.
+                if numbered_list_ordinal == 0 {
+                    numbered_list_start = list_start.max(1);
+                }
                 numbered_list_ordinal += 1;
-                Some(numbered_list_ordinal)
+                Some(numbered_list_start as usize + numbered_list_ordinal - 1)
             } else {
                 numbered_list_ordinal = 0;
                 None

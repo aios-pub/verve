@@ -145,6 +145,11 @@ pub struct Block {
     pub(crate) footnote_anchor: Option<uuid::Uuid>,
     pub(crate) parent_is_list_item: bool,
     pub list_ordinal: Option<usize>,
+    /// Literal start number parsed from an ordered-list marker. Used as the
+    /// base when this item begins a numbered run (so `2.` stays `2.` even when
+    /// separated from the prior item by intervening content); ignored
+    /// otherwise. Defaults to `1` (e.g. editor-created items).
+    pub list_start: u32,
     pub is_selecting: bool,
     pub cursor_blink_epoch: Instant,
     pub vertical_motion_x: Option<Pixels>,
@@ -349,6 +354,7 @@ impl Block {
             footnote_anchor: None,
             parent_is_list_item: false,
             list_ordinal: None,
+            list_start: 1,
             is_selecting: false,
             cursor_blink_epoch: Instant::now(),
             vertical_motion_x: None,

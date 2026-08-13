@@ -1043,11 +1043,17 @@ impl Editor {
                     .await;
                 let _ = weak_editor.update(cx, |this, cx| {
                     this.scrollbar_fade_task = None;
+                    // Mark this as a view-only (scrollbar fade) notify so host
+                    // observers can skip rebuilding on it.
+                    this.scroll_revision = this.scroll_revision.wrapping_add(1);
                     cx.notify();
                 });
             },
         ));
 
+        // Bump before notifying so host observers can recognise this as a
+        // view-only scroll notify and skip a full rebuild.
+        self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
 
@@ -1180,6 +1186,10 @@ impl Editor {
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
         self.bump_scrollbar_visibility(cx);
+        // `bump_scrollbar_visibility` already notified (and bumped the scroll
+        // revision); bump again so this follow-up notify is also recognised as
+        // view-only by host observers.
+        self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
 
@@ -1200,6 +1210,10 @@ impl Editor {
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
         self.bump_scrollbar_visibility(cx);
+        // `bump_scrollbar_visibility` already notified (and bumped the scroll
+        // revision); bump again so this follow-up notify is also recognised as
+        // view-only by host observers.
+        self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
 
@@ -1225,12 +1239,16 @@ impl Editor {
         offset.y = -px(scroll_y);
         self.scroll_handle.set_offset(offset);
         self.bump_scrollbar_visibility(cx);
+        // Follow-up view-only scroll notify (drag) — bump so host observers
+        // skip rebuilding on it.
+        self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
 
     pub(crate) fn end_scrollbar_drag(&mut self, cx: &mut Context<Self>) {
         if self.scrollbar_drag.take().is_some() {
             self.bump_scrollbar_visibility(cx);
+            self.scroll_revision = self.scroll_revision.wrapping_add(1);
             cx.notify();
         }
     }

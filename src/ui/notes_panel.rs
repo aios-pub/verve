@@ -65,6 +65,10 @@ pub struct NotesPanel {
     /// delete alongside the note.
     pending_media_delete: Option<PendingMediaDelete>,
     save_timer: Option<Task<()>>,
+    /// Last seen editor `scroll_revision`. The editor bumps it on scroll-only
+    /// notifies (scrollbar show/hide); we use it to avoid rebuilding the whole
+    /// panel — including the heavy note sidebar — on every scroll tick.
+    last_scroll_revision: u64,
     _subs: Vec<Subscription>,
     // Nested-notes tree state.
     tree: Entity<TreeState>,
@@ -382,7 +386,18 @@ impl NotesPanel {
         // Observe the editor for changes so we can debounce-save the serialized
         // Markdown back into `Note.content`. The editor emits `cx.notify()` on
         // every edit (and on undo/redo/mode switch), which fires this observer.
-        let editor_sub = cx.observe(&editor, |this, _editor, cx| {
+        let editor_sub = cx.observe(&editor, |this, editor, cx| {
+            // The editor fires cx.notify() on every scroll tick to show/hide its
+            // custom scrollbar, bumping `scroll_revision`. That is a view-only
+            // change — the sidebar, word count, and autosave don't depend on it
+            // — so skip the (expensive) full-panel rebuild + save reschedule on
+            // scroll. Content/selection notifies leave the revision unchanged
+            // and refresh as before.
+            let current = editor.read(cx).scroll_revision;
+            if current != this.last_scroll_revision {
+                this.last_scroll_revision = current;
+                return;
+            }
             this.schedule_save(cx);
             // Re-notify the panel so the host title-bar toolbar (observed via
             // the panel in VerveApp) refreshes on caret/selection changes.
@@ -425,6 +440,7 @@ impl NotesPanel {
             pending_delete: None,
             pending_media_delete: None,
             save_timer: None,
+            last_scroll_revision: 0,
             _subs: vec![editor_sub, search_sub, title_sub, tree_sub],
             editor_needs_reload: false,
             export_popover_open: false,
@@ -1022,9 +1038,17 @@ impl NotesPanel {
         let new_editor = cx
             .new(|cx| crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).embedded());
         self.editor = new_editor;
+        // The new editor starts at scroll_revision 0; sync our tracker so the
+        // first content notify after the switch isn't mistaken for a scroll.
+        self.last_scroll_revision = self.editor.read(cx).scroll_revision;
         // The autosave observer is bound to the (now-dropped) old editor entity;
         // re-subscribe to the new one. It's the first entry in `_subs`.
-        let editor_sub = cx.observe(&self.editor, |this, _editor, cx| {
+        let editor_sub = cx.observe(&self.editor, |this, editor, cx| {
+            let current = editor.read(cx).scroll_revision;
+            if current != this.last_scroll_revision {
+                this.last_scroll_revision = current;
+                return;
+            }
             this.schedule_save(cx);
             cx.notify();
         });

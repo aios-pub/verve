@@ -195,6 +195,12 @@ pub struct Editor {
     scrollbar_hovered: bool,
     scrollbar_visible_until: Instant,
     scrollbar_fade_task: Option<Task<()>>,
+    /// Bumped on every scroll-driven `cx.notify()` (wheel scroll, programmatic
+    /// scroll, scrollbar fade timer). Hosts observing the editor compare this to
+    /// distinguish view-only scroll notifies (which must re-render the editor's
+    /// own scrollbar but should NOT force a full host rebuild) from
+    /// content/selection notifies. See the `NotesPanel` editor observer.
+    pub(crate) scroll_revision: u64,
     /// Forces a repaint shortly after a pending scroll-into-view that could
     /// not be satisfied yet (the target block has no measured bounds), so the
     /// scroll lands on the next frame instead of waiting for the cursor blink.
@@ -448,6 +454,7 @@ impl Editor {
             scrollbar_hovered: false,
             scrollbar_visible_until: Instant::now(),
             scrollbar_fade_task: None,
+            scroll_revision: 0,
             scroll_recheck_task: None,
             scrollbar_drag: None,
             undo_history: Vec::new(),

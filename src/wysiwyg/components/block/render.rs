@@ -68,9 +68,49 @@ fn header_axis_emphasis(color: Hsla) -> Hsla {
     }
 }
 
-fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
+/// The small slice of theme + i18n data needed to render the image fallback /
+/// loading placeholders. Held by value so the `with_fallback` / `with_loading`
+/// closures on `img(...)` capture it cheaply (a few `Copy` fields + three
+/// `String`s) instead of deep-cloning the whole `Theme` (~80 fields) and
+/// `I18nStrings` (~190 `String`s) every frame for every image — which was the
+/// dominant allocator churn behind scroll jank in image-heavy documents.
+#[derive(Clone)]
+struct ImagePlaceholderStyle {
+    radius: f32,
+    block_padding_x: f32,
+    placeholder_border: Hsla,
+    placeholder_bg: Hsla,
+    placeholder_text: Hsla,
+    text_size: f32,
+    code_size: f32,
+    empty_alt_label: String,
+    loading_without_alt: String,
+    loading_with_alt_template: String,
+}
+
+impl ImagePlaceholderStyle {
+    fn from_theme(theme: &Theme, strings: &I18nStrings) -> Self {
+        let colors = &theme.colors;
+        let dims = &theme.dimensions;
+        let typo = &theme.typography;
+        Self {
+            radius: dims.image_radius,
+            block_padding_x: dims.block_padding_x,
+            placeholder_border: colors.image_placeholder_border,
+            placeholder_bg: colors.image_placeholder_bg,
+            placeholder_text: colors.image_placeholder_text,
+            text_size: typo.text_size,
+            code_size: typo.code_size,
+            empty_alt_label: strings.image_placeholder.clone(),
+            loading_without_alt: strings.image_loading_without_alt.clone(),
+            loading_with_alt_template: strings.image_loading_with_alt_template.clone(),
+        }
+    }
+}
+
+fn fallback_image_label(alt: &str, empty_alt_label: &str) -> SharedString {
     if alt.trim().is_empty() {
-        SharedString::from(strings.image_placeholder.clone())
+        SharedString::from(empty_alt_label.to_string())
     } else {
         SharedString::from(alt.to_string())
     }
@@ -80,27 +120,23 @@ fn render_image_placeholder(
     runtime: &ImageRuntime,
     width: Length,
     height: Pixels,
-    theme: &Theme,
-    strings: &I18nStrings,
+    style: &ImagePlaceholderStyle,
 ) -> AnyElement {
-    let c = &theme.colors;
-    let d = &theme.dimensions;
-    let t = &theme.typography;
     div()
         .w(width)
         .h(height)
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(d.image_radius))
+        .rounded(px(style.radius))
         .border(px(1.0))
-        .border_color(c.image_placeholder_border)
-        .bg(c.image_placeholder_bg)
-        .px(px(d.block_padding_x))
+        .border_color(style.placeholder_border)
+        .bg(style.placeholder_bg)
+        .px(px(style.block_padding_x))
         .text_center()
-        .text_size(px(t.text_size))
-        .text_color(c.image_placeholder_text)
-        .child(fallback_image_label(&runtime.alt, strings))
+        .text_size(px(style.text_size))
+        .text_color(style.placeholder_text)
+        .child(fallback_image_label(&runtime.alt, &style.empty_alt_label))
         .into_any_element()
 }
 
@@ -108,32 +144,28 @@ fn render_loading_placeholder(
     runtime: &ImageRuntime,
     width: Length,
     height: Pixels,
-    theme: &Theme,
-    strings: &I18nStrings,
+    style: &ImagePlaceholderStyle,
 ) -> AnyElement {
-    let c = &theme.colors;
-    let d = &theme.dimensions;
-    let t = &theme.typography;
     div()
         .w(width)
         .h(height)
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(d.image_radius))
+        .rounded(px(style.radius))
         .border(px(1.0))
-        .border_color(c.image_placeholder_border)
-        .bg(c.image_placeholder_bg)
-        .px(px(d.block_padding_x))
+        .border_color(style.placeholder_border)
+        .bg(style.placeholder_bg)
+        .px(px(style.block_padding_x))
         .text_center()
-        .text_size(px(t.code_size))
-        .text_color(c.image_placeholder_text)
+        .text_size(px(style.code_size))
+        .text_color(style.placeholder_text)
         .child(if runtime.alt.trim().is_empty() {
-            SharedString::from(strings.image_loading_without_alt.clone())
+            SharedString::from(style.loading_without_alt.clone())
         } else {
             SharedString::from(
-                strings
-                    .image_loading_with_alt_template
+                style
+                    .loading_with_alt_template
                     .replace("{alt}", &runtime.alt),
             )
         })
@@ -561,10 +593,11 @@ impl Block {
         let d = &theme.dimensions;
         let t = &theme.typography;
         let source = runtime.resolved_source.clone();
-        let placeholder_theme = theme.clone();
-        let loading_theme = theme.clone();
-        let placeholder_strings = strings.clone();
-        let loading_strings = strings.clone();
+        // Capture only the handful of theme/i18n fields the placeholders need,
+        // not the entire `Theme`/`I18nStrings` (which would deep-clone ~190
+        // strings + ~80 color fields every frame for every image).
+        let placeholder_style = ImagePlaceholderStyle::from_theme(theme, strings);
+        let loading_style = placeholder_style.clone();
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
 
@@ -580,8 +613,7 @@ impl Block {
                 &runtime_for_fallback,
                 max_width,
                 placeholder_height,
-                &placeholder_theme,
-                &placeholder_strings,
+                &placeholder_style,
             )
         })
         .with_loading(move || {
@@ -589,8 +621,7 @@ impl Block {
                 &runtime_for_loading,
                 max_width,
                 placeholder_height,
-                &loading_theme,
-                &loading_strings,
+                &loading_style,
             )
         });
 
@@ -1110,10 +1141,8 @@ impl Block {
         let max_height = px(d.image_cell_placeholder_height);
         let max_width =
             Length::Definite(px((d.image_cell_placeholder_height * 1.6).max(48.0)).into());
-        let placeholder_theme = theme.clone();
-        let loading_theme = theme.clone();
-        let placeholder_strings = strings.clone();
-        let loading_strings = strings.clone();
+        let placeholder_style = ImagePlaceholderStyle::from_theme(theme, strings);
+        let loading_style = placeholder_style.clone();
         let runtime_for_fallback = runtime.clone();
         let runtime_for_loading = runtime.clone();
 
@@ -1129,8 +1158,7 @@ impl Block {
                 &runtime_for_fallback,
                 max_width,
                 max_height,
-                &placeholder_theme,
-                &placeholder_strings,
+                &placeholder_style,
             )
         })
         .with_loading(move || {
@@ -1138,8 +1166,7 @@ impl Block {
                 &runtime_for_loading,
                 max_width,
                 max_height,
-                &loading_theme,
-                &loading_strings,
+                &loading_style,
             )
         });
 

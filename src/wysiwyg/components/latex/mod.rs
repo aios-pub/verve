@@ -1,9 +1,11 @@
 //! LaTeX display-math parsing and RaTeX SVG rendering helpers.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context as _, anyhow};
 use gpui::{Hsla, Rgba};
@@ -83,19 +85,63 @@ pub(crate) fn render_inline_math_svg(
     render_latex_svg_to_cache(latex, text_color, font_size)
 }
 
+/// Process-wide cache of rendered formulas, keyed by [`latex_cache_key`].
+///
+/// GPUI rebuilds the layout tree and re-runs every mounted block's `render()`
+/// every frame. Without this cache, each visible `$...$` formula would re-run
+/// the ratex pipeline (parse → layout → display list → SVG) dozens of times
+/// per second while scrolling — the dominant source of scroll jank in
+/// math-heavy documents. A hit returns with zero compute and zero disk I/O.
+fn latex_svg_cache() -> &'static Mutex<HashMap<String, LatexSvgRender>> {
+    static LATEX_SVG_CACHE: OnceLock<Mutex<HashMap<String, LatexSvgRender>>> = OnceLock::new();
+    LATEX_SVG_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn render_latex_svg_to_cache(
     latex: &str,
     text_color: Hsla,
     font_size: f32,
 ) -> anyhow::Result<LatexSvgRender> {
-    let svg = render_latex_to_svg(latex, text_color, font_size)?;
     let key = latex_cache_key(latex, text_color, font_size);
-    let path = latex_cache_dir()?.join(format!("{key}.svg"));
-    if !path.exists() {
-        fs::write(&path, &svg)
-            .with_context(|| format!("failed to write LaTeX SVG cache '{}'", path.display()))?;
+
+    // 1. In-memory cache: hot path during scroll.
+    {
+        let cache = latex_svg_cache();
+        // Recover the inner data even if a previous call panicked (poisoned);
+        // a stale entry is harmless — it just means we serve a cached SVG.
+        let guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(render) = guard.get(&key) {
+            return Ok(render.clone());
+        }
     }
-    Ok(LatexSvgRender { path, svg })
+
+    let path = latex_cache_dir()?.join(format!("{key}.svg"));
+
+    // 2. Disk cache: skip the ratex compute when the SVG was rendered in an
+    //    earlier session (mirrors the Mermaid cache pattern).
+    if path.exists() {
+        let svg = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read LaTeX SVG cache '{}'", path.display()))?;
+        let render = LatexSvgRender { path, svg };
+        {
+            let cache = latex_svg_cache();
+            let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.insert(key, render.clone());
+        }
+        return Ok(render);
+    }
+
+    // 3. Cache miss: render once, persist to disk, and remember in memory.
+    let svg = render_latex_to_svg(latex, text_color, font_size)?;
+    fs::write(&path, &svg)
+        .with_context(|| format!("failed to write LaTeX SVG cache '{}'", path.display()))?;
+    let render = LatexSvgRender { path, svg };
+    {
+        let cache = latex_svg_cache();
+        let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.insert(key, render.clone());
+    }
+    Ok(render)
 }
 
 /// Render a LaTeX expression into self-contained SVG text.
@@ -220,6 +266,20 @@ mod tests {
             render_latex_to_svg("\\frac{1}{2}", Hsla::from(rgba(0xffffffff)), 18.0).expect("svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn inline_math_svg_cache_is_idempotent() {
+        // Repeated calls for the same (formula, colour, size) must yield the
+        // identical cached render — exercising both the in-memory hit and the
+        // disk-hit paths. The scroll hot path relies on this returning without
+        // re-running the ratex pipeline.
+        let color = Hsla::from(rgba(0xffffffff));
+        let first =
+            render_inline_math_svg("\\frac{1}{2}", color, 18.0).expect("first render succeeds");
+        let second =
+            render_inline_math_svg("\\frac{1}{2}", color, 18.0).expect("second render succeeds");
+        assert_eq!(first, second, "cached render must be identical across calls");
     }
 
     #[test]

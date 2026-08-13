@@ -2,7 +2,7 @@
 
 # ⚡ Verve
 
-**A native, GPU-accelerated developer workbench built with Rust + GPUI — unifying API debugging, traffic capture, server triage, load testing, mock, notes, hosts and JSON tools in a single window.**
+**A native, GPU-accelerated developer workbench built with Rust + GPUI — unifying API debugging, traffic capture, an SSH/SFTP terminal (jump host / port forwarding), Docker & K8s log inspection, stress & automated testing, mock, a Markdown notes editor & PDF, hosts and JSON tools in a single window.**
 
 ### A native developer workbench
 

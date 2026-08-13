@@ -2,7 +2,7 @@
 
 # ⚡ Verve
 
-**基于 Rust + GPUI 构建的原生、GPU 加速研发工作台，在一个窗口内集成接口调试、抓包、服务器排查、压测、Mock、笔记、Markdown编辑器、Hosts 与 JSON 等日常开发工具。**
+**基于 Rust + GPUI 构建的原生、GPU 加速研发工作台 —— 在一个窗口内集成接口调试、抓包、SSH/SFTP 终端（跳板机 / 端口转发）、Docker & K8s 日志、压测与自动化测试、Mock，以及 Markdown 笔记与编辑器、PDF、Hosts、JSON 等日常开发工具。**
 
 ### 原生研发工作台
 

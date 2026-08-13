@@ -157,6 +157,7 @@ settings:
     card_s3: S3 云端
     card_s3_desc: 图片和视频上传共用的 S3 凭证。
     field_root: 媒体根目录
+    browse: 选择目录…
     git_sync: 通过 Git 同步配置
     state_on: "✓ 已开启"
     state_off: 已关闭

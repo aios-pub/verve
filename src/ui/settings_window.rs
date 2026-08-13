@@ -140,7 +140,6 @@ enum MediaTestState {
 /// to [`SettingsWindow::on_media_input_change`], which dispatches by entity
 /// identity to the matching `media_storage.toml` field.
 struct MediaInputs {
-    media_root: Entity<InputState>,
     image_prefix: Entity<InputState>,
     image_max_mb: Entity<InputState>,
     video_prefix: Entity<InputState>,
@@ -217,11 +216,6 @@ impl SettingsWindow {
         // persisted via `on_media_input_change`.
         let media_cfg = crate::media::config::load_media_config();
         let media_inputs = MediaInputs {
-            media_root: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("media".to_string())
-                    .default_value(&media_cfg.global.media_root)
-            }),
             image_prefix: cx.new(|cx| {
                 InputState::new(window, cx).default_value(&media_cfg.image.s3_prefix)
             }),
@@ -257,7 +251,6 @@ impl SettingsWindow {
             }),
         };
         let media_subs: Vec<gpui::Subscription> = [
-            media_inputs.media_root.clone(),
             media_inputs.image_prefix.clone(),
             media_inputs.image_max_mb.clone(),
             media_inputs.video_prefix.clone(),
@@ -476,10 +469,7 @@ impl SettingsWindow {
         let val = src.read(cx).value().trim().to_string();
         let mut cfg = crate::media::config::load_media_config();
         let m = &self.media_inputs;
-        let changed = if src == m.media_root {
-            cfg.global.media_root = val;
-            true
-        } else if src == m.image_prefix {
+        let changed = if src == m.image_prefix {
             cfg.image.s3_prefix = val;
             true
         } else if src == m.image_max_mb {
@@ -552,7 +542,6 @@ impl SettingsWindow {
     ) -> impl IntoElement {
         use gpui_component::h_flex;
         use gpui_component::kbd::Kbd;
-        use std::collections::BTreeMap;
 
         let definitions = crate::wysiwyg::components::shortcut_definitions();
         let draft = self.shortcut_draft.clone();
@@ -818,11 +807,7 @@ impl SettingsWindow {
                 muted,
                 v_flex()
                     .gap_3()
-                    .child(media_field(
-                        &m.media_root,
-                        &rust_i18n::t!("settings.media.field_root").to_string(),
-                        muted,
-                    ))
+                    .child(self.media_root_picker(theme, cx))
                     .child(media_toggle(
                         "media-git-sync",
                         &rust_i18n::t!("settings.media.git_sync").to_string(),
@@ -1010,6 +995,60 @@ impl SettingsWindow {
                 });
             }
             Err(_) => {}
+        })
+        .detach();
+    }
+
+    /// Media-root directory picker: shows the resolved current root and a
+    /// "Browse" button that opens a native folder picker (no manual path entry).
+    fn media_root_picker(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let cfg = crate::media::config::load_media_config();
+        let current = crate::media::config::resolved_media_root(&cfg)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| cfg.global.media_root.clone());
+        let muted = theme.muted_foreground;
+        let fg = theme.foreground;
+        v_flex()
+            .gap_1()
+            .w(px(340.))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(rust_i18n::t!("settings.media.field_root").to_string()),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().flex_1().text_sm().text_color(fg).child(current))
+                    .child(
+                        Button::new("media-root-browse")
+                            .small()
+                            .ghost()
+                            .child(rust_i18n::t!("settings.media.browse").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.pick_media_root(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Open a native folder picker for the media root and persist the choice.
+    fn pick_media_root(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
+        std::thread::spawn(move || {
+            let pick = rfd::FileDialog::new().pick_folder();
+            let _ = tx.send(pick);
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Some(path)) = rx.await {
+                let mut cfg = crate::media::config::load_media_config();
+                cfg.global.media_root = path.to_string_lossy().to_string();
+                let _ = crate::media::config::save_media_config(&cfg);
+                let _ = this.update(cx, |_, cx| cx.notify());
+            }
         })
         .detach();
     }

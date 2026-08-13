@@ -157,6 +157,7 @@ settings:
     card_s3: S3 Cloud
     card_s3_desc: Shared S3 credentials for image and video uploads.
     field_root: Media Root Directory
+    browse: Browse…
     git_sync: Sync config via Git
     state_on: "✓ On"
     state_off: Off

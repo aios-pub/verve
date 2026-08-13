@@ -120,6 +120,7 @@ pub enum ToolbarAction {
     /// Open the link/image prompts.
     InsertLink,
     InsertImage,
+    InsertMedia,
 }
 
 impl Editor {
@@ -222,6 +223,9 @@ impl Editor {
             }
             ToolbarAction::InsertImage => {
                 self.on_insert_image(&crate::wysiwyg::components::InsertImage, window, cx);
+            }
+            ToolbarAction::InsertMedia => {
+                self.on_insert_media(&crate::wysiwyg::components::InsertMedia, window, cx);
             }
         }
     }

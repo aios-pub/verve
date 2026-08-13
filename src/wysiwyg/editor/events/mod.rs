@@ -192,6 +192,7 @@ impl Editor {
                 | BlockEvent::RequestMergeIntoPrev { .. }
                 | BlockEvent::RequestPasteMultiline { .. }
                 | BlockEvent::RequestPasteImage { .. }
+                | BlockEvent::RequestPasteVideo { .. }
                 | BlockEvent::RequestIndent
                 | BlockEvent::RequestOutdent
                 | BlockEvent::RequestDowngradeNestedListItemToChildParagraph
@@ -283,20 +284,6 @@ impl Editor {
         self.focus_block(block.entity_id());
     }
 
-    fn current_image_paste_behavior() -> ImagePasteBehavior {
-        // verve's embedded editor has no backing file path of its own, so
-        // pasted images are never copied to a document/assets folder — they
-        // stay inline. velotype read this from config.toml.
-        ImagePasteBehavior::None
-    }
-
-    fn image_paste_root_dir(&self) -> anyhow::Result<PathBuf> {
-        if let Some(parent) = self.file_path.as_ref().and_then(|path| path.parent()) {
-            return Ok(parent.to_path_buf());
-        }
-        std::env::current_dir().context("failed to resolve current working directory")
-    }
-
     fn clipboard_image_extension(format: ImageFormat) -> &'static str {
         match format {
             ImageFormat::Png => "png",
@@ -311,134 +298,40 @@ impl Editor {
         }
     }
 
-    fn image_target_dir(
-        &self,
-        behavior: ImagePasteBehavior,
-        root_dir: &Path,
-        source: &PastedImageSource,
-    ) -> anyhow::Result<PathBuf> {
-        match behavior {
-            ImagePasteBehavior::None | ImagePasteBehavior::CopyToDocumentFolder => {
-                Ok(root_dir.to_path_buf())
-            }
-            ImagePasteBehavior::CopyToAssetsFolder => Ok(root_dir.join("assets")),
-            ImagePasteBehavior::CopyToNamedAssetsFolder => {
-                let base = self
-                    .file_path
-                    .as_ref()
-                    .and_then(|path| path.file_stem())
-                    .and_then(|stem| stem.to_str())
-                    .filter(|stem| !stem.trim().is_empty())
-                    .unwrap_or("untitle");
-                if self.file_path.is_some() {
-                    return Ok(root_dir.join(format!("{base}.assets")));
-                }
-
-                for index in 0.. {
-                    let folder = if index == 0 {
-                        "untitle.assets".to_string()
-                    } else {
-                        format!("untitle{index}.assets")
-                    };
-                    let path = root_dir.join(folder);
-                    if !path.exists() {
-                        return Ok(path);
-                    }
-                    if matches!(source, PastedImageSource::LocalPath(_)) {
-                        continue;
-                    }
-                }
-                unreachable!("unbounded search should always return");
-            }
-        }
-    }
-
-    fn unique_file_path(dir: &Path, preferred_name: &str) -> PathBuf {
-        let preferred = Path::new(preferred_name);
-        let stem = preferred
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or("image");
-        let extension = preferred.extension().and_then(|ext| ext.to_str());
-        for index in 0.. {
-            let file_name = if index == 0 {
-                preferred_name.to_string()
-            } else if let Some(extension) = extension {
-                format!("{stem}{index}.{extension}")
-            } else {
-                format!("{stem}{index}")
-            };
-            let candidate = dir.join(file_name);
-            if !candidate.exists() {
-                return candidate;
-            }
-        }
-        unreachable!("unbounded search should always return");
-    }
-
-    fn path_parent_eq(left: &Path, right: &Path) -> bool {
-        let Some(parent) = left.parent() else {
-            return false;
-        };
-        let left = parent
-            .canonicalize()
-            .unwrap_or_else(|_| parent.to_path_buf());
-        let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
-        left == right
-    }
-
+    /// Persist a pasted/dropped image into the shared media store and return the
+    /// portable markdown source (`./media/images/<sparkid>.<ext>`).
+    ///
+    /// Both clipboard image bytes and imported local-file paths are copied into
+    /// `<media_root>/images/` with a SparkID name so notes stay portable and
+    /// self-contained across machines.
     fn materialize_pasted_image(
         &self,
         source: &PastedImageSource,
-    ) -> anyhow::Result<(PathBuf, bool)> {
-        let behavior = Self::current_image_paste_behavior();
-        let root_dir = self.image_paste_root_dir()?;
+    ) -> anyhow::Result<crate::media::local::StoredMedia> {
+        use crate::media::{config, local, path::MediaKind};
 
-        if matches!(behavior, ImagePasteBehavior::None)
-            && let PastedImageSource::LocalPath(path) = source
-        {
-            return Ok((path.clone(), false));
-        }
-
-        let target_dir = self.image_target_dir(behavior, &root_dir, source)?;
-        fs::create_dir_all(&target_dir)
-            .with_context(|| format!("failed to create '{}'", target_dir.display()))?;
+        let cfg = config::load_media_config();
+        let root = config::resolved_media_root(&cfg)?;
 
         match source {
-            PastedImageSource::LocalPath(path) => {
-                if Self::path_parent_eq(path, &target_dir) {
-                    return Ok((path.clone(), behavior != ImagePasteBehavior::None));
-                }
-                let file_name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("image");
-                let target = Self::unique_file_path(&target_dir, file_name);
-                fs::copy(path, &target).with_context(|| {
-                    format!(
-                        "failed to copy '{}' to '{}'",
-                        path.display(),
-                        target.display()
-                    )
-                })?;
-                Ok((target, behavior != ImagePasteBehavior::None))
-            }
             PastedImageSource::ClipboardImage(image) => {
-                let file_name = format!(
-                    "pasted-image.{}",
-                    Self::clipboard_image_extension(image.format)
-                );
-                let target = Self::unique_file_path(&target_dir, &file_name);
-                fs::write(&target, &image.bytes)
-                    .with_context(|| format!("failed to write '{}'", target.display()))?;
-                Ok((target, behavior != ImagePasteBehavior::None))
+                let ext = Self::clipboard_image_extension(image.format);
+                local::store_local(&root, MediaKind::Image, &image.bytes, ext)
+            }
+            PastedImageSource::LocalPath(path) => {
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("read image {}", path.display()))?;
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        crate::media::path::detect_image_extension(&bytes).map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "png".to_string());
+                local::store_local(&root, MediaKind::Image, &bytes, &ext)
             }
         }
-    }
-
-    fn markdown_path_string(path: &Path) -> String {
-        path.to_string_lossy().replace('\\', "/")
     }
 
     fn markdown_image_target(path: &str) -> String {
@@ -450,42 +343,57 @@ impl Editor {
             .collect()
     }
 
-    fn markdown_image_alt(path: &Path) -> String {
-        let alt = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or("image");
-        alt.chars()
-            .flat_map(|ch| match ch {
-                '\\' | ']' => ['\\', ch].into_iter().collect::<Vec<_>>(),
-                _ => [ch].into_iter().collect::<Vec<_>>(),
-            })
-            .collect()
+    /// Persist a pasted image and produce both the markdown snippet to insert
+    /// and the on-disk `StoredMedia` (needed to enqueue an S3 upload).
+    fn pasted_image_markdown(
+        &self,
+        source: &PastedImageSource,
+    ) -> anyhow::Result<(String, crate::media::local::StoredMedia)> {
+        use crate::media::path::MediaKind;
+        let stored = self.materialize_pasted_image(source)?;
+        let src = crate::media::path::local_markdown_ref(MediaKind::Image, &stored.filename);
+        let markdown = format!("![image]({})", Self::markdown_image_target(&src));
+        Ok((markdown, stored))
     }
 
-    fn relative_markdown_path(root_dir: &Path, path: &Path) -> Option<String> {
-        let relative = path.strip_prefix(root_dir).ok()?;
-        Some(format!("./{}", Self::markdown_path_string(relative)))
+    /// Rewrite an already-inserted image `src` (the portable `./media/...` path)
+    /// to `new_src` (an S3 URL) across all visible blocks. The sparkid-based
+    /// local path contains no markdown-special chars, so it matches the
+    /// serialized text verbatim.
+    pub(super) fn rewrite_media_src(&mut self, old_src: &str, new_src: &str, cx: &mut Context<Self>) {
+        let mut changed = false;
+        for visible in self.document.visible_blocks() {
+            let block = visible.entity.clone();
+            let new_tree = block.read_with(cx, |b, _cx| {
+                let md = b.record.title_markdown();
+                if !md.contains(old_src) {
+                    return None;
+                }
+                let new_md = md.replacen(old_src, new_src, 1);
+                let tree = if b.uses_raw_text_editing() || b.kind().is_code_block() {
+                    InlineTextTree::plain(new_md)
+                } else {
+                    InlineTextTree::from_markdown(&new_md)
+                };
+                Some(tree)
+            });
+            if let Some(tree) = new_tree {
+                let _ = block.update(cx, |b, cx| {
+                    b.record.set_title(tree);
+                    b.sync_render_cache();
+                    cx.notify();
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            self.rebuild_image_runtimes(cx);
+            self.mark_dirty(cx);
+            cx.notify();
+        }
     }
 
-    fn pasted_image_markdown(&self, source: &PastedImageSource) -> anyhow::Result<String> {
-        let root_dir = self.image_paste_root_dir()?;
-        let (path, relative) = self.materialize_pasted_image(source)?;
-        let path_text = if relative {
-            Self::relative_markdown_path(&root_dir, &path)
-                .ok_or_else(|| anyhow!("failed to create a relative image path"))?
-        } else {
-            Self::markdown_path_string(&path)
-        };
-        Ok(format!(
-            "![{}]({})",
-            Self::markdown_image_alt(&path),
-            Self::markdown_image_target(&path_text)
-        ))
-    }
-
-    fn show_image_paste_error(&self, err: anyhow::Error, cx: &mut Context<Self>) {
+    pub(super) fn show_image_paste_error(&self, err: anyhow::Error, cx: &mut Context<Self>) {
         let strings = cx
             .global::<crate::wysiwyg::i18n::I18nManager>()
             .strings()
@@ -601,13 +509,19 @@ impl Editor {
         trailing: &InlineTextTree,
         cx: &mut Context<Self>,
     ) {
-        let markdown = match self.pasted_image_markdown(source) {
-            Ok(markdown) => markdown,
+        let (markdown, stored) = match self.pasted_image_markdown(source) {
+            Ok(value) => value,
             Err(err) => {
                 self.show_image_paste_error(err, cx);
                 return;
             }
         };
+
+        // When image storage is set to S3, upload asynchronously. The local
+        // copy renders immediately; on success its `./media/...` src is rewritten
+        // to the S3 URL (and the local file removed); on failure the local copy
+        // is kept and the user is notified. No media is ever lost.
+        self.maybe_enqueue_image_s3_upload(stored.abs_path.clone(), stored.filename.clone(), cx);
 
         if self.replace_cross_block_selection_with_text(
             &markdown,
@@ -639,6 +553,143 @@ impl Editor {
         self.mark_dirty(cx);
         self.finalize_pending_undo_capture(cx);
         cx.notify();
+    }
+
+    /// Persist a pasted video file into the media store and produce both the
+    /// `<video>` markdown to insert and the on-disk `StoredMedia`.
+    fn pasted_video_markdown(
+        &self,
+        path: &std::path::Path,
+    ) -> anyhow::Result<(String, crate::media::local::StoredMedia)> {
+        use crate::media::path::MediaKind;
+        let cfg = crate::media::config::load_media_config();
+        let root = crate::media::config::resolved_media_root(&cfg)?;
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("read video {}", path.display()))?;
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string)
+            .or_else(|| crate::media::path::detect_video_extension(&bytes).map(str::to_string))
+            .unwrap_or_else(|| "mp4".to_string());
+        let stored = crate::media::local::store_local(&root, MediaKind::Video, &bytes, &ext)?;
+        let src = crate::media::path::local_markdown_ref(MediaKind::Video, &stored.filename);
+        let markdown = crate::media::path::video_markdown(&src);
+        Ok((markdown, stored))
+    }
+
+    /// Handle a pasted local video file path: import into the media store,
+    /// insert a `<video>` block, and (when video storage is S3) enqueue a
+    /// multipart upload.
+    fn handle_paste_video_request(
+        &mut self,
+        block: Entity<super::Block>,
+        leading: &InlineTextTree,
+        path: &std::path::Path,
+        trailing: &InlineTextTree,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::media::config::StorageMethod;
+        use crate::media::path::MediaKind;
+
+        let (markdown, stored) = match self.pasted_video_markdown(path) {
+            Ok(value) => value,
+            Err(err) => {
+                self.show_image_paste_error(err, cx);
+                return;
+            }
+        };
+
+        let cfg = crate::media::config::load_media_config();
+        if cfg.video.storage == StorageMethod::S3 && cfg.s3.is_configured() {
+            let prefix = cfg.video.s3_prefix.trim().trim_matches('/');
+            let key = if prefix.is_empty() {
+                stored.filename.clone()
+            } else {
+                format!("{prefix}/{}", stored.filename)
+            };
+            let local_src = crate::media::path::local_markdown_ref(MediaKind::Video, &stored.filename);
+            self.enqueue_video_s3_upload(
+                local_src,
+                stored.abs_path.clone(),
+                key,
+                cfg.video.multipart_part_mb,
+                cfg.s3.clone(),
+                cx,
+            );
+        }
+
+        if self.replace_cross_block_selection_with_text(
+            &markdown,
+            None,
+            false,
+            crate::wysiwyg::components::UndoCaptureKind::NonCoalescible,
+            cx,
+        ) {
+            return;
+        }
+        self.prepare_undo_capture(
+            crate::wysiwyg::components::UndoCaptureKind::NonCoalescible,
+            cx,
+        );
+        let can_insert_media_block = self.view_mode == super::ViewMode::Rendered
+            && block.read(cx).kind() == BlockKind::Paragraph
+            && self.table_cell_binding(block.entity_id()).is_none()
+            && !block.read(cx).uses_raw_text_editing();
+        if can_insert_media_block {
+            self.insert_image_block_after_paragraph(&block, leading, &markdown, trailing, cx);
+        } else {
+            self.replace_current_block_selection_with_image_text(
+                &block, leading, &markdown, trailing, cx,
+            );
+        }
+
+        self.mark_dirty(cx);
+        self.finalize_pending_undo_capture(cx);
+        cx.notify();
+    }
+    /// just-written local image. On success the embedded `./media/...` path is
+    /// rewritten to the S3 URL; on failure the local copy is preserved and the
+    /// error is surfaced.
+    pub(super) fn maybe_enqueue_image_s3_upload(
+        &mut self,
+        local_path: std::path::PathBuf,
+        filename: String,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::media::config::StorageMethod;
+
+        let cfg = crate::media::config::load_media_config();
+        if cfg.image.storage != StorageMethod::S3 || !cfg.s3.is_configured() {
+            return;
+        }
+        let prefix = cfg.image.s3_prefix.trim().trim_matches('/');
+        let key = if prefix.is_empty() {
+            filename.clone()
+        } else {
+            format!("{prefix}/{filename}")
+        };
+        let old_src = crate::media::path::local_markdown_ref(
+            crate::media::path::MediaKind::Image,
+            &filename,
+        );
+        let rx = crate::media::upload::enqueue_image_upload(
+            crate::media::upload::ImageUploadRequest {
+                local_path,
+                key,
+                s3: cfg.s3.clone(),
+            },
+        );
+        cx.spawn(async move |this, cx| match rx.await {
+            Ok(Ok(url)) => {
+                let _ = this.update(cx, |editor, cx| editor.rewrite_media_src(&old_src, &url, cx));
+            }
+            Ok(Err(err)) => {
+                let _ = this.update(cx, |editor, cx| editor.show_image_paste_error(err, cx));
+            }
+            Err(_) => {} // upload task dropped without sending
+        })
+        .detach();
     }
 
     fn jump_to_footnote_definition(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
@@ -1835,6 +1886,16 @@ impl Editor {
             return;
         }
 
+        if let BlockEvent::RequestPasteVideo {
+            leading,
+            path,
+            trailing,
+        } = event
+        {
+            self.handle_paste_video_request(block, leading, &path, trailing, cx);
+            return;
+        }
+
         if let Some(binding) = self.table_cell_binding(block.entity_id()) {
             self.on_table_cell_event(binding, event, cx);
             return;
@@ -2239,6 +2300,7 @@ impl Editor {
                 cx.notify();
             }
             BlockEvent::RequestPasteImage { .. }
+            | BlockEvent::RequestPasteVideo { .. }
             | BlockEvent::RequestReplaceCrossBlockSelection { .. } => {}
             BlockEvent::RequestIndent => {
                 if current_visible_index == 0 {

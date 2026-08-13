@@ -104,6 +104,19 @@ pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> Ima
         return ImageResolvedSource::Remote(SharedUri::from(source.to_string()));
     }
 
+    // Portable media-store reference (`./media/...`) resolves against the
+    // configured media root, not the document's directory. This keeps note text
+    // portable across machines while the actual files live in a shared root.
+    if crate::media::path::is_local_media_ref(source) {
+        let cfg = crate::media::config::load_media_config();
+        if let Ok(root) = crate::media::config::resolved_media_root(&cfg) {
+            if let Some(resolved) = crate::media::path::resolve_local_media_ref(source, &root) {
+                return ImageResolvedSource::Local(resolved);
+            }
+        }
+        // Fall through if the media root / config could not be resolved.
+    }
+
     let path = Path::new(source);
     if path.is_absolute() {
         return ImageResolvedSource::Local(path.to_path_buf());

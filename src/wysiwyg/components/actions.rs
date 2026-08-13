@@ -70,6 +70,7 @@ actions!(
         ExitCodeBlock,
         InsertLink,
         InsertImage,
+        InsertMedia,
         InsertHorizontalRule,
         InsertTable,
         InsertTableRowBelow,

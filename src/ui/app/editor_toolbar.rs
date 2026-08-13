@@ -159,7 +159,7 @@ impl VerveApp {
         // Additional flat buttons: ordered list, bullet list, quote, code block,
         // table, image, clear formatting. Rendered as custom SVG icons (see
         // assets/verve_icons/), inheriting the button's text color.
-        let flat_buttons: [(&str, &str, ToolbarAction); 7] = [
+        let flat_buttons: [(&str, &str, ToolbarAction); 8] = [
             (
                 crate::assets::TB_LIST_ORDERED,
                 "ordered",
@@ -174,6 +174,7 @@ impl VerveApp {
             (crate::assets::TB_CODE, "code", ToolbarAction::CodeBlock),
             (crate::assets::TB_TABLE, "table", ToolbarAction::InsertTable),
             (crate::assets::TB_IMAGE, "image", ToolbarAction::InsertImage),
+            (crate::assets::TB_VIDEO, "media", ToolbarAction::InsertMedia),
             (
                 crate::assets::TB_ERASER,
                 "clear",

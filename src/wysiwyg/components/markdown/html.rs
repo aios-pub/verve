@@ -1493,6 +1493,7 @@ fn is_block_tag(name: &str) -> bool {
             | "th"
             | "td"
             | "img"
+            | "video"
             | "pre"
     )
 }

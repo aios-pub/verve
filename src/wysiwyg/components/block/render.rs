@@ -1378,6 +1378,7 @@ impl Block {
                 element.into_any_element()
             }
             "img" => self.render_html_image(node, theme, node_style, cx),
+            "video" => self.render_html_video(node, theme, node_style, cx),
             "table" => self.render_html_table(node, theme, node_style, cx),
             "thead" | "tbody" | "tfoot" => {
                 let mut element =
@@ -1912,6 +1913,97 @@ impl Block {
         } else {
             content
         }
+    }
+
+    /// Render a `<video>` tag as a clickable placeholder (GPUI has no native
+    /// video element). Clicking opens the resolved src — a `file://` URL for
+    /// local `./media/videos/...` media, or the remote/S3 URL as-is — via the
+    /// OS default handler (`cx.open_url`).
+    fn render_html_video(
+        &self,
+        node: &HtmlNode,
+        theme: &Theme,
+        node_style: HtmlNodeVisualStyle,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let src_opt = attr_value(node, "src").filter(|s| !s.trim().is_empty());
+        let (openable, filename, src_key) = match src_opt {
+            Some(src) => {
+                let openable = crate::media::path::resolve_media_src_to_openable(src);
+                let filename = src.rsplit('/').next().unwrap_or("video").to_string();
+                (openable, filename, src.trim().to_string())
+            }
+            None => (None, "video".to_string(), String::new()),
+        };
+        let url = openable.unwrap_or_default();
+        let hover_bg = theme.colors.comment_bg;
+        let progress = if src_key.is_empty() {
+            None
+        } else {
+            self.video_upload_progress.get(&src_key).copied()
+        };
+        let mut element = div()
+            .id(SharedString::from("html-video-placeholder"))
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover_bg))
+            .on_click(move |_, _, cx: &mut App| {
+                if !url.is_empty() {
+                    cx.open_url(&url);
+                }
+            })
+            .w_full()
+            .my(px(4.))
+            .px(px(12.))
+            .py(px(10.))
+            .rounded_md()
+            .border_1()
+            .border_color(theme.colors.border_quote)
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .text_color(theme.colors.text_placeholder)
+            .child(div().child("▶"))
+            .child(div().flex_1().child(SharedString::from(filename)));
+        if let Some((done, total)) = progress {
+            let pct = if total == 0 {
+                0.0f32
+            } else {
+                (done as f32 / total as f32).clamp(0.0, 1.0)
+            };
+            element = element.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .w(px(140.))
+                    .child(
+                        div()
+                            .flex()
+                            .w_full()
+                            .h(px(6.))
+                            .rounded_full()
+                            .bg(theme.colors.border_quote)
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(theme.colors.text_link)
+                                    .w(relative(pct)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_placeholder)
+                            .child(format!("{done}/{total}")),
+                    ),
+            );
+        }
+        if let Some(bg) = node_style.background {
+            element = element.bg(bg);
+        }
+        element.into_any_element()
     }
 
     fn render_html_table(

@@ -53,6 +53,7 @@ pub const SAVE_AS: &str = "icons/verve/save-as.svg";
 // WYSIWYG toolbar icons.
 pub const TB_TABLE: &str = "icons/verve/table.svg";
 pub const TB_IMAGE: &str = "icons/verve/image.svg";
+pub const TB_VIDEO: &str = "icons/verve/video.svg";
 pub const TB_ERASER: &str = "icons/verve/eraser.svg";
 pub const TB_LIST_ORDERED: &str = "icons/verve/list-ordered.svg";
 pub const TB_LIST: &str = "icons/verve/list.svg";

@@ -209,6 +209,10 @@ pub struct Editor {
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
     footnote_registry: Arc<FootnoteRegistry>,
+    /// In-flight video uploads keyed by the embedded local `src`
+    /// (`./media/videos/...`), mapping to `(parts_done, parts_total)`. Pushed to
+    /// blocks via runtime context so `<video>` placeholders render a progress bar.
+    video_uploads: Arc<HashMap<String, (u32, u32)>>,
 }
 
 /// Runtime binding between a table block and one cell editor.
@@ -455,6 +459,7 @@ impl Editor {
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
             footnote_registry: Arc::default(),
+            video_uploads: Arc::new(HashMap::new()),
         };
         editor.rebuild_table_runtimes(cx);
         editor.rebuild_image_runtimes(cx);

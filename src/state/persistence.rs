@@ -200,7 +200,7 @@ pub fn set_active_workspace(id: &str) {
 
 /// The `.gitignore` content excluding cross-branch / non-data / machine-local files from git.
 /// layout.json is now tracked (shared settings); layout.local.json contains machine-specific panel sizes.
-const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\nssh_vault.bin\ndevice.key\n.verve-askpass.sh\nexports/\nhosts.staging\nnotes.index/\n.bootstrap_done\n";
+const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\nssh_vault.bin\ndevice.key\n.verve-askpass.sh\nexports/\nhosts.staging\nnotes.index/\nmedia/\n.bootstrap_done\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into
@@ -208,23 +208,34 @@ const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_ho
 pub fn ensure_gitignore() {
     let Ok(dir) = data_dir() else { return };
     let path = dir.join(".gitignore");
+    // When media `git_sync` is off, `media_storage.toml` (which holds S3
+    // credentials) must stay machine-local → add it to .gitignore.
+    let media_config_local_only =
+        !crate::media::config::load_media_config().global.git_sync;
     // Re-write if missing or if it's missing any of the known exclusions so
     // newly added entries (e.g. layout.local.json) are picked up on existing installs.
     let needs_write = match fs::read_to_string(&path) {
         Ok(existing) => {
-            !existing.contains("workspaces.json")
+            let missing_base = !existing.contains("workspaces.json")
                 || !existing.contains("layout.local.json")
                 || !existing.contains("shares.json")
                 || !existing.contains("ssh_hosts.json")
                 || !existing.contains("docker_hosts.json")
                 || !existing.contains("kube_config.yaml")
-                || !existing.contains("notes.index/")
-                || existing.contains("layout.json\n")
+                || !existing.contains("notes.index/");
+            // The media-config ignore line must match the current git_sync state.
+            let media_mismatch =
+                media_config_local_only != existing.contains("media_storage.toml");
+            missing_base || media_mismatch || existing.contains("layout.json\n")
         }
         Err(_) => true,
     };
     if needs_write {
-        let _ = fs::write(&path, GITIGNORE);
+        let mut content = GITIGNORE.to_string();
+        if media_config_local_only {
+            content.push_str("media_storage.toml\n");
+        }
+        let _ = fs::write(&path, content);
     }
 }
 

@@ -87,6 +87,10 @@ notes:
   confirm_delete_msg: 确定要删除笔记「%{title}」吗？此操作不可撤销。
   cannot_delete: 无法删除笔记
   delete_blocked_msg: "该笔记仍包含 %{count} 个子笔记，请先删除所有子笔记后再删除此笔记。"
+  delete_media_title: 删除引用的媒体？
+  delete_media_msg: "该笔记引用了 %{count} 个媒体文件。是否连同笔记一起删除？将移除本地文件及你的 S3 对象。"
+  delete_all: 全部删除
+  delete_note_only: 仅笔记
   last_updated: 更新于 %{time}
   empty: 还没有笔记。点击「新建笔记」开始记录。
   empty_editor: 从左侧选择笔记或新建一个
@@ -142,6 +146,39 @@ settings:
   general: 通用设置
   environments: 环境管理
   about: 关于
+  media:
+    title: 媒体存储
+    card_global: 本地存储
+    card_global_desc: 图片和视频共用的媒体根目录。
+    card_image: 图片
+    card_image_desc: 图片的存储方式与限制。
+    card_video: 视频
+    card_video_desc: 视频的存储方式与上传选项。
+    card_s3: S3 云端
+    card_s3_desc: 图片和视频上传共用的 S3 凭证。
+    field_root: 媒体根目录
+    git_sync: 通过 Git 同步配置
+    state_on: "✓ 已开启"
+    state_off: 已关闭
+    storage_label: 存储方式
+    storage_local: 本地
+    storage_s3: S3
+    field_img_prefix: 图片 S3 前缀
+    field_img_max: 图片单文件最大容量（MiB）
+    field_vid_prefix: 视频 S3 前缀
+    field_vid_threshold: 分片上传阈值（MiB）
+    field_vid_part: 分片大小（MiB）
+    field_endpoint: Endpoint
+    field_bucket: Bucket
+    field_region: Region
+    field_ak: Access Key
+    field_sk: Secret Key
+    use_ssl: 启用 SSL
+    path_style: Path-style 寻址
+    test_button: 测试连通性
+    test_testing: 测试中…
+    test_ok: "✓ 连通"
+    test_failed: 失败
   shortcuts: 快捷键
   shortcuts_hint: 更改将在重启应用后生效。
   shortcuts_edit: 编辑
@@ -394,4 +431,5 @@ toolbar:
   inline_math: 行内公式
   hyperlink: 超链接
   image: 图片
+  video: 插入视频
   clear_formatting: 清除格式

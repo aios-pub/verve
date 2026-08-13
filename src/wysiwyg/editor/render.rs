@@ -2505,6 +2505,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_insert_table))
             .on_action(cx.listener(Self::on_delete_table_shortcut))
             .on_action(cx.listener(Self::on_insert_image))
+            .on_action(cx.listener(Self::on_insert_media))
             .on_action(cx.listener(Self::on_find))
             .on_action(cx.listener(Self::on_find_next))
             .on_action(cx.listener(Self::on_find_previous))

@@ -31,6 +31,20 @@ const NOTES_SELF_SAVE_FILTER_WINDOW: std::time::Duration = std::time::Duration::
 // The panel
 // ---------------------------------------------------------------------------
 
+/// Resolved media referenced by a note that is about to be deleted, offered for
+/// optional cleanup in a second confirmation dialog.
+struct PendingMediaDelete {
+    note_id: String,
+    local_paths: Vec<std::path::PathBuf>,
+    s3_keys: Vec<String>,
+}
+
+impl PendingMediaDelete {
+    fn total(&self) -> usize {
+        self.local_paths.len() + self.s3_keys.len()
+    }
+}
+
 pub struct NotesPanel {
     state: Entity<AppState>,
     store: NotesStore,
@@ -46,6 +60,10 @@ pub struct NotesPanel {
     title_input: Entity<InputState>,
     editing_title_id: Option<String>,
     pending_delete: Option<String>,
+    /// Second-stage delete confirmation: the user confirmed note deletion and
+    /// the note references media; this holds the resolved media to optionally
+    /// delete alongside the note.
+    pending_media_delete: Option<PendingMediaDelete>,
     save_timer: Option<Task<()>>,
     _subs: Vec<Subscription>,
     // Nested-notes tree state.
@@ -405,6 +423,7 @@ impl NotesPanel {
             tree,
             editing_title_id: None,
             pending_delete: None,
+            pending_media_delete: None,
             save_timer: None,
             _subs: vec![editor_sub, search_sub, title_sub, tree_sub],
             editor_needs_reload: false,
@@ -1950,6 +1969,148 @@ impl NotesPanel {
             .into_any_element()
     }
 
+    /// First-stage delete confirmation just succeeded. Scan the note for media
+    /// owned by this app; if it references any, ask (second dialog) whether to
+    /// delete the media too. Otherwise delete the note outright.
+    fn request_delete(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let cfg = crate::media::config::load_media_config();
+        let media = self
+            .store
+            .notes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| crate::media::cleanup::collect_deletable_media(&n.content, &cfg))
+            .unwrap_or_else(|| crate::media::cleanup::DeletableMedia {
+                local_paths: Vec::new(),
+                s3_keys: Vec::new(),
+            });
+
+        if media.is_empty() {
+            self.delete_note(id, window, cx);
+            return;
+        }
+        self.pending_media_delete = Some(PendingMediaDelete {
+            note_id: id.to_string(),
+            local_paths: media.local_paths,
+            s3_keys: media.s3_keys,
+        });
+        self.pending_delete = None;
+        cx.notify();
+    }
+
+    /// Carry out note deletion together with its referenced media (local sync,
+    /// S3 async fire-and-forget). Failures are logged but never block the note
+    /// deletion.
+    fn confirm_delete_with_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let job = match self.pending_media_delete.take() {
+            Some(j) => j,
+            None => return,
+        };
+        let (_, local_failed) = crate::media::cleanup::delete_local_files(&job.local_paths);
+        if local_failed > 0 {
+            log::warn!("failed to delete {local_failed} local media file(s)");
+        }
+        if !job.s3_keys.is_empty() {
+            let cfg = crate::media::config::load_media_config();
+            if cfg.s3.is_configured() {
+                let rx = crate::media::upload::enqueue_s3_object_deletes(
+                    cfg.s3.clone(),
+                    job.s3_keys.clone(),
+                );
+                cx.spawn(async move |_this, _cx| match rx.await {
+                    Ok(Ok((deleted, failed))) => {
+                        if failed > 0 {
+                            log::warn!("S3 media delete: {deleted} ok, {failed} failed");
+                        }
+                    }
+                    _ => {}
+                })
+                .detach();
+            }
+        }
+        self.delete_note(&job.note_id, window, cx);
+    }
+
+    /// Second-stage dialog: delete the note together with its referenced media,
+    /// or just the note, or cancel.
+    fn render_media_delete_confirm(
+        &self,
+        job: &PendingMediaDelete,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let count = job.total();
+        let body = rust_i18n::t!("notes.delete_media_msg", count = count).to_string();
+        let note_id = job.note_id.clone();
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(black().opacity(0.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                v_flex()
+                    .w(px(360.))
+                    .p_4()
+                    .gap_3()
+                    .bg(theme.background)
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded_lg()
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(rust_i18n::t!("notes.delete_media_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(theme.muted_foreground)
+                            .child(body),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("md-cancel")
+                                    .small()
+                                    .ghost()
+                                    .child(rust_i18n::t!("common.cancel").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.pending_media_delete = None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("md-note-only")
+                                    .small()
+                                    .ghost()
+                                    .child(rust_i18n::t!("notes.delete_note_only").to_string())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        let id = note_id.clone();
+                                        this.pending_media_delete = None;
+                                        this.delete_note(&id, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("md-all")
+                                    .small()
+                                    .danger()
+                                    .child(rust_i18n::t!("notes.delete_all").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_delete_with_media(window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_delete_confirm(&self, note_id: &str, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let note = self.store.notes.iter().find(|n| n.id == note_id);
@@ -2005,7 +2166,7 @@ impl NotesPanel {
                         .danger()
                         .child(rust_i18n::t!("common.delete").to_string())
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.delete_note(&id, window, cx);
+                            this.request_delete(&id, window, cx);
                         })),
                 )
                 .into_any_element();
@@ -2325,6 +2486,10 @@ impl Render for NotesPanel {
 
         if let Some(id) = &self.pending_delete {
             root = root.child(self.render_delete_confirm(id, cx));
+        }
+
+        if let Some(job) = self.pending_media_delete.as_ref() {
+            root = root.child(self.render_media_delete_confirm(job, cx));
         }
 
         root

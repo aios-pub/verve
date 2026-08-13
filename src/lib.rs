@@ -24,6 +24,7 @@ pub mod hosts_profiles;
 pub mod http;
 pub mod import;
 pub mod k8s;
+pub mod media;
 pub mod mock;
 pub mod notes;
 pub mod notes_index;

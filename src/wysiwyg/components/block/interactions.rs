@@ -84,6 +84,44 @@ impl Block {
         )
     }
 
+    fn is_supported_local_video_path(path: &std::path::Path) -> bool {
+        if !path.is_file() {
+            return false;
+        }
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+            return false;
+        };
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v"
+        )
+    }
+
+    /// Parses a single clipboard text item as a local video file path (plain
+    /// path, quoted path, or `file://` URL).
+    fn pasted_video_path_from_text_item(text: &str) -> Option<std::path::PathBuf> {
+        let unquoted = text
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .unwrap_or(text);
+        let direct_path = std::path::PathBuf::from(unquoted);
+        let path = if Self::is_supported_local_video_path(&direct_path) {
+            direct_path
+        } else if let Ok(url) = url::Url::parse(unquoted) {
+            if url.scheme() == "file" {
+                url.to_file_path().ok()?
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        if !Self::is_supported_local_video_path(&path) {
+            return None;
+        }
+        Some(path)
+    }
+
     fn paste_image_split(&self) -> (InlineTextTree, InlineTextTree) {
         let clean_selected = self.selection_clean_range();
         let (leading, tail) = self.record.title.split_at(clean_selected.start);
@@ -1033,6 +1071,17 @@ impl Block {
                 cx.emit(BlockEvent::RequestPasteImage {
                     leading,
                     source,
+                    trailing,
+                });
+                return;
+            }
+
+            // A pasted local video file path → import as a `<video>` block.
+            if let Some(path) = Self::pasted_video_path_from_text_item(&text) {
+                let (leading, trailing) = self.paste_image_split();
+                cx.emit(BlockEvent::RequestPasteVideo {
+                    leading,
+                    path,
                     trailing,
                 });
                 return;

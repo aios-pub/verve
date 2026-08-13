@@ -6,8 +6,8 @@ use gpui::*;
 
 use super::{Editor, TableAxisSelection, ViewMode};
 use crate::wysiwyg::components::{
-    DeleteTable, DismissTransientUi, InsertHorizontalRule, InsertImage, InsertTable, TableAxisKind,
-    TableCellPosition, TableColumnAlignment, TableData,
+    DeleteTable, DismissTransientUi, InsertHorizontalRule, InsertImage, InsertMedia, InsertTable,
+    TableAxisKind, TableCellPosition, TableColumnAlignment, TableData,
 };
 use crate::wysiwyg::i18n::I18nManager;
 use crate::wysiwyg::theme::Theme;
@@ -281,6 +281,249 @@ impl Editor {
         }
         let target = self.insert_target_from_focus(window, cx);
         self.open_image_insert_dialog(target, window, cx);
+    }
+
+    /// Open a native multi-select file picker for videos and import each one:
+    /// stored under `<media_root>/videos/`, embedded as `<video>` markdown, and
+    /// Open a native multi-select file picker for media (images and videos,
+    /// with filter dropdown: Images / Videos / All) and import each picked
+    /// file. Images are stored under `<media_root>/images/` and embedded as
+    /// `![](...)`; videos under `<media_root>/videos/` as `<video>`. Each is
+    /// uploaded to S3 when its kind's storage is set to S3.
+    pub(super) fn on_insert_media(
+        &mut self,
+        _: &InsertMedia,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view_mode != ViewMode::Rendered {
+            return;
+        }
+        let target = self.insert_target_from_focus(window, cx);
+        let window_handle = window.window_handle();
+        let images_label = rust_i18n::t!("settings.media.card_image").to_string();
+        let videos_label = rust_i18n::t!("settings.media.card_video").to_string();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<std::path::PathBuf>>();
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new()
+                .add_filter(
+                    &images_label,
+                    &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "tif", "tiff"],
+                )
+                .add_filter(&videos_label, &["mp4", "mov", "webm", "mkv", "avi", "m4v"])
+                .pick_files();
+            let _ = tx.send(res.unwrap_or_default());
+        });
+        cx.spawn(async move |this, cx| {
+            let picked: Vec<std::path::PathBuf> = loop {
+                match rx.try_recv() {
+                    Ok(v) => break v,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(50))
+                            .await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break Vec::new(),
+                }
+            };
+            if picked.is_empty() {
+                return;
+            }
+            let _ = cx.update_window(window_handle, move |_view: AnyView, _window, cx| {
+                let _ = this.update(cx, |editor, cx| {
+                    for path in picked {
+                        editor.import_media_file(path, target, cx);
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Route a picked file to the image or video import flow by extension.
+    fn import_media_file(
+        &mut self,
+        path: std::path::PathBuf,
+        target: TableInsertTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.trim_start_matches('.').to_ascii_lowercase())
+            .unwrap_or_default();
+        if crate::media::path::is_video_extension(&ext) {
+            self.import_video_file(path, target, cx);
+        } else {
+            self.import_image_file(path, target, cx);
+        }
+    }
+
+    /// Store one image file locally, insert an image block, and (when image
+    /// storage is S3) enqueue a PUT upload that rewrites the src on success.
+    fn import_image_file(
+        &mut self,
+        path: std::path::PathBuf,
+        target: TableInsertTarget,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::media::path::MediaKind;
+
+        let cfg = crate::media::config::load_media_config();
+        let root = match crate::media::config::resolved_media_root(&cfg) {
+            Ok(r) => r,
+            Err(err) => {
+                self.show_image_paste_error(err, cx);
+                return;
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(err) => {
+                self.show_image_paste_error(err.into(), cx);
+                return;
+            }
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string)
+            .or_else(|| crate::media::path::detect_image_extension(&bytes).map(str::to_string))
+            .unwrap_or_else(|| "png".to_string());
+        let stored = match crate::media::local::store_local(&root, MediaKind::Image, &bytes, &ext) {
+            Ok(s) => s,
+            Err(err) => {
+                self.show_image_paste_error(err, cx);
+                return;
+            }
+        };
+        let src = crate::media::path::local_markdown_ref(MediaKind::Image, &stored.filename);
+        // `./media/...` paths contain no markdown-special chars, so no escaping.
+        let markdown = format!("![image]({src})");
+        let record = crate::wysiwyg::components::BlockRecord::paragraph(markdown);
+        self.insert_structural_block(target, record, cx);
+        self.maybe_enqueue_image_s3_upload(stored.abs_path.clone(), stored.filename.clone(), cx);
+    }
+
+    /// Store one video file locally, insert a `<video>` block, and (when video
+    /// storage is S3) enqueue a multipart upload that rewrites the src on
+    /// success.
+    fn import_video_file(
+        &mut self,
+        path: std::path::PathBuf,
+        target: TableInsertTarget,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::media::config::StorageMethod;
+        use crate::media::path::MediaKind;
+
+        let cfg = crate::media::config::load_media_config();
+        let root = match crate::media::config::resolved_media_root(&cfg) {
+            Ok(r) => r,
+            Err(err) => {
+                self.show_image_paste_error(err, cx);
+                return;
+            }
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(err) => {
+                self.show_image_paste_error(err.into(), cx);
+                return;
+            }
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_string)
+            .or_else(|| crate::media::path::detect_video_extension(&bytes).map(str::to_string))
+            .unwrap_or_else(|| "mp4".to_string());
+        let stored =
+            match crate::media::local::store_local(&root, MediaKind::Video, &bytes, &ext) {
+                Ok(s) => s,
+                Err(err) => {
+                    self.show_image_paste_error(err, cx);
+                    return;
+                }
+            };
+        let local_src = crate::media::path::local_markdown_ref(MediaKind::Video, &stored.filename);
+        let markdown = crate::media::path::video_markdown(&local_src);
+        let record = crate::wysiwyg::components::BlockRecord::paragraph(markdown);
+        self.insert_structural_block(target, record, cx);
+
+        if cfg.video.storage == StorageMethod::S3 && cfg.s3.is_configured() {
+            let prefix = cfg.video.s3_prefix.trim().trim_matches('/');
+            let key = if prefix.is_empty() {
+                stored.filename.clone()
+            } else {
+                format!("{prefix}/{}", stored.filename)
+            };
+            self.enqueue_video_s3_upload(
+                local_src,
+                stored.abs_path,
+                key,
+                cfg.video.multipart_part_mb,
+                cfg.s3.clone(),
+                cx,
+            );
+        }
+    }
+
+    /// Enqueue a video multipart upload; on success rewrite the embedded
+    /// `./media/videos/...` src to the S3 URL, on failure keep the local copy
+    /// and surface the error.
+    pub(super) fn enqueue_video_s3_upload(
+        &mut self,
+        local_src: String,
+        local_path: std::path::PathBuf,
+        key: String,
+        part_size_mb: u64,
+        s3: crate::media::config::S3Config,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::media::upload::{enqueue_video_upload, VideoUploadEvent, VideoUploadRequest};
+
+        let rx = enqueue_video_upload(VideoUploadRequest {
+            local_path,
+            key,
+            s3,
+            part_size_mb,
+        });
+        let old_src = local_src;
+        cx.spawn(async move |this, cx| loop {
+            match rx.try_recv() {
+                Ok(VideoUploadEvent::Progress { done, total }) => {
+                    let _ = this.update(cx, |editor, cx| {
+                        let mut m = (*editor.video_uploads).clone();
+                        m.insert(old_src.clone(), (done, total));
+                        editor.video_uploads = std::sync::Arc::new(m);
+                        editor.rebuild_image_runtimes(cx);
+                        cx.notify();
+                    });
+                }
+                Ok(VideoUploadEvent::Done(res)) => {
+                    let _ = this.update(cx, |editor, cx| {
+                        let mut m = (*editor.video_uploads).clone();
+                        m.remove(&old_src);
+                        editor.video_uploads = std::sync::Arc::new(m);
+                        editor.rebuild_image_runtimes(cx);
+                        match res {
+                            Ok(url) => editor.rewrite_media_src(&old_src, &url, cx),
+                            Err(err) => editor.show_image_paste_error(err, cx),
+                        }
+                        cx.notify();
+                    });
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        })
+        .detach();
     }
 
     /// Open the image-insert dialog seeded with empty URL/alt fields.

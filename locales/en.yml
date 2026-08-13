@@ -87,6 +87,10 @@ notes:
   confirm_delete_msg: "Delete note \"%{title}\"? This cannot be undone."
   cannot_delete: Cannot Delete Note
   delete_blocked_msg: "This note still has %{count} sub-note(s). Please delete all sub-notes before deleting it."
+  delete_media_title: Delete Referenced Media?
+  delete_media_msg: "This note references %{count} media file(s). Delete them together with the note? Local files and your S3 objects will be removed."
+  delete_all: Delete All
+  delete_note_only: Note Only
   last_updated: "Updated %{time}"
   empty: 'No notes yet. Click "New Note" to start writing.'
   empty_editor: Select a note from the left or create a new one
@@ -142,6 +146,39 @@ settings:
   general: General
   environments: Environments
   about: About
+  media:
+    title: Media Storage
+    card_global: Local Storage
+    card_global_desc: Shared media root directory for images and videos.
+    card_image: Image
+    card_image_desc: Image storage method and limits.
+    card_video: Video
+    card_video_desc: Video storage method and upload options.
+    card_s3: S3 Cloud
+    card_s3_desc: Shared S3 credentials for image and video uploads.
+    field_root: Media Root Directory
+    git_sync: Sync config via Git
+    state_on: "✓ On"
+    state_off: Off
+    storage_label: Storage Method
+    storage_local: Local
+    storage_s3: S3
+    field_img_prefix: Image S3 Prefix
+    field_img_max: Image Max Size (MiB)
+    field_vid_prefix: Video S3 Prefix
+    field_vid_threshold: Multipart Threshold (MiB)
+    field_vid_part: Multipart Part Size (MiB)
+    field_endpoint: Endpoint
+    field_bucket: Bucket
+    field_region: Region
+    field_ak: Access Key
+    field_sk: Secret Key
+    use_ssl: Use SSL
+    path_style: Path-style Addressing
+    test_button: Test Connection
+    test_testing: Testing…
+    test_ok: "✓ Connected"
+    test_failed: Failed
   shortcuts: Shortcuts
   shortcuts_hint: Changes take effect after restarting the app.
   shortcuts_edit: Edit
@@ -394,4 +431,5 @@ toolbar:
   inline_math: Inline Math
   hyperlink: Hyperlink
   image: Image
+  video: Insert Video
   clear_formatting: Clear Formatting

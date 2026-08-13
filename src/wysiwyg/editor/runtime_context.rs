@@ -116,12 +116,14 @@ impl Editor {
         let image_reference_definitions = self.image_reference_definitions.clone();
         let link_reference_definitions = self.link_reference_definitions.clone();
         let footnote_registry = self.footnote_registry.clone();
+        let video_uploads = self.video_uploads.clone();
         block.update(cx, move |block, cx| {
             block.set_runtime_context(
                 next_base_dir.clone(),
                 image_reference_definitions.clone(),
                 link_reference_definitions.clone(),
                 footnote_registry.clone(),
+                video_uploads.clone(),
             );
             cx.notify();
         });

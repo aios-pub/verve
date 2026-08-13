@@ -782,6 +782,13 @@ pub enum BlockEvent {
         source: PastedImageSource,
         trailing: InlineTextTree,
     },
+    /// A local video file path was pasted as text. The editor imports it into
+    /// the media store and inserts a `<video>` block.
+    RequestPasteVideo {
+        leading: InlineTextTree,
+        path: PathBuf,
+        trailing: InlineTextTree,
+    },
     /// Replace the current editor-level cross-block selection with text
     /// submitted through the focused block input handler.
     RequestReplaceCrossBlockSelection {

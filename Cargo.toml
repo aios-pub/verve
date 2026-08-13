@@ -245,6 +245,15 @@ sys-locale = "0.3"
 # when an open `.md` file is modified by an external program so the editor can
 # auto-reload (clean buffer) or prompt to reload (dirty buffer).
 notify = "7.0"
+camino = "1"
+# Media type detection from magic bytes (extension-less video files).
+infer = "0.16"
+# rust-s3 (the `s3` crate) with a rustls TLS backend — no OpenSSL / native-tls.
+# `async` enables the tokio Client; `rustls` selects rustls+ring via the `reqx`
+# HTTP backend (using native certificate roots); `multipart` enables the
+# multipart-upload builders used for large videos. `native-tls` is intentionally
+# NOT enabled to keep OpenSSL out of the build.
+s3 = { version = "0.1.36", default-features = false, features = ["async", "rustls", "multipart"] }
 sparkid = "2.2.1"
 tantivy = "0.26"
 tantivy-jieba = "0.20"

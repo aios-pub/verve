@@ -72,9 +72,7 @@ impl Editor {
         // Word count lives in the host title bar for the embedded side-view;
         // only the standalone (window-owning) editor shows it here.
         if prefs.show_word_count && self.owns_window {
-            let text = self.serialized_document_text(cx);
-            let total_count = count_words(&text);
-            let selection_count = self.selected_markdown_text(cx).as_deref().map(count_words);
+            let (total_count, selection_count) = self.word_count(cx);
             right_items.push(render_word_count(
                 selection_count,
                 total_count,

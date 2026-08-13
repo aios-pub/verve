@@ -829,19 +829,16 @@ impl Block {
         font_weight: FontWeight,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.render_inline_tree_runs(
-            &self.record.title,
-            theme,
-            base_color,
-            font_size,
-            font_weight,
-            cx,
-        )
+        // Reuse the block's cached render cache (refreshed on edits via
+        // sync_render_cache) instead of rebuilding record.title's O(text) cache
+        // every frame for every mounted mixed-visual block.
+        let cache = self.current_cache();
+        self.render_inline_tree_runs(cache, theme, base_color, font_size, font_weight, cx)
     }
 
     fn render_inline_tree_runs(
         &self,
-        tree: &crate::wysiwyg::components::InlineTextTree,
+        cache: &crate::wysiwyg::components::InlineRenderCache,
         theme: &Theme,
         base_color: Hsla,
         font_size: f32,
@@ -857,8 +854,8 @@ impl Block {
             .gap(px(0.0))
             .text_size(px(font_size))
             .line_height(rems(theme.typography.text_line_height))
-            .children(self.render_inline_tree_children(
-                tree,
+            .children(self.render_inline_children_from_cache(
+                cache,
                 theme,
                 base_color,
                 font_size,
@@ -868,16 +865,20 @@ impl Block {
             .into_any_element()
     }
 
-    fn render_inline_tree_children(
+    /// Build the inline-visual children from a precomputed render cache.
+    /// Callers that already hold the block's cached `InlineRenderCache` (the
+    /// layout path's `current_cache()`) pass it here directly, avoiding a
+    /// per-frame `tree.render_cache()` rebuild of the O(text) visible-to-tree
+    /// map for every mounted mixed-visual block.
+    fn render_inline_children_from_cache(
         &self,
-        tree: &crate::wysiwyg::components::InlineTextTree,
+        cache: &crate::wysiwyg::components::InlineRenderCache,
         theme: &Theme,
         base_color: Hsla,
         font_size: f32,
         font_weight: FontWeight,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let cache = tree.render_cache();
         let text = cache.visible_text();
         let mut children = Vec::new();
         let mut cursor = 0usize;
@@ -943,6 +944,24 @@ impl Block {
         }
 
         children
+    }
+
+    /// Convenience wrapper for fresh (un-cached) inline trees: builds the render
+    /// cache from the tree, then delegates to [`render_inline_children_from_cache`].
+    /// Callers that hold the block's persistent title tree should prefer passing
+    /// the cached render cache directly (via `current_cache()`) to avoid
+    /// rebuilding it every frame.
+    fn render_inline_tree_children(
+        &self,
+        tree: &crate::wysiwyg::components::InlineTextTree,
+        theme: &Theme,
+        base_color: Hsla,
+        font_size: f32,
+        font_weight: FontWeight,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let cache = tree.render_cache();
+        self.render_inline_children_from_cache(&cache, theme, base_color, font_size, font_weight, cx)
     }
 
     /// Split a styled text run into wrap-friendly word segments. The mixed

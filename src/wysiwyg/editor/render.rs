@@ -2179,6 +2179,19 @@ impl Render for Editor {
                 .iter()
                 .map(|v| v.entity.entity_id())
                 .collect();
+            // Bound the stride cache against block churn. The live set only
+            // changes on a structural edit, so eviction only needs to run here
+            // — not every frame. ("live" = every document block, not the
+            // mounted window: keying eviction on the narrow viewport window
+            // would discard every measured row the moment the viewport scrolls
+            // into fresh territory, collapsing the median stride estimate and
+            // dropping the visible band into a gap — the "black editor" bug.)
+            if self.row_stride_cache.len() > self.prev_visible_block_ids.len().saturating_mul(2) {
+                let live_row_ids: std::collections::HashSet<EntityId> =
+                    self.prev_visible_block_ids.iter().copied().collect();
+                self.row_stride_cache
+                    .retain(|id, _| live_row_ids.contains(id));
+            }
         }
 
         // Rows mounted together last frame shared one scroll offset, so their
@@ -2260,27 +2273,6 @@ impl Render for Editor {
                     .unwrap_or(estimated_stride)
             })
             .collect();
-
-        // Bound the cache against block churn, only when it outgrows the live
-        // document. The "live" set is *every* currently-visible block in the
-        // document (`visible_blocks`), NOT the rows in the mounted window
-        // (`row_first_ids`): the window only spans a narrow band around the
-        // viewport, so keying the eviction on it would discard every measured
-        // row the moment the viewport scrolls into fresh territory — leaving
-        // `measured_strides` (the median estimate above) empty and collapsing
-        // the estimate to `block_min_height * 3`. That drifts the stride
-        // accumulator ahead of the real content, drops the visible band into a
-        // gap between rows, and the editor goes black until several more frames
-        // re-measure the scrolled-into rows. Keeping all document rows live
-        // preserves their measured strides across the whole scroll range.
-        let live_row_ids: std::collections::HashSet<EntityId> = visible_blocks
-            .iter()
-            .map(|v| v.entity.entity_id())
-            .collect();
-        if self.row_stride_cache.len() > live_row_ids.len().saturating_mul(2) {
-            self.row_stride_cache
-                .retain(|id, _| live_row_ids.contains(id));
-        }
 
         // For documents small enough to mount entirely, skip windowing and mount
         // every row. The virtualization's row-height estimate can be wildly wrong

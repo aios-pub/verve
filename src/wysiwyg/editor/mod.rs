@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -106,6 +107,12 @@ pub struct Editor {
     pending_window_edited: bool,
     pending_window_title_refresh: bool,
     document_dirty: bool,
+    /// Throttled `(total, selection, computed_at)` word-count cache. Computing
+    /// the count serializes the whole document, so re-doing it every render
+    /// frame (the markdown side-view rebuilds on every scroll tick) is O(doc)
+    /// per frame. The cache is refreshed at most once per `WORD_COUNT_THROTTLE`,
+    /// which is imperceptible for a live word counter.
+    word_count_cache: Cell<Option<(usize, Option<usize>, Instant)>>,
     file_path: Option<PathBuf>,
     /// Whether this editor owns its host window (standalone app mode). When
     /// true the editor mutates the window: close guard, `set_window_edited`,
@@ -377,6 +384,9 @@ impl Editor {
     const HISTORY_LIMIT: usize = 200;
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
+    /// Minimum interval between full-document word-count recomputes. See
+    /// [`Editor::word_count`].
+    const WORD_COUNT_THROTTLE: Duration = Duration::from_millis(250);
 
     pub fn from_markdown(
         cx: &mut Context<Self>,
@@ -410,6 +420,7 @@ impl Editor {
             pending_window_edited: false,
             pending_window_title_refresh: false,
             document_dirty: false,
+            word_count_cache: Cell::new(None),
             file_path,
             owns_window: false,
             show_chrome: false,
@@ -589,6 +600,24 @@ impl Editor {
     /// side-view title bar) read this to show a dirty marker.
     pub fn document_dirty(&self) -> bool {
         self.document_dirty
+    }
+
+    /// `(total, selection)` word counts, throttled. Serializing the whole
+    /// document to count words is O(doc); hosts re-render on every scroll tick,
+    /// so an un-throttled count would serialize the document 60×/sec while
+    /// scrolling. The cached value is refreshed at most once per
+    /// [`WORD_COUNT_THROTTLE`] — imperceptible lag for a word counter.
+    pub fn word_count(&self, cx: &App) -> (usize, Option<usize>) {
+        if let Some((total, selection, computed_at)) = self.word_count_cache.get()
+            && Instant::now().duration_since(computed_at) < Self::WORD_COUNT_THROTTLE
+        {
+            return (total, selection);
+        }
+        let total = count_words(&self.serialized_document_text(cx));
+        let selection = self.selected_markdown_text(cx).as_deref().map(count_words);
+        self.word_count_cache
+            .set(Some((total, selection, Instant::now())));
+        (total, selection)
     }
 
     /// The backing file path, if any. `None` for an untitled document. Hosts

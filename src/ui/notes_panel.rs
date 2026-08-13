@@ -17,7 +17,6 @@ use crate::notes::{
     has_children,
 };
 use crate::state::{AppEvent, AppState};
-use crate::wysiwyg::editor::count_words;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::Arc;
@@ -2246,8 +2245,9 @@ impl NotesPanel {
         // The panel re-renders on every edit via the editor observer's
         // cx.notify(), so this stays live as the user types.
         let content_word_count: Option<usize> = if active_note.is_some() {
-            let editor = self.editor.read(cx);
-            Some(count_words(&editor.serialized_document_text(cx)))
+            // Throttled via the editor's word-count cache; the panel re-renders
+            // on edits via the editor observer, so this stays live while typing.
+            Some(self.editor.read(cx).word_count(cx).0)
         } else {
             None
         };

@@ -26,7 +26,6 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use crate::state::AppState;
 use crate::wysiwyg::editor::Editor;
 use crate::wysiwyg::editor::ViewMode;
-use crate::wysiwyg::editor::count_words;
 use crate::wysiwyg::export::ExportFormat;
 
 /// Grace window after the panel writes a file itself: `notify` events arriving
@@ -775,10 +774,9 @@ impl MarkdownPanel {
     /// selection count is `Some(n)` only when text is selected. Read by the
     /// title bar to render the word-count label.
     pub fn word_count(&self, cx: &App) -> (usize, Option<usize>) {
-        let editor = self.active_tab().editor.read(cx);
-        let total = count_words(&editor.serialized_document_text(cx));
-        let selection = editor.selected_markdown_text(cx).map(|t| count_words(&t));
-        (total, selection)
+        // Delegate to the editor's throttled cache so scrolling (which rebuilds
+        // this panel every tick) doesn't re-serialize the whole document 60×/sec.
+        self.active_tab().editor.read(cx).word_count(cx)
     }
 
     /// Toggle the active tab between Rendered and Source view (UI entry point).

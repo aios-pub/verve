@@ -1,20 +1,16 @@
 //! Key-value table rendering and editing: request & folder KV tables,
 //! the folder detail view (incl. the interface table), raw/visual field
 //! sync, and all toggle/add/delete/commit handlers.
-use super::folder_helpers::{
-    self, IfaceEntry, collect_iface_entries, folder_tab_label, set_folder_base_url,
+use super::folder_helpers::{IfaceEntry, collect_iface_entries, folder_tab_label, set_folder_base_url,
 };
 use super::{FolderKvSection, FolderTab, ReqTab, RequestPanel};
-use crate::http;
 use crate::state::models::*;
-use crate::state::{AppEvent, AppState};
+use crate::state::AppEvent;
 use crate::ui::kv_table::{self, KvRow};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::Icon;
 use gpui_component::WindowExt as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::input::Input;
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -357,7 +353,12 @@ impl RequestPanel {
                                                                     .py_1()
                                                                     .child("从环境变量选择"),
                                                             )
-                                                            .children(env_vars.iter().enumerate().map(|(i, (k, v))| {
+                                                            .child(
+                                                                div()
+                                                                    .id("folder-baseurl-scroll")
+                                                                    .max_h(px(300.))
+                                                                    .overflow_y_scroll()
+                                                                    .children(env_vars.iter().enumerate().map(|(i, (k, v))| {
                                                                 let val_display = v.trim_end_matches('/').to_string();
                                                                 let key = k.clone();
                                                                 // Store the {{key}} placeholder so the stored
@@ -385,7 +386,7 @@ impl RequestPanel {
                                                                                 div()
                                                                                     .text_sm()
                                                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                                                    .child(format!("{{{{{}}}}}", key)),
+                                                                                    .child(key.clone()),
                                                                             )
                                                                             .child(
                                                                                 div()
@@ -414,6 +415,7 @@ impl RequestPanel {
                                                                         window.refresh();
                                                                     })
                                                             })),
+                                                            ),
                                                     )
                                                     .into_any_element()
                                             }

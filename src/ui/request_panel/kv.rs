@@ -19,7 +19,6 @@ use gpui_component::{
     popover::Popover,
     v_flex,
 };
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl RequestPanel {
@@ -258,38 +257,6 @@ impl RequestPanel {
                                         Input::new(&self.folder_base_url).small(),
                                     )
                                     .child(
-                                        // Show the resolved (substituted) value when the stored
-                                        // base_url contains {{var}} placeholders, so the user sees
-                                        // the actual URL that will be used.
-                                        {
-                                            let raw = self.folder_base_url.read(cx).value().to_string();
-                                            if raw.contains("{{") {
-                                                // Build vars for substitution: globals + active env.
-                                                let st = self.state.read(cx);
-                                                let mut vars: BTreeMap<String, String> = BTreeMap::new();
-                                                if let Some(p) = st.active_project() {
-                                                    for kv in &p.global_variables {
-                                                        if kv.enabled && !kv.key.trim().is_empty() {
-                                                            vars.insert(kv.key.clone(), kv.value.clone());
-                                                        }
-                                                    }
-                                                    for kv in p.active_env_variables() {
-                                                        if kv.enabled && !kv.key.trim().is_empty() {
-                                                            vars.insert(kv.key.clone(), kv.value.clone());
-                                                        }
-                                                    }
-                                                }
-                                                let resolved = crate::http::variable::substitute(&raw, &vars);
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(format!("当前生效值：{}", if resolved.trim().is_empty() { "（未解析）".to_string() } else { resolved }))
-                                            } else {
-                                                div()
-                                            }
-                                        },
-                                    )
-                                    .child(
                                         // Dropdown to select base URL from environment variables.
                                         {
                                             let active_env = self.state.read(cx).active_project()
@@ -398,6 +365,18 @@ impl RequestPanel {
                                                                     .on_mouse_down(MouseButton::Left, move |_ev, window, cx: &mut App| {
                                                                         let fid_clone = fid.clone().unwrap_or_default();
                                                                         let val_set = placeholder.clone();
+                                                                        // Show the resolved URL (without `{{}}`) while the stored
+                                                                        // value stays the `{{key}}` reference.
+                                                                        let display = if val_set.contains("{{") {
+                                                                            let vars = st
+                                                                                .read(cx)
+                                                                                .active_project()
+                                                                                .map(|p| p.base_url_subst_vars())
+                                                                                .unwrap_or_default();
+                                                                            crate::http::variable::substitute(&val_set, &vars)
+                                                                        } else {
+                                                                            val_set.clone()
+                                                                        };
                                                                         let _ = st.update(cx, |s, cx| {
                                                                             if let Some(p) = s.active_project_mut() {
                                                                                 set_folder_base_url(&mut p.folders, &fid_clone, Some(val_set.clone()));
@@ -405,7 +384,7 @@ impl RequestPanel {
                                                                             s.notify_edited(cx);
                                                                         });
                                                                         let _ = fb_in.update(cx, |input, cx| {
-                                                                            input.set_value(&val_set, window, cx);
+                                                                            input.set_value(&display, window, cx);
                                                                         });
                                                                         // Close the popover by setting folder_baseurl_open = false.
                                                                         let _ = panel.update(cx, |this, cx| {

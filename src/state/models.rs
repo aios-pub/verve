@@ -1211,6 +1211,82 @@ impl Project {
         }
     }
 
+    /// Variables available for `{{var}}` substitution of a folder/request base
+    /// URL for display: global variables + the active environment's variables.
+    /// Folder/request-scoped variables are intentionally excluded (a base URL
+    /// cannot reference the folder's own variables before they are resolved).
+    pub fn base_url_subst_vars(&self) -> BTreeMap<String, String> {
+        let mut vars = BTreeMap::new();
+        for kv in &self.global_variables {
+            if kv.enabled && !kv.key.trim().is_empty() {
+                vars.insert(kv.key.clone(), kv.value.clone());
+            }
+        }
+        for kv in self.active_env_variables() {
+            if kv.enabled && !kv.key.trim().is_empty() {
+                vars.insert(kv.key.clone(), kv.value.clone());
+            }
+        }
+        vars
+    }
+
+    /// Rewrite every `{{old}}` placeholder (and the `{{ old }}` spaced variant)
+    /// to `{{new}}` across all stored strings that may reference a variable.
+    /// Used when an environment/global variable key is renamed so existing
+    /// references stay valid. Only `.value` strings are rewritten; the renamed
+    /// key itself is updated separately by the editor commit.
+    pub fn apply_var_renames(&mut self, renames: &[(String, String)]) {
+        if renames.is_empty() {
+            return;
+        }
+        fn rw(s: &mut String, renames: &[(String, String)]) {
+            for (old, new) in renames {
+                *s = s.replace(&format!("{{{{{}}}}}", old), &format!("{{{{{}}}}}", new));
+                *s = s.replace(&format!("{{ {} }}", old), &format!("{{ {} }}", new));
+            }
+        }
+        fn rw_kv(kvs: &mut [KeyValue], renames: &[(String, String)]) {
+            for kv in kvs.iter_mut() {
+                rw(&mut kv.value, renames);
+            }
+        }
+        fn walk_req(req: &mut ApiRequest, renames: &[(String, String)]) {
+            rw(&mut req.url, renames);
+            if let Some(Some(v)) = req.base_url_override.as_mut() {
+                rw(v, renames);
+            }
+            rw_kv(&mut req.params, renames);
+            rw_kv(&mut req.headers, renames);
+            rw_kv(&mut req.path, renames);
+            rw_kv(&mut req.cookies, renames);
+            rw_kv(&mut req.variables, renames);
+        }
+        fn walk_folder(folder: &mut Folder, renames: &[(String, String)]) {
+            if let Some(u) = folder.base_url.as_mut() {
+                rw(u, renames);
+            }
+            rw_kv(&mut folder.params, renames);
+            rw_kv(&mut folder.headers, renames);
+            rw_kv(&mut folder.variables, renames);
+            for req in folder.requests.iter_mut() {
+                walk_req(req, renames);
+            }
+            for sub in folder.folders.iter_mut() {
+                walk_folder(sub, renames);
+            }
+        }
+        rw_kv(&mut self.global_variables, renames);
+        for e in self.environments.iter_mut() {
+            rw_kv(&mut e.variables, renames);
+        }
+        for req in self.requests.iter_mut() {
+            walk_req(req, renames);
+        }
+        for f in self.folders.iter_mut() {
+            walk_folder(f, renames);
+        }
+    }
+
     /// Borrow a request by id. Returns the folder-id chain (root → parent) plus
     /// the request. Use [`folder_variables_chain`] to resolve the variable scope.
     pub fn find_request(&self, id: &str) -> Option<(Vec<String>, &ApiRequest)> {

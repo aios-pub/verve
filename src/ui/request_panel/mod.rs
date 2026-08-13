@@ -929,8 +929,22 @@ impl RequestPanel {
                     .update(cx, |s, cx| s.set_value(f.name.clone(), window, cx));
                 self.folder_desc
                     .update(cx, |s, cx| s.set_value(f.description.clone(), window, cx));
+                let raw_base = f.base_url.clone().unwrap_or_default();
+                // Show the resolved URL (no `{{}}`) when base_url is a
+                // {{var}} reference; the stored value itself is unchanged.
+                let display_base = if raw_base.contains("{{") {
+                    let vars = self
+                        .state
+                        .read(cx)
+                        .active_project()
+                        .map(|p| p.base_url_subst_vars())
+                        .unwrap_or_default();
+                    crate::http::variable::substitute(&raw_base, &vars)
+                } else {
+                    raw_base
+                };
                 self.folder_base_url.update(cx, |s, cx| {
-                    s.set_value(f.base_url.clone().unwrap_or_default(), window, cx)
+                    s.set_value(display_base, window, cx)
                 });
                 self.folder_param_rows = kv_table::rows_from_pairs(&f.params, window, cx);
                 self.folder_header_rows = kv_table::rows_from_pairs(&f.headers, window, cx);
@@ -955,14 +969,37 @@ impl RequestPanel {
         let name = self.folder_name.read(cx).value().to_string();
         let description = self.folder_desc.read(cx).text().to_string();
         let base_url_raw = self.folder_base_url.read(cx).value().trim().to_string();
-        let base_url = if base_url_raw.is_empty() {
-            None
-        } else {
-            Some(base_url_raw)
-        };
         let params = kv_table::pairs_from_rows(&self.folder_param_rows, cx);
         let headers = kv_table::pairs_from_rows(&self.folder_header_rows, cx);
         let variables = kv_table::pairs_from_rows(&self.folder_var_rows, cx);
+        // Read the currently-stored base_url (before the mutable update below)
+        // and the substitution vars, so we can keep the {{key}} reference when
+        // the input still shows its resolved value (i.e. the user didn't edit it).
+        let (old_base_url, subst_vars) = match self.state.read(cx).active_project() {
+            Some(p) => (
+                p.find_folder(&id).and_then(|(_, f)| f.base_url.clone()),
+                p.base_url_subst_vars(),
+            ),
+            None => (None, Default::default()),
+        };
+        let base_url = if base_url_raw.is_empty() {
+            None
+        } else {
+            // Preserve the {{key}} reference if the (displayed) resolved value
+            // equals the input — otherwise the user edited it, store literally.
+            let preserved = old_base_url
+                .as_ref()
+                .filter(|cur| cur.contains("{{"))
+                .and_then(|cur| {
+                    let resolved = crate::http::variable::substitute(cur, &subst_vars);
+                    if resolved == base_url_raw {
+                        Some(cur.clone())
+                    } else {
+                        None
+                    }
+                });
+            preserved.or(Some(base_url_raw))
+        };
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, folder)) = project.find_folder_mut(&id) {

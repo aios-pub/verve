@@ -44,7 +44,7 @@ priority = "optional"
 # /usr/bin/verve sets LD_LIBRARY_PATH before exec-ing the real binary so that
 # the $ORIGIN rpath baked into the binary is not the only search path.
 assets = [
-    ["target/release/verve", "usr/lib/verve/", "755"],
+    ["target/release/verve", "usr/bin/", "755"],
     ["target/release/libpdfium.so", "usr/lib/verve/", "644"],
     ["assets/icons/verve.png", "usr/share/icons/hicolor/512x512/apps/verve.png", "644"],
     ["assets/verve.desktop", "usr/share/applications/verve.desktop", "644"],

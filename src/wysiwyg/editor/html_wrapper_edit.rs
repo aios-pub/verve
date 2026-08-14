@@ -978,7 +978,7 @@ mod tests {
                 .read(cx)
                 .record
                 .html
-                .as_ref()
+                .as_deref()
                 .and_then(editable_wrapper_inner_markdown)
                 .expect("inner markdown");
             (wrapper, inner)

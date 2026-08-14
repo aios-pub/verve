@@ -1,7 +1,10 @@
 //! Bottom status bar: sidebar toggle, mode switch, cursor position,
 //! word count, and custom buttons.
 
+use std::sync::OnceLock;
+
 use gpui::*;
+use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::Editor;
@@ -327,10 +330,78 @@ fn render_custom_button(
         .into_any_element()
 }
 
-/// Count words in mixed CJK / Latin text.
+/// Count words in mixed CJK / Latin Markdown text.
 ///
-/// Every CJK character counts as one word. Latin words are split on whitespace.
+/// Every CJK character counts as one word; Latin words are split on
+/// whitespace and (fullwidth) punctuation. Markdown syntax is stripped first
+/// so headings, list/task markers, table separators, emphasis, images, link
+/// URLs, HTML tags, fences, and YAML frontmatter do not inflate the count.
+/// Fenced-code *content* is still counted as plain words.
 pub fn count_words(text: &str) -> usize {
+    let (image_re, link_re, html_re) = inline_patterns();
+    let mut total = 0usize;
+    let mut in_fence = false;
+    let mut fence_marker = '\0';
+    let mut in_frontmatter = false;
+    let mut first_line = true;
+
+    for line in text.lines() {
+        let t = line.trim();
+
+        // YAML frontmatter block (only when the document starts with `---`).
+        if first_line {
+            first_line = false;
+            if t == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+        }
+        if in_frontmatter {
+            if t == "---" || t == "..." {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+
+        // Fenced code blocks: fence lines themselves carry no words; content
+        // lines are counted as plain text (code identifiers are still words).
+        if let Some(marker) = fence_marker_char(t) {
+            if !in_fence {
+                in_fence = true;
+                fence_marker = marker;
+                continue;
+            }
+            if marker == fence_marker && is_bare_fence(t, marker) {
+                in_fence = false;
+                fence_marker = '\0';
+                continue;
+            }
+        }
+        if in_fence {
+            total += count_plain_words(t);
+            continue;
+        }
+
+        if is_horizontal_rule(t) || is_table_separator(t) {
+            continue;
+        }
+
+        let content = strip_block_markers(t);
+        let without_images = image_re.replace_all(content, " ");
+        let with_link_text = link_re.replace_all(&without_images, "$1");
+        let without_html = html_re.replace_all(&with_link_text, " ");
+        let plain: String = without_html
+            .chars()
+            .filter(|&c| !matches!(c, '*' | '_' | '~' | '`' | '|'))
+            .collect();
+        total += count_plain_words(&plain);
+    }
+    total
+}
+
+/// Count words in plain (non-Markdown) text: CJK chars individually, Latin
+/// runs as words, split on whitespace and CJK/fullwidth punctuation.
+fn count_plain_words(text: &str) -> usize {
     let mut count = 0;
     let mut in_latin_word = false;
 
@@ -341,7 +412,7 @@ pub fn count_words(text: &str) -> usize {
                 in_latin_word = false;
             }
             count += 1;
-        } else if ch.is_whitespace() {
+        } else if is_word_separator(ch) {
             if in_latin_word {
                 count += 1;
                 in_latin_word = false;
@@ -354,6 +425,130 @@ pub fn count_words(text: &str) -> usize {
         count += 1;
     }
     count
+}
+
+/// Whitespace plus the CJK/fullwidth punctuation blocks that previously fell
+/// into the Latin-word bucket and inflated counts (`，。！？：；（）《》【】…—`).
+fn is_word_separator(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch as u32,
+            // CJK symbols & punctuation: 、。〈〉《》【】〔〕
+            0x3000..=0x303F
+            // Fullwidth forms: ，。！？：；（）＂＇
+            | 0xFF00..=0xFFEF
+            // General punctuation band: – — ‘ ’ “ ” • …
+            | 0x2014..=0x2026
+            // Middle dot
+            | 0x00B7
+        )
+}
+
+/// Inline Markdown patterns, compiled once. The patterns are compile-time
+/// constants, so `Regex::new` cannot fail (AGENTS.md exemption 1).
+fn inline_patterns() -> &'static (Regex, Regex, Regex) {
+    static PATTERNS: OnceLock<(Regex, Regex, Regex)> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        let images = Regex::new(r"!\[[^\]]*\]\([^)]*\)")
+            .expect("literal pattern always compiles");
+        let links = Regex::new(r"\[([^\]]*)\]\([^)]*\)")
+            .expect("literal pattern always compiles");
+        let html = Regex::new(r"</?[A-Za-z][^<>]*>")
+            .expect("literal pattern always compiles");
+        (images, links, html)
+    })
+}
+
+/// If the line opens a fenced code block, its marker character.
+fn fence_marker_char(t: &str) -> Option<char> {
+    for marker in ['`', '~'] {
+        let run = t.chars().take_while(|&c| c == marker).count();
+        if run >= 3 {
+            return Some(marker);
+        }
+    }
+    None
+}
+
+/// A closing fence: only the marker run (and whitespace).
+fn is_bare_fence(t: &str, marker: char) -> bool {
+    t.chars().all(|c| c == marker || c.is_whitespace()) && t.chars().filter(|&c| c == marker).count() >= 3
+}
+
+/// `---`, `***`, `___` (optionally spaced) — no words.
+fn is_horizontal_rule(t: &str) -> bool {
+    let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+    let first = compact.chars().next();
+    matches!(first, Some('-') | Some('*') | Some('_'))
+        && compact.len() >= 3
+        && compact.chars().all(|c| Some(c) == first)
+}
+
+/// A table separator row like `| --- | :---: |` — no words.
+fn is_table_separator(t: &str) -> bool {
+    if !t.contains('|') {
+        return false;
+    }
+    let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+    !compact.is_empty()
+        && compact.chars().all(|c| matches!(c, '|' | ':' | '-'))
+        && compact.contains('-')
+}
+
+/// Strip leading block markers (headings, quotes, list bullets, task
+/// checkboxes, ordered numbers) so only the sentence content remains.
+fn strip_block_markers(mut t: &str) -> &str {
+    loop {
+        let trimmed = t.trim_start();
+        let mut rest = trimmed;
+
+        // ATX heading marker.
+        let hashes = rest.chars().take_while(|&c| c == '#').count();
+        if hashes >= 1 && hashes <= 6 {
+            let after = &rest[hashes..];
+            if after.is_empty() || after.starts_with(' ') {
+                t = after.trim_start();
+                continue;
+            }
+        }
+
+        // Block quote marker.
+        if let Some(after) = rest.strip_prefix('>') {
+            t = after.trim_start();
+            continue;
+        }
+
+        // Task checkbox `[ ]` / `[x]`.
+        let lower: Vec<char> = rest.chars().take(3).collect();
+        if lower.len() == 3
+            && lower[0] == '['
+            && matches!(lower[1], ' ' | 'x' | 'X')
+            && lower[2] == ']'
+        {
+            t = rest[3..].trim_start();
+            continue;
+        }
+
+        // Bullet or ordered-list marker (`-`, `+`, `*`, `12.`, `12)`).
+        let bullet = rest
+            .chars()
+            .next()
+            .is_some_and(|c| matches!(c, '-' | '+' | '*'));
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        let ordered = !digits.is_empty()
+            && rest[digits.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c == '.' || c == ')');
+        if bullet || ordered {
+            let skip = if bullet { 1 } else { digits.len() + 1 };
+            t = rest[skip..].trim_start();
+            continue;
+        }
+
+        t = rest;
+        return t;
+    }
 }
 
 fn is_cjk_char(ch: char) -> bool {
@@ -409,5 +604,139 @@ mod tests {
     fn whitespace_handling() {
         assert_eq!(count_words("  hello   world  "), 2);
         assert_eq!(count_words("   "), 0);
+    }
+}
+
+/// Default-run tests for the Markdown-aware word counter (the module above is
+/// feature-gated behind `wysiwyg-gpui-tests`; these are pure and always run).
+#[cfg(test)]
+mod word_count_tests {
+    use super::count_words;
+
+    // -- plain text (parity with the original counter) ----------------------
+
+    #[test]
+    fn plain_english_words() {
+        assert_eq!(count_words("hello world"), 2);
+        assert_eq!(count_words("  hello   world  "), 2);
+    }
+
+    #[test]
+    fn plain_cjk_counts_per_character() {
+        assert_eq!(count_words("你好世界"), 4);
+        assert_eq!(count_words("hello 世界"), 3);
+    }
+
+    // -- CJK / fullwidth punctuation is a separator, not a word -------------
+
+    #[test]
+    fn fullwidth_punctuation_is_not_counted() {
+        assert_eq!(count_words("你好，世界。"), 4);
+        assert_eq!(count_words("中文、英文"), 4);
+        assert_eq!(count_words("“引号”内容"), 4);
+        assert_eq!(count_words("等等……"), 2);
+    }
+
+    // -- markdown block syntax is stripped -----------------------------------
+
+    #[test]
+    fn headings_and_quotes_strip_markers() {
+        assert_eq!(count_words("## 标题"), 2);
+        assert_eq!(count_words("# Title here"), 2);
+        assert_eq!(count_words("> 引用内容"), 4);
+    }
+
+    #[test]
+    fn lists_and_tasks_strip_markers() {
+        assert_eq!(count_words("- 第一项"), 3);
+        assert_eq!(count_words("- [x] 完成任务"), 4);
+        assert_eq!(count_words("1. ordered item"), 2);
+    }
+
+    #[test]
+    fn horizontal_rules_and_table_separators_are_skipped() {
+        assert_eq!(count_words("---"), 0);
+        assert_eq!(count_words("***"), 0);
+        assert_eq!(count_words("| a | b |\n|---|---|\n| 1 | 2 |"), 4);
+    }
+
+    #[test]
+    fn table_content_rows_count_cells() {
+        assert_eq!(count_words("| 名称 | 数量 |\n| --- | :-: |\n| 苹果 | 三个 |"), 8);
+    }
+
+    #[test]
+    fn fenced_code_counts_content_but_not_fences() {
+        // ASCII punctuation attaches to words ("=" standalone counts, like
+        // VS Code's word count): let / x / = / 1; → 4.
+        assert_eq!(count_words("```rust\nlet x = 1;\n```"), 4);
+        assert_eq!(count_words("~~~\n代码\n~~~"), 2);
+    }
+
+    #[test]
+    fn yaml_frontmatter_is_skipped() {
+        assert_eq!(count_words("---\ntitle: hello\n---\n正文开始"), 4);
+    }
+
+    // -- inline syntax -------------------------------------------------------
+
+    #[test]
+    fn links_keep_text_and_drop_urls() {
+        assert_eq!(count_words("[文档](https://example.com/a/b)"), 2);
+        assert_eq!(count_words("see [the docs](http://x.y) now"), 4);
+    }
+
+    #[test]
+    fn images_are_dropped() {
+        assert_eq!(count_words("![alt text](./media/images/a.png)"), 0);
+        assert_eq!(count_words("前文 ![图](x.png) 后文"), 4);
+    }
+
+    #[test]
+    fn html_tags_are_dropped() {
+        assert_eq!(count_words("<video src=\"./media/videos/a.mp4\"></video>"), 0);
+        assert_eq!(count_words("<b>bold</b> words"), 2);
+    }
+
+    #[test]
+    fn emphasis_markers_do_not_split_words() {
+        assert_eq!(count_words("**加粗**文本"), 4);
+        assert_eq!(count_words("*italic* word"), 2);
+    }
+
+    // -- integration ---------------------------------------------------------
+
+    #[test]
+    fn mixed_document_counts_prose_only() {
+        let doc = "\
+# 项目笔记
+
+这是第一段，包含 English words 混排。
+
+- [x] 完成调研
+- [ ] 输出报告
+
+| 列一 | 列二 |
+| --- | --- |
+| 数据 | data |
+
+![截图](./media/images/s.png)
+
+```rust
+let answer = 42;
+```
+
+详见[链接](https://example.com)。
+";
+        let expected = 4  // 项目笔记
+            + 11          // 这是第一段，包含 English words 混排。
+            + 4           // 完成调研
+            + 4           // 输出报告
+            + 4           // 列一 列二
+            + 3           // 数据 data
+            + 0           // ![截图](…) dropped
+            + 4           // let answer = 42;
+            + 4;          // 详见 链接
+        assert_eq!(count_words(doc), expected);
     }
 }

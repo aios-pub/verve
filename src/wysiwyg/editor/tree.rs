@@ -53,6 +53,10 @@ impl VisibleTreeSnapshot {
 pub(super) struct DocumentTree {
     roots: Vec<Entity<Block>>,
     snapshot: VisibleTreeSnapshot,
+    /// Bumped on every `rebuild_metadata_and_snapshot` (all structural edits,
+    /// `set_content`, import). Part of the selection-snapshot cache key so
+    /// per-frame captures can skip the O(document) mapping walk.
+    revision: u64,
 }
 
 impl DocumentTree {
@@ -60,7 +64,13 @@ impl DocumentTree {
         Self {
             roots,
             snapshot: VisibleTreeSnapshot::default(),
+            revision: 0,
         }
+    }
+
+    /// Monotonic structural revision (see field docs).
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(super) fn first_root(&self) -> Option<&Entity<Block>> {
@@ -180,6 +190,7 @@ impl DocumentTree {
     /// UUIDs, child UUID lists, render depth, numbered-list ordinals, and the
     /// visible snapshot.
     pub(super) fn rebuild_metadata_and_snapshot(&mut self, cx: &mut Context<Editor>) {
+        self.revision = self.revision.wrapping_add(1);
         Self::normalize_block_list(&mut self.roots, cx);
         self.snapshot.clear();
         Self::sync_block_list(

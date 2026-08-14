@@ -262,6 +262,56 @@ pub fn media_storage_path() -> Result<PathBuf> {
     Ok(crate::state::persistence::data_dir()?.join("media_storage.toml"))
 }
 
+/// In-process cache for the media config, keyed by (path, mtime). This file is
+/// read from hot paths (per-frame image/video resolution), so the common case
+/// must not touch the disk: `fs::metadata` is checked first, and the parsed
+/// config is returned when both the path and mtime are unchanged. The path is
+/// part of the key because the data dir can be overridden per-thread (tests)
+/// or per-process (`verve_server --data-dir`). `save_media_config` writes
+/// through, so saves are reflected immediately.
+static CONFIG_CACHE: std::sync::RwLock<
+    Option<((std::path::PathBuf, std::time::SystemTime), MediaStorageConfig)>,
+> = std::sync::RwLock::new(None);
+
+fn cache_modification_time(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+/// Render-hot-path media root: unlike [`load_media_config`] (one `stat` to
+/// verify freshness), this performs **no filesystem access at all** on the fast
+/// path — it is keyed by an in-process version counter that
+/// [`save_media_config`] bumps on every write. External edits to the config
+/// file are therefore picked up by the next full `load_media_config` elsewhere
+/// (settings UI, paste/import), not by this cache — an accepted trade-off so
+/// per-frame image/video resolution stays syscall-free.
+static ROOT_CACHE: std::sync::RwLock<Option<(u64, std::sync::Arc<PathBuf>)>> =
+    std::sync::RwLock::new(None);
+static ROOT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Resolve the media root without touching the filesystem on the fast path.
+pub fn cached_media_root() -> Option<std::sync::Arc<PathBuf>> {
+    use std::sync::atomic::Ordering;
+    let version = ROOT_VERSION.load(Ordering::Acquire);
+    if let Some((cached_version, root)) = ROOT_CACHE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        if cached_version == version {
+            return Some(root);
+        }
+    }
+    let cfg = load_media_config();
+    let root = std::sync::Arc::new(resolved_media_root(&cfg).ok()?);
+    // Publish with the version observed before the load; if a concurrent save
+    // bumped the counter meanwhile, the next caller sees the mismatch and
+    // recomputes — no stale root can be returned.
+    *ROOT_CACHE.write().unwrap_or_else(|e| e.into_inner()) = Some((version, root.clone()));
+    Some(root)
+}
+
 /// Load the media config, falling back to defaults when the file is missing or
 /// unparseable (which also covers the "old version missing a section" case,
 /// since every field defaults).
@@ -270,10 +320,32 @@ pub fn load_media_config() -> MediaStorageConfig {
         Ok(p) => p,
         Err(_) => return MediaStorageConfig::default(),
     };
-    match fs::read_to_string(&path) {
+
+    let mtime = cache_modification_time(&path);
+    // Fast path: same (path, mtime) → return the cached config.
+    if let (Some(mtime), Some(((cached_path, cached_mtime), cached_cfg))) = (
+        mtime,
+        CONFIG_CACHE
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+    ) {
+        if cached_path == path && cached_mtime == mtime {
+            return cached_cfg;
+        }
+    }
+
+    let cfg = match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
         Err(_) => MediaStorageConfig::default(),
-    }
+    };
+    // Re-stat after the read: an external write between read and stat would
+    // otherwise pin a stale mtime in the cache.
+    let mtime =
+        cache_modification_time(&path).unwrap_or_else(std::time::SystemTime::now);
+    *CONFIG_CACHE.write().unwrap_or_else(|e| e.into_inner()) =
+        Some(((path, mtime), cfg.clone()));
+    cfg
 }
 
 /// Atomically write the media config (temp file + rename).
@@ -287,6 +359,15 @@ pub fn save_media_config(cfg: &MediaStorageConfig) -> Result<()> {
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, &serialized).with_context(|| format!("write {}", tmp.display()))?;
     fs::rename(&tmp, &path).with_context(|| format!("rename {}", path.display()))?;
+    // Write through so a subsequent load returns this value even if the
+    // filesystem's mtime granularity would consider the file unchanged.
+    let mtime = cache_modification_time(&path)
+        .unwrap_or_else(std::time::SystemTime::now);
+    *CONFIG_CACHE.write().unwrap_or_else(|e| e.into_inner()) =
+        Some(((path, mtime), cfg.clone()));
+    // Invalidate + eagerly republish the render-path root cache.
+    ROOT_VERSION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    let _ = cached_media_root();
     Ok(())
 }
 
@@ -374,5 +455,38 @@ mod tests {
     fn default_git_sync_is_off() {
         // Credentials must stay machine-local until the user explicitly opts in.
         assert!(!MediaStorageConfig::default().global.git_sync);
+    }
+
+    #[test]
+    fn save_write_through_updates_cache() {
+        let dir = isolated_data_dir();
+        let _guard = persistence::set_thread_data_dir(dir.clone());
+
+        let mut cfg = MediaStorageConfig::default();
+        cfg.image.s3_prefix = "cache-check".to_string();
+        save_media_config(&cfg).unwrap();
+        // Immediately visible even if the mtime granularity would not change.
+        assert_eq!(load_media_config().image.s3_prefix, "cache-check");
+    }
+
+    #[test]
+    fn external_file_change_is_visible() {
+        let dir = isolated_data_dir();
+        let _guard = persistence::set_thread_data_dir(dir.clone());
+
+        let cfg = MediaStorageConfig::default();
+        save_media_config(&cfg).unwrap();
+        assert_eq!(load_media_config().video.s3_prefix, "videos");
+
+        // Simulate an external edit: rewrite the file with different content
+        // and a guaranteed-different mtime.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let path = media_storage_path().unwrap();
+        std::fs::write(
+            &path,
+            "[video]\ns3_prefix = \"external-edit\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_media_config().video.s3_prefix, "external-edit");
     }
 }

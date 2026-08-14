@@ -5,6 +5,7 @@
 //! as raw Markdown blocks so it can round-trip without loss.
 
 use gpui::*;
+use std::sync::Arc;
 
 use super::Editor;
 use crate::wysiwyg::components::{
@@ -809,7 +810,7 @@ fn html_or_raw_block(cx: &mut Context<Editor>, markdown: String) -> Entity<super
     let document = parse_html_document(&markdown);
     if document.safety == HtmlSafetyClass::Semantic {
         let mut record = BlockRecord::html(markdown);
-        record.html = Some(document);
+        record.html = Some(Arc::new(document));
         Editor::new_block(cx, record)
     } else {
         raw_block(cx, markdown)

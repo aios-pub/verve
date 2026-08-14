@@ -127,8 +127,7 @@ pub fn resolve_media_src_to_openable(src: &str) -> Option<String> {
         return Some(s.to_string());
     }
     if is_local_media_ref(s) {
-        let cfg = crate::media::config::load_media_config();
-        let root = crate::media::config::resolved_media_root(&cfg).ok()?;
+        let root = crate::media::config::cached_media_root()?;
         let abs = resolve_local_media_ref(s, &root)?;
         return Some(file_url(&abs));
     }

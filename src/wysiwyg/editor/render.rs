@@ -588,7 +588,7 @@ impl Editor {
         // only the title is mounted — without this gate the single-shot retry
         // would settle and the body would stay blank until an external repaint.
         let focused_has_real_bounds = self
-            .focused_edit_target_entity_id(window, cx)
+            .frame_focused_target
             .and_then(|id| self.focusable_entity_by_id(id))
             .map(|block| block.read(cx).last_bounds.is_some())
             .unwrap_or(true);
@@ -1833,12 +1833,19 @@ impl Render for Editor {
         if self.owns_window {
             self.install_close_guard(cx, window);
         }
+        // Resolve the focused edit target once per frame; the render-path call
+        // sites below reuse it instead of each re-scanning every visible block.
+        self.frame_focused_target = self.focused_edit_target_entity_id(window, cx);
         // Sync wrapper runtimes FIRST (before apply_pending_focus) so that a
         // first-click on an editable wrapper resolves the precise child + caret
         // and sets pending_focus to the correct target in a single frame,
         // avoiding the 2-frame flash of child 0 focused at offset 0.
         self.sync_html_wrapper_runtimes(window, cx);
         self.apply_pending_focus(window, cx);
+        // apply_pending_focus may move focus — refresh the per-frame memo so
+        // the scroll-into-view and windowing sites below see the new target
+        // (matching the previous live-computation behavior at those points).
+        self.frame_focused_target = self.focused_edit_target_entity_id(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.apply_click_scroll_anchor(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
@@ -2129,7 +2136,7 @@ impl Render for Editor {
         // The focused row is always kept mounted so its caret is not blurred; a
         // table cell maps to its containing table block's row.
         let focus_row = self
-            .focused_edit_target_entity_id(window, cx)
+            .frame_focused_target
             .and_then(|id| {
                 self.document.visible_index_for_entity_id(id).or_else(|| {
                     self.table_cell_binding(id).and_then(|binding| {

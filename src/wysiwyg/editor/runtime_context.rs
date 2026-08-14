@@ -31,7 +31,7 @@ impl Editor {
             });
         }
 
-        for visible in self.document.visible_blocks().to_vec() {
+        for visible in self.document.visible_blocks() {
             visible.entity.update(cx, |block, _cx| {
                 changed |= block.end_pointer_selection_session();
             });
@@ -131,8 +131,7 @@ impl Editor {
 
     pub(super) fn rebuild_footnote_registry(&mut self, cx: &App) {
         let mut definitions = HashMap::new();
-        let visible = self.document.visible_blocks().to_vec();
-        for visible_block in &visible {
+        for visible_block in self.document.visible_blocks() {
             let block = visible_block.entity.read(cx);
             if block.kind() != BlockKind::FootnoteDefinition {
                 continue;
@@ -172,7 +171,7 @@ impl Editor {
         let mut next_ordinal = 1usize;
         let mut occurrence_index = 0usize;
         let mut block_occurrences = HashMap::<uuid::Uuid, Vec<FootnoteResolvedOccurrence>>::new();
-        for visible_block in visible {
+        for visible_block in self.document.visible_blocks() {
             let block = visible_block.entity.read(cx);
             let block_id = block.record.id;
             for fragment in &block.record.title.fragments {
@@ -222,7 +221,7 @@ impl Editor {
         self.image_reference_definitions = Arc::new(parse_image_reference_definitions(&markdown));
         self.link_reference_definitions = Arc::new(parse_link_reference_definitions(&markdown));
         self.rebuild_footnote_registry(cx);
-        let visible = self.document.visible_blocks().to_vec();
+        let visible = self.document.visible_blocks();
         for visible_block in visible {
             self.sync_runtime_context_for_block(&visible_block.entity, base_dir.as_deref(), cx);
             if visible_block.entity.read(cx).kind() != BlockKind::Table {

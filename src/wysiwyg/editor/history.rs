@@ -32,6 +32,38 @@ impl Editor {
         let Some(target) = self.current_edit_target_from_state(cx) else {
             return self.last_selection_snapshot.clone();
         };
+
+        // Cache check: the mapping walk below is O(total document bytes), and
+        // this capture runs every render frame. Scroll frames leave the
+        // document content (epochs), focus target, and caret unchanged, so the
+        // cached snapshot is reused; any edit or caret move invalidates the key.
+        let (selected_range, reversed) = {
+            let target_ref = target.read(cx);
+            (
+                target_ref.selected_range.clone(),
+                target_ref.selection_reversed,
+            )
+        };
+        let cache_key = (
+            self.document.revision(),
+            self.content_epoch,
+            target.entity_id(),
+            selected_range.clone(),
+            reversed,
+        );
+        if let Some(entry) = self.selection_snapshot_cache.borrow().as_ref() {
+            if (
+                entry.tree_revision,
+                entry.content_epoch,
+                entry.target,
+                entry.selected_range.clone(),
+                entry.reversed,
+            ) == cache_key
+            {
+                return entry.snapshot.clone();
+            }
+        }
+
         let Some(mapping) = self
             .build_source_target_mappings(cx)
             .into_iter()
@@ -40,7 +72,6 @@ impl Editor {
             return self.last_selection_snapshot.clone();
         };
 
-        let selected_range = target.read(cx).selected_range.clone();
         let content_range = target
             .read(cx)
             .current_range_to_markdown_range(selected_range);
@@ -50,10 +81,19 @@ impl Editor {
         let end = mapping.full_source_range.start
             + mapping.content_to_source[content_range.end.min(max_offset)];
 
-        UndoSelectionSnapshot {
+        let snapshot = UndoSelectionSnapshot {
             range: start..end,
-            reversed: target.read(cx).selection_reversed,
-        }
+            reversed,
+        };
+        *self.selection_snapshot_cache.borrow_mut() = Some(SelectionSnapshotCacheEntry {
+            tree_revision: cache_key.0,
+            content_epoch: cache_key.1,
+            target: cache_key.2,
+            selected_range: cache_key.3,
+            reversed: cache_key.4,
+            snapshot: snapshot.clone(),
+        });
+        snapshot
     }
 
     pub(super) fn capture_history_entry(&self, kind: UndoCaptureKind, cx: &App) -> HistoryEntry {

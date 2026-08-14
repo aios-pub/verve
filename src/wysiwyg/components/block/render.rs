@@ -18,7 +18,7 @@ use crate::wysiwyg::components::{
     InlineScript, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
     TableColumnLayout, attr_value, display_math_font_size,
     has_only_inline_content as html_has_only_inline_content, inline_math_font_size,
-    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
+    parse_display_math_source, parse_html_zoom, parse_mermaid_fence_source,
     parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
     render_mermaid_svg_for_display, resolve_image_source, style_for_node,
 };
@@ -1205,6 +1205,11 @@ impl Block {
         font_weight: FontWeight,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // Cheap probe first: most cells contain no image syntax at all, and the
+        // full `serialize_markdown` + parse below costs O(cell text) per frame.
+        if !self.record.title.visible_text().contains("![") {
+            return None;
+        }
         let segments = parse_table_cell_inline_images(&self.record.title.serialize_markdown());
         if !segments
             .iter()
@@ -1546,7 +1551,7 @@ impl Block {
                         && self
                             .record
                             .html
-                            .as_ref()
+                            .as_deref()
                             .and_then(crate::wysiwyg::components::markdown::html::editable_wrapper_inner_markdown)
                             .is_some_and(|inner| inner == inline_source);
                     let inline_node = HtmlNode {
@@ -1915,12 +1920,10 @@ impl Block {
         node_style: HtmlNodeVisualStyle,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let parsed_image = parse_html_image_block(&node.raw_source);
-        let src = parsed_image
-            .as_ref()
-            .map(|image| image.src.as_str())
-            .or_else(|| attr_value(node, "src"))
-            .filter(|src| !src.trim().is_empty());
+        // This arm only runs for an already-classified `img` node, so the
+        // sanitized `node.attrs` carry everything the old per-frame
+        // `parse_html_image_block` (a full html5ever parse) extracted.
+        let src = attr_value(node, "src").filter(|src| !src.trim().is_empty());
         let Some(src) = src else {
             let mut element = div()
                 .text_size(px(node_style.computed.font_size))
@@ -1931,14 +1934,12 @@ impl Block {
             }
             return element.into_any_element();
         };
-        let alt = parsed_image
-            .as_ref()
-            .map(|image| image.alt.clone())
-            .unwrap_or_else(|| attr_value(node, "alt").unwrap_or_default().to_string());
-        let zoom = parsed_image
-            .as_ref()
-            .map(|image| image.zoom_factor())
-            .unwrap_or(1.0);
+        let alt = attr_value(node, "alt").unwrap_or_default().to_string();
+        // Same semantics as `HtmlImageBlock::zoom_factor`.
+        let zoom = attr_value(node, "style")
+            .and_then(parse_html_zoom)
+            .unwrap_or(1.0)
+            .clamp(0.1, 3.0);
         let runtime = ImageRuntime {
             alt,
             src: src.to_string(),
@@ -1986,7 +1987,11 @@ impl Block {
         let progress = if src_key.is_empty() {
             None
         } else {
-            self.video_upload_progress.get(&src_key).copied()
+            self.video_upload_progress
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&src_key)
+                .copied()
         };
         let mut element = div()
             .id(SharedString::from("html-video-placeholder"))
@@ -2283,7 +2288,9 @@ impl Render for Block {
             self.reset_code_language_input_layout();
         }
 
-        let block_id = ElementId::Name(format!("block-{}", self.record.id).into());
+        // Stable per-block element id from the entity id — avoids a String
+        // allocation per block per frame (the old `format!("block-{uuid}")`).
+        let block_id = ElementId::Integer(cx.entity().entity_id().as_u64());
         let is_placeholder =
             focused && self.display_text().is_empty() && self.marked_range.is_none();
 
@@ -2430,13 +2437,13 @@ impl Render for Block {
                     .into_any_element();
             }
             if !focused && self.is_html_table_child() {
-                let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
-                    crate::wysiwyg::components::parse_html_document(
+                let html = self.record.html.clone().unwrap_or_else(|| {
+                    std::sync::Arc::new(crate::wysiwyg::components::parse_html_document(
                         self.record
                             .raw_fallback
                             .as_deref()
                             .unwrap_or_else(|| self.display_text()),
-                    )
+                    ))
                 });
                 let table_base = self
                     .render_shell(
@@ -3620,13 +3627,13 @@ impl Render for Block {
                         .children(runtime.children)
                         .into_any_element()
                 } else {
-                    let html = self.record.html.as_ref().cloned().unwrap_or_else(|| {
-                        crate::wysiwyg::components::parse_html_document(
+                    let html = self.record.html.clone().unwrap_or_else(|| {
+                        std::sync::Arc::new(crate::wysiwyg::components::parse_html_document(
                             self.record
                                 .raw_fallback
                                 .as_deref()
                                 .unwrap_or_else(|| self.display_text()),
-                        )
+                        ))
                     });
                     focused_base
                         .text_size(px(t.text_size))

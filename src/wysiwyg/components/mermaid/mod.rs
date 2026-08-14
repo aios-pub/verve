@@ -1,9 +1,11 @@
 //! Mermaid fenced-block parsing and SVG rendering helpers.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context as _, anyhow};
 
@@ -128,6 +130,31 @@ pub(crate) fn render_mermaid_svg_for_display(
     render_mermaid_svg_for_display_with(source, available_width, viewport_width, render_mermaid_raw)
 }
 
+/// Process-wide in-memory caches in front of the disk SVG caches. The render
+/// path runs per frame per mounted diagram; without these every frame pays
+/// `exists()` + `read_to_string` + intrinsic-size parsing (same rationale as
+/// the LaTeX SVG cache in `crate::wysiwyg::components::latex`).
+type MermaidBaseMemCache = HashMap<String, (Arc<String>, MermaidSvgSize)>;
+type MermaidDisplayMemCache = HashMap<String, Arc<MermaidSvgRender>>;
+
+fn mermaid_base_mem_cache() -> &'static Mutex<MermaidBaseMemCache> {
+    static CACHE: OnceLock<Mutex<MermaidBaseMemCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn mermaid_display_mem_cache() -> &'static Mutex<MermaidDisplayMemCache> {
+    static CACHE: OnceLock<Mutex<MermaidDisplayMemCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn mem_cache_get<V: Clone>(cache: &Mutex<HashMap<String, V>>, key: &str) -> Option<V> {
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(key)
+        .cloned()
+}
+
 fn render_mermaid_svg_for_display_with(
     source: &MermaidSource,
     available_width: f32,
@@ -135,9 +162,23 @@ fn render_mermaid_svg_for_display_with(
     renderer: MermaidRenderer,
 ) -> anyhow::Result<MermaidSvgRender> {
     let base_key = mermaid_cache_key(&source.body);
-    let base_path = mermaid_base_cache_path(&base_key)?;
-    let base_svg = render_mermaid_to_svg_cached_with(&source.body, &base_path, renderer)?;
-    let intrinsic = mermaid_svg_intrinsic_size(&base_svg)?;
+    let (base_svg, intrinsic) = match mem_cache_get(mermaid_base_mem_cache(), &base_key) {
+        Some(hit) => hit,
+        None => {
+            let base_path = mermaid_base_cache_path(&base_key)?;
+            let svg = Arc::new(render_mermaid_to_svg_cached_with(
+                &source.body,
+                &base_path,
+                renderer,
+            )?);
+            let size = mermaid_svg_intrinsic_size(&svg)?;
+            mermaid_base_mem_cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(base_key.clone(), (svg.clone(), size));
+            (svg, size)
+        }
+    };
     let scale = mermaid_display_scale(
         &source.body,
         intrinsic.width,
@@ -147,8 +188,23 @@ fn render_mermaid_svg_for_display_with(
     );
 
     let display_key = mermaid_display_cache_key(&source.body, scale);
+    if let Some(hit) = mem_cache_get(mermaid_display_mem_cache(), &display_key) {
+        // Self-heal: GPUI's image element loads from `path`, so a cache entry
+        // whose disk file was removed (cache clear, external deletion) must be
+        // rewritten from the in-memory SVG instead of serving a dead path.
+        if !hit.path.exists() {
+            fs::write(&hit.path, hit.svg.as_str()).with_context(|| {
+                format!(
+                    "failed to restore Mermaid display SVG cache '{}'",
+                    hit.path.display()
+                )
+            })?;
+        }
+        return Ok((*hit).clone());
+    }
+
     let display_path = mermaid_display_cache_path(&display_key)?;
-    if display_path.exists() {
+    let render = if display_path.exists() {
         let svg = fs::read_to_string(&display_path).with_context(|| {
             format!(
                 "failed to read Mermaid display SVG cache '{}'",
@@ -156,29 +212,34 @@ fn render_mermaid_svg_for_display_with(
             )
         })?;
         let size = mermaid_svg_intrinsic_size(&svg)?;
-        return Ok(MermaidSvgRender {
+        MermaidSvgRender {
             path: display_path,
             svg,
             display_width: size.width,
             display_height: size.height,
             display_scale: scale,
-        });
-    }
-
-    let (svg, size) = scale_mermaid_svg_for_display(&base_svg, scale)?;
-    fs::write(&display_path, &svg).with_context(|| {
-        format!(
-            "failed to write Mermaid display SVG cache '{}'",
-            display_path.display()
-        )
-    })?;
-    Ok(MermaidSvgRender {
-        path: display_path,
-        svg,
-        display_width: size.width,
-        display_height: size.height,
-        display_scale: scale,
-    })
+        }
+    } else {
+        let (svg, size) = scale_mermaid_svg_for_display(&base_svg, scale)?;
+        fs::write(&display_path, &svg).with_context(|| {
+            format!(
+                "failed to write Mermaid display SVG cache '{}'",
+                display_path.display()
+            )
+        })?;
+        MermaidSvgRender {
+            path: display_path,
+            svg,
+            display_width: size.width,
+            display_height: size.height,
+            display_scale: scale,
+        }
+    };
+    mermaid_display_mem_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(display_key, Arc::new(render.clone()));
+    Ok(render)
 }
 
 /// Render a Mermaid diagram body into cached SVG text.

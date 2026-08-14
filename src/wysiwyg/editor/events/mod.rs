@@ -387,6 +387,9 @@ impl Editor {
             }
         }
         if changed {
+            // Direct title write (no BlockEvent::Changed) — bump the epoch so
+            // the selection-snapshot cache doesn't serve stale source offsets.
+            self.content_epoch = self.content_epoch.wrapping_add(1);
             self.rebuild_image_runtimes(cx);
             self.mark_dirty(cx);
             cx.notify();
@@ -434,7 +437,7 @@ impl Editor {
             title.append_tree(trailing.clone());
             (block.kind(), title, cursor)
         });
-        Self::set_block_title_and_kind(block, kind, title, cursor, cx);
+        self.set_block_title_and_kind(block, kind, title, cursor, cx);
         if let Some(binding) = self.table_cell_binding(block.entity_id()) {
             self.sync_table_record_from_runtime(&binding.table_block, cx);
         }
@@ -457,7 +460,7 @@ impl Editor {
         let trailing_empty = trailing.visible_len() == 0;
 
         if leading_empty {
-            Self::set_block_title_and_kind(
+            self.set_block_title_and_kind(
                 block,
                 BlockKind::Paragraph,
                 InlineTextTree::plain(markdown.to_string()),
@@ -480,7 +483,7 @@ impl Editor {
             return;
         }
 
-        Self::set_block_title_and_kind(
+        self.set_block_title_and_kind(
             block,
             BlockKind::Paragraph,
             leading.clone(),
@@ -737,12 +740,16 @@ impl Editor {
     }
 
     fn set_block_title_and_kind(
+        &mut self,
         block: &Entity<super::Block>,
         kind: BlockKind,
         title: InlineTextTree,
         cursor: usize,
         cx: &mut Context<Self>,
     ) {
+        // Direct title write (no BlockEvent::Changed) — bump the epoch so the
+        // selection-snapshot cache invalidates its source-offset mappings.
+        self.content_epoch = self.content_epoch.wrapping_add(1);
         let (kind, title, cursor) = Self::apply_paragraph_shortcuts(kind, title, cursor);
         block.update(cx, move |block, cx| {
             block.record.kind = kind;
@@ -820,7 +827,7 @@ impl Editor {
             let removed_id = block.entity_id();
             let new_paragraph = Self::new_block(cx, BlockRecord::paragraph(String::new()));
 
-            Self::set_block_title_and_kind(
+            self.set_block_title_and_kind(
                 &prev,
                 BlockKind::Heading { level },
                 heading_title,
@@ -1036,6 +1043,8 @@ impl Editor {
         self.scrollbar_visible_until = Instant::now() + duration;
 
         let weak_editor = cx.entity().downgrade();
+        // Reassigning drops (cancels) the previous fade task, so continuous
+        // scrolling keeps exactly one pending timer alive.
         self.scrollbar_fade_task = Some(cx.spawn(
             async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 cx.background_executor()
@@ -1051,10 +1060,12 @@ impl Editor {
             },
         ));
 
-        // Bump before notifying so host observers can recognise this as a
-        // view-only scroll notify and skip a full rebuild.
+        // Bump the revision BEFORE the wheel dispatch finishes: gpui itself
+        // notifies this view when the scroll offset changes (and around user
+        // scroll listeners), which fires host observers — they need the fresh
+        // revision to recognize this as view-only and skip their rebuilds. No
+        // explicit notify here: one is already issued for this frame by gpui.
         self.scroll_revision = self.scroll_revision.wrapping_add(1);
-        cx.notify();
     }
 
     pub(crate) fn on_editor_hover(
@@ -1065,7 +1076,12 @@ impl Editor {
     ) {
         self.scrollbar_hovered = *hovered;
         if *hovered {
+            // Unlike the wheel path (gpui auto-notifies on offset change),
+            // hover listeners get no automatic repaint — notify explicitly.
+            // The revision was already bumped inside bump_scrollbar_visibility,
+            // so host observers treat this as view-only.
             self.bump_scrollbar_visibility(cx);
+            cx.notify();
         } else {
             cx.notify();
         }
@@ -1186,9 +1202,9 @@ impl Editor {
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
         self.bump_scrollbar_visibility(cx);
-        // `bump_scrollbar_visibility` already notified (and bumped the scroll
-        // revision); bump again so this follow-up notify is also recognised as
-        // view-only by host observers.
+        // This path changes the scroll offset directly (no wheel event), so it
+        // must notify itself; bump the revision first so host observers treat
+        // the follow-up notify as view-only.
         self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
@@ -1210,9 +1226,8 @@ impl Editor {
         self.pending_scroll_active_block_into_view = false;
         self.pending_scroll_recheck_after_layout = false;
         self.bump_scrollbar_visibility(cx);
-        // `bump_scrollbar_visibility` already notified (and bumped the scroll
-        // revision); bump again so this follow-up notify is also recognised as
-        // view-only by host observers.
+        // Drag start changes visuals directly — notify (view-only via the
+        // revision bump above).
         self.scroll_revision = self.scroll_revision.wrapping_add(1);
         cx.notify();
     }
@@ -1434,6 +1449,7 @@ impl Editor {
 
         match event {
             BlockEvent::Changed => {
+                self.content_epoch = self.content_epoch.wrapping_add(1);
                 self.sync_table_record_from_runtime(&binding.table_block, cx);
                 self.rebuild_image_runtimes(cx);
                 self.mark_dirty(cx);
@@ -1937,6 +1953,7 @@ impl Editor {
 
         match event {
             BlockEvent::Changed => {
+                self.content_epoch = self.content_epoch.wrapping_add(1);
                 let should_restart_numbered_list = block.update(cx, |block, _cx| {
                     block.take_numbered_list_restart_requested()
                 });
@@ -2201,7 +2218,7 @@ impl Editor {
                 if tail_lines.is_empty() {
                     first_title.append_tree(trailing.clone());
                     let cursor = first_title.visible_len();
-                    Self::set_block_title_and_kind(&block, current_kind, first_title, cursor, cx);
+                    self.set_block_title_and_kind(&block, current_kind, first_title, cursor, cx);
                     self.focus_block(block.entity_id());
                     if quote_related {
                         self.normalize_rendered_quote_structure(cx);
@@ -2215,7 +2232,7 @@ impl Editor {
                 }
 
                 let cursor = first_title.visible_len();
-                Self::set_block_title_and_kind(&block, current_kind, first_title, cursor, cx);
+                self.set_block_title_and_kind(&block, current_kind, first_title, cursor, cx);
 
                 let Some(location) = self.document.find_block_location(block.entity_id()) else {
                     return;

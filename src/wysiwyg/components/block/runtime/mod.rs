@@ -210,10 +210,10 @@ pub struct Block {
     image_expand_requested: bool,
     pub(crate) html_details_open: bool,
     image_base_dir: Option<PathBuf>,
-    /// Active video uploads keyed by the embedded `src`, pushed from the editor
-    /// via `set_runtime_context`. Used to render a progress bar on `<video>`
-    /// placeholders whose upload is in flight.
-    pub(crate) video_upload_progress: Arc<HashMap<String, (u32, u32)>>,
+    /// Active video uploads keyed by the embedded `src`, shared (interior-
+    /// mutable) with the editor via `set_runtime_context`. Used to render a
+    /// progress bar on `<video>` placeholders whose upload is in flight.
+    pub(crate) video_upload_progress: Arc<std::sync::RwLock<HashMap<String, (u32, u32)>>>,
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
     footnote_registry: Arc<FootnoteRegistry>,
@@ -389,7 +389,7 @@ impl Block {
             image_expand_requested: false,
             html_details_open: false,
             image_base_dir: None,
-            video_upload_progress: Arc::new(HashMap::new()),
+            video_upload_progress: Arc::new(std::sync::RwLock::new(HashMap::new())),
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
             footnote_registry: Arc::default(),
@@ -432,7 +432,7 @@ impl Block {
         image_reference_definitions: Arc<ImageReferenceDefinitions>,
         link_reference_definitions: Arc<LinkReferenceDefinitions>,
         footnote_registry: Arc<FootnoteRegistry>,
-        video_upload_progress: Arc<HashMap<String, (u32, u32)>>,
+        video_upload_progress: Arc<std::sync::RwLock<HashMap<String, (u32, u32)>>>,
     ) {
         if self.image_base_dir != base_dir {
             self.image_base_dir = base_dir;

@@ -107,9 +107,10 @@ pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> Ima
     // Portable media-store reference (`./media/...`) resolves against the
     // configured media root, not the document's directory. This keeps note text
     // portable across machines while the actual files live in a shared root.
+    // `cached_media_root` is syscall-free on its fast path — this runs per
+    // frame for HTML <img>/table-cell sources.
     if crate::media::path::is_local_media_ref(source) {
-        let cfg = crate::media::config::load_media_config();
-        if let Ok(root) = crate::media::config::resolved_media_root(&cfg) {
+        if let Some(root) = crate::media::config::cached_media_root() {
             if let Some(resolved) = crate::media::path::resolve_local_media_ref(source, &root) {
                 return ImageResolvedSource::Local(resolved);
             }

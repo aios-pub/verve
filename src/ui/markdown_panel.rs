@@ -89,6 +89,10 @@ pub struct MarkdownPanel {
     /// `watch()` on a directory twice and can `unwatch()` only when no tab
     /// references it any more.
     watched_dirs: HashSet<PathBuf>,
+    /// Last seen editor `scroll_revision`. Scroll ticks bump the editor's
+    /// revision but are view-only — skip the full-panel rebuild for them (same
+    /// filter as the notes panel).
+    last_scroll_revision: u64,
     _subs: Vec<Subscription>,
 }
 
@@ -120,6 +124,7 @@ impl MarkdownPanel {
             watcher_rx: rx,
             watched_dirs: HashSet::new(),
             _subs: Vec::new(),
+            last_scroll_revision: 0,
         };
         // Start with one blank untitled tab.
         panel.new_document(cx);
@@ -146,9 +151,16 @@ impl MarkdownPanel {
 
     fn observe_active(&mut self, cx: &mut Context<Self>) {
         // Re-render (title bar dirty marker / filename) whenever the active
-        // editor notifies. We re-subscribe on every tab switch.
+        // editor notifies. We re-subscribe on every tab switch. Scroll ticks
+        // only bump the editor's `scroll_revision` (scrollbar show/hide) and
+        // need no panel rebuild, so they are filtered out here.
         let editor = self.editor().clone();
-        let sub = cx.observe(&editor, |_, _editor, cx| {
+        let sub = cx.observe(&editor, |this, editor, cx| {
+            let current = editor.read(cx).scroll_revision;
+            if current != this.last_scroll_revision {
+                this.last_scroll_revision = current;
+                return;
+            }
             cx.notify();
         });
         self._subs = vec![sub];

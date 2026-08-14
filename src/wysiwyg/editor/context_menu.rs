@@ -493,20 +493,28 @@ impl Editor {
         cx.spawn(async move |this, cx| loop {
             match rx.try_recv() {
                 Ok(VideoUploadEvent::Progress { done, total }) => {
+                    // Shared-map update: blocks read the new value on the
+                    // re-render triggered by notify — no full-document rebuild
+                    // per part.
                     let _ = this.update(cx, |editor, cx| {
-                        let mut m = (*editor.video_uploads).clone();
-                        m.insert(old_src.clone(), (done, total));
-                        editor.video_uploads = std::sync::Arc::new(m);
-                        editor.rebuild_image_runtimes(cx);
+                        editor
+                            .video_uploads
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(old_src.clone(), (done, total));
                         cx.notify();
                     });
                 }
                 Ok(VideoUploadEvent::Done(res)) => {
                     let _ = this.update(cx, |editor, cx| {
-                        let mut m = (*editor.video_uploads).clone();
-                        m.remove(&old_src);
-                        editor.video_uploads = std::sync::Arc::new(m);
-                        editor.rebuild_image_runtimes(cx);
+                        editor
+                            .video_uploads
+                            .write()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&old_src);
+                        // rewrite_media_src rebuilds runtimes itself on success;
+                        // on failure the local copy stays and only the error is
+                        // surfaced.
                         match res {
                             Ok(url) => editor.rewrite_media_src(&old_src, &url, cx),
                             Err(err) => editor.show_image_paste_error(err, cx),

@@ -78,6 +78,10 @@ pub struct NotesPanel {
     export_popover_open: bool,
     /// Whether the left-side note tree is collapsed (hidden).
     list_collapsed: bool,
+    /// Saved sidebar width loaded once at construction. Render uses it as the
+    /// resizable's default size; the live size lives in `sidebar_resize`, so
+    /// re-reading `layout.json` every frame (two disk reads) was wasted work.
+    sidebar_default_width: gpui::Pixels,
     /// Per-row open "..." menu, by node id (e.g. "note:<uuid>").
     row_menu_open: Option<String>,
     /// FS watcher for the notes directory — picks up external edits so the
@@ -446,6 +450,12 @@ impl NotesPanel {
             list_collapsed: crate::state::persistence::load_layout()
                 .map(|l| l.notes_collapsed)
                 .unwrap_or(false),
+            sidebar_default_width: crate::state::persistence::load_layout()
+                .and_then(|l| l.side_widths)
+                .and_then(|w| w.first().copied())
+                .filter(|&w| w > 0.0)
+                .map(gpui::px)
+                .unwrap_or_else(|| gpui::px(260.)),
             row_menu_open: None,
             watcher,
             watcher_rx: wrx,
@@ -2437,12 +2447,8 @@ impl Render for NotesPanel {
             // Both panels are children of h_resizable so the resize handle is
             // placed between them. Content is wrapped in plain divs so their
             // own flex classes don't interfere with the resizable layout.
-            let saved = crate::state::persistence::load_layout()
-                .and_then(|l| l.side_widths)
-                .and_then(|w| w.first().copied())
-                .filter(|&w| w > 0.0)
-                .map(gpui::px)
-                .unwrap_or_else(|| gpui::px(260.));
+            // The default width was loaded once at construction.
+            let saved = self.sidebar_default_width;
             let state = self.sidebar_resize.clone();
             gpui_component::resizable::h_resizable("notes-sidebar")
                 .with_state(&state)

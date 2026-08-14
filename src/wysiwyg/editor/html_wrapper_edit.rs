@@ -35,9 +35,8 @@ impl Editor {
         }
 
         // Resolve the focused block: either a document block or a wrapper child.
-        let focused_id = self
-            .focused_edit_target_entity_id(window, cx)
-            .or(self.pending_focus);
+        // `frame_focused_target` is computed once at the top of `render`.
+        let focused_id = self.frame_focused_target.or(self.pending_focus);
 
         // The wrapper HtmlBlock that currently holds focus (whether or not its
         // runtime is already installed).
@@ -171,7 +170,7 @@ impl Editor {
         else {
             return false;
         };
-        let Some(inner_markdown) = wrapper_block.read(cx).record.html.as_ref().and_then(|doc| {
+        let Some(inner_markdown) = wrapper_block.read(cx).record.html.as_deref().and_then(|doc| {
             extract_editable_inline_wrapper(doc)
                 .map(|_| HtmlWrapperShape::inner_source(&doc.nodes[0]))
         }) else {
@@ -446,7 +445,7 @@ impl Editor {
         }
 
         let Some(inner_source) =
-            wrapper.read(cx).record.html.as_ref().and_then(
+            wrapper.read(cx).record.html.as_deref().and_then(
                 crate::wysiwyg::components::markdown::html::editable_wrapper_inner_markdown,
             )
         else {

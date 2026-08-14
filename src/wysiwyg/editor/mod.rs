@@ -223,9 +223,23 @@ pub struct Editor {
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
     footnote_registry: Arc<FootnoteRegistry>,
     /// In-flight video uploads keyed by the embedded local `src`
-    /// (`./media/videos/...`), mapping to `(parts_done, parts_total)`. Pushed to
-    /// blocks via runtime context so `<video>` placeholders render a progress bar.
-    video_uploads: Arc<HashMap<String, (u32, u32)>>,
+    /// (`./media/videos/...`), mapping to `(parts_done, parts_total)`. Shared
+    /// (interior-mutable) with blocks via runtime context, so a progress update
+    /// is a lock+insert plus a re-render — no per-part full-document rebuild.
+    video_uploads: Arc<std::sync::RwLock<HashMap<String, (u32, u32)>>>,
+    /// Bumped on every block-content change that does not go through a
+    /// structural rebuild (block `Changed` events, direct title writes). Used
+    /// together with `DocumentTree::revision` as the cache key for the
+    /// selection-source snapshot so scroll frames skip the O(document) mapping
+    /// walk.
+    content_epoch: u64,
+    /// Cache for `capture_source_selection_snapshot`'s expensive rendered-mode
+    /// branch. Interior-mutable because the capture API is `&self`.
+    selection_snapshot_cache: std::cell::RefCell<Option<SelectionSnapshotCacheEntry>>,
+    /// Focused edit target computed once at the top of `render` and reused by
+    /// the render-path call sites (wrapper sync, scroll-into-view gating,
+    /// windowing focus row) instead of each re-scanning every visible block.
+    frame_focused_target: Option<EntityId>,
 }
 
 /// Runtime binding between a table block and one cell editor.
@@ -307,6 +321,20 @@ pub(super) struct ClickScrollAnchor {
 struct UndoSelectionSnapshot {
     range: std::ops::Range<usize>,
     reversed: bool,
+}
+
+/// Cache entry for the expensive rendered-mode branch of
+/// `capture_source_selection_snapshot` (which walks the whole document to map
+/// the caret into source offsets). Scroll frames with unchanged content, focus,
+/// and caret reuse the cached snapshot instead.
+#[derive(Clone, Debug)]
+struct SelectionSnapshotCacheEntry {
+    tree_revision: u64,
+    content_epoch: u64,
+    target: EntityId,
+    selected_range: std::ops::Range<usize>,
+    reversed: bool,
+    snapshot: UndoSelectionSnapshot,
 }
 
 /// One undo history entry containing source text and selection state.
@@ -472,12 +500,15 @@ impl Editor {
             redo_history: Vec::new(),
             pending_undo_capture: None,
             last_selection_snapshot: Self::empty_selection_snapshot(),
+            content_epoch: 0,
+            selection_snapshot_cache: std::cell::RefCell::new(None),
+            frame_focused_target: None,
             last_stable_source_text: normalized,
             history_restore_in_progress: false,
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
             footnote_registry: Arc::default(),
-            video_uploads: Arc::new(HashMap::new()),
+            video_uploads: Arc::new(std::sync::RwLock::new(HashMap::new())),
         };
         editor.rebuild_table_runtimes(cx);
         editor.rebuild_image_runtimes(cx);

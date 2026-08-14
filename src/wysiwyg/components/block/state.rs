@@ -8,6 +8,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use gpui::{Image, Pixels, Point, SharedString};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::wysiwyg::components::markdown::html::{HtmlDocument, parse_html_document};
@@ -501,7 +502,9 @@ pub struct BlockRecord {
     pub kind: BlockKind,
     pub title: InlineTextTree,
     pub table: Option<TableData>,
-    pub html: Option<HtmlDocument>,
+    /// Parsed HTML tree for HtmlBlock. `Arc` so the per-frame render path can
+    /// clone the handle instead of deep-cloning the tree.
+    pub html: Option<Arc<HtmlDocument>>,
     pub parent: Option<Uuid>,
     pub content: Vec<Uuid>,
     pub raw_fallback: Option<String>,
@@ -549,7 +552,7 @@ impl BlockRecord {
         let markdown = markdown.into();
         let html = parse_html_document(&markdown);
         let mut record = Self::with_plain_text(BlockKind::HtmlBlock, markdown.clone());
-        record.html = Some(html);
+        record.html = Some(Arc::new(html));
         record.raw_fallback = Some(markdown);
         record
     }
@@ -690,7 +693,7 @@ impl BlockRecord {
                 self.html = self
                     .raw_fallback
                     .as_ref()
-                    .map(|raw| parse_html_document(raw));
+                    .map(|raw| Arc::new(parse_html_document(raw)));
             }
         } else {
             self.raw_fallback = None;

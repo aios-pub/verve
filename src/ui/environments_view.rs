@@ -153,7 +153,7 @@ impl EnvironmentsView {
                     .map(|e| e.variables.clone())
             })
             .unwrap_or_default();
-        self.rows = kv_table::rows_from_pairs(&vars, window, cx);
+        self.rows = kv_table::rows_from_pairs(&vars, self.state.clone(), window, cx);
         self.name_input.update(cx, |s, cx| {
             let name = self
                 .state
@@ -394,7 +394,7 @@ impl EnvironmentsView {
         self.active_section = Some(SettingsSection::Global(scope));
         // Reload rows from the chosen global scope.
         let pairs = read_global(&self.state, scope, cx);
-        self.rows = kv_table::rows_from_pairs(&pairs, window, cx);
+        self.rows = kv_table::rows_from_pairs(&pairs, self.state.clone(), window, cx);
         self.last_built_id = Some(format!("global-{:?}", scope));
         cx.notify();
     }
@@ -508,7 +508,7 @@ impl Render for EnvironmentsView {
             }),
             on_add: Arc::new(move |window, cx: &mut App| {
                 let _ = view_add.update(cx, |this, cx| {
-                    this.rows.push(KvRow::empty(window, cx));
+                    this.rows.push(KvRow::empty(this.state.clone(), window, cx));
                     this.commit(cx);
                 });
             }),
@@ -907,7 +907,7 @@ impl EnvironmentsView {
                 }
                 Some(SettingsSection::Global(scope)) => {
                     let pairs = read_global(&self.state, *scope, cx);
-                    self.rows = kv_table::rows_from_pairs(&pairs, window, cx);
+                    self.rows = kv_table::rows_from_pairs(&pairs, self.state.clone(), window, cx);
                 }
                 None => {
                     self.rows.clear();

@@ -163,8 +163,6 @@ pub struct RequestPanel {
     pub folder_id: Option<String>,
     pub folder_name: Entity<InputState>,
     pub folder_desc: Entity<InputState>,
-    /// Folder base URL input (folder settings tab).
-    pub folder_base_url: Entity<InputState>,
     /// Whether the folder base URL Popover is open.
     pub folder_baseurl_open: bool,
     pub folder_param_rows: Vec<KvRow>,
@@ -356,9 +354,6 @@ impl RequestPanel {
                 .rows(4)
                 .placeholder("目录描述（可选）：说明该目录下接口的用途、归属模块等")
         });
-        let folder_base_url =
-            cx.new(|cx| InputState::new(window, cx).placeholder("https://api.example.com"));
-
         let panel = Self {
             state: state.clone(),
             request_id: None,
@@ -411,7 +406,6 @@ impl RequestPanel {
             folder_id: None,
             folder_name,
             folder_desc,
-            folder_base_url,
             folder_baseurl_open: false,
             folder_param_rows: Vec::new(),
             folder_header_rows: Vec::new(),
@@ -742,10 +736,10 @@ impl RequestPanel {
                 self.method_select
                     .update(cx, |s, cx| s.set_selected_value(&method_str, window, cx));
                 // Query/Headers/Path/Cookie rows.
-                self.params_rows = kv_table::rows_from_pairs(&r.params, window, cx);
-                self.headers_rows = kv_table::rows_from_pairs(&r.headers, window, cx);
-                self.path_rows = kv_table::rows_from_pairs(&r.path, window, cx);
-                self.cookie_rows = kv_table::rows_from_pairs(&r.cookies, window, cx);
+                self.params_rows = kv_table::rows_from_pairs(&r.params, self.state.clone(), window, cx);
+                self.headers_rows = kv_table::rows_from_pairs(&r.headers, self.state.clone(), window, cx);
+                self.path_rows = kv_table::rows_from_pairs(&r.path, self.state.clone(), window, cx);
+                self.cookie_rows = kv_table::rows_from_pairs(&r.cookies, self.state.clone(), window, cx);
                 // Body.
                 self.body_type = r.body.body_type;
                 self.body_editor.update(cx, |s, cx| {
@@ -756,12 +750,13 @@ impl RequestPanel {
                         BodyType::FormData => &r.body.form_data,
                         _ => &r.body.urlencoded,
                     },
+                    self.state.clone(),
                     window,
                     cx,
                 );
                 // Visual-mode rows for the Raw body (reused across renders so
                 // typing in the field inputs doesn't lose focus).
-                self.raw_visual_rows = kv_table::rows_from_pairs(&r.body.raw_parameter, window, cx);
+                self.raw_visual_rows = kv_table::rows_from_pairs(&r.body.raw_parameter, self.state.clone(), window, cx);
                 // Body type select.
                 let bt_str = match r.body.body_type {
                     BodyType::None => "none",
@@ -813,7 +808,7 @@ impl RequestPanel {
                     });
                     self.mock_body_editor
                         .update(cx, |s, cx| s.set_value(mock.body.clone(), window, cx));
-                    self.mock_headers_rows = kv_table::rows_from_pairs(&mock.headers, window, cx);
+                    self.mock_headers_rows = kv_table::rows_from_pairs(&mock.headers, self.state.clone(), window, cx);
                     // Match method: "不限制" is index 7, others match their position in RequestMethod::all().
                     let method_idx = match &mock.match_method {
                         Some(m) => RequestMethod::all()
@@ -851,9 +846,9 @@ impl RequestPanel {
                         .update(cx, |s, cx| s.set_value(pattern_str, window, cx));
                     self.mock_enable_templates = mock.enable_templates;
                     self.mock_match_query_rows =
-                        kv_table::rows_from_pairs(&mock.match_query, window, cx);
+                        kv_table::rows_from_pairs(&mock.match_query, self.state.clone(), window, cx);
                     self.mock_match_header_rows =
-                        kv_table::rows_from_pairs(&mock.match_headers, window, cx);
+                        kv_table::rows_from_pairs(&mock.match_headers, self.state.clone(), window, cx);
                 } else {
                     self.mock_enabled = false;
                     self.mock_status_input
@@ -867,6 +862,7 @@ impl RequestPanel {
                             "Content-Type",
                             "application/json",
                         )],
+                        self.state.clone(),
                         window,
                         cx,
                     );
@@ -929,26 +925,9 @@ impl RequestPanel {
                     .update(cx, |s, cx| s.set_value(f.name.clone(), window, cx));
                 self.folder_desc
                     .update(cx, |s, cx| s.set_value(f.description.clone(), window, cx));
-                let raw_base = f.base_url.clone().unwrap_or_default();
-                // Show the resolved URL (no `{{}}`) when base_url is a
-                // {{var}} reference; the stored value itself is unchanged.
-                let display_base = if raw_base.contains("{{") {
-                    let vars = self
-                        .state
-                        .read(cx)
-                        .active_project()
-                        .map(|p| p.base_url_subst_vars())
-                        .unwrap_or_default();
-                    crate::http::variable::substitute(&raw_base, &vars)
-                } else {
-                    raw_base
-                };
-                self.folder_base_url.update(cx, |s, cx| {
-                    s.set_value(display_base, window, cx)
-                });
-                self.folder_param_rows = kv_table::rows_from_pairs(&f.params, window, cx);
-                self.folder_header_rows = kv_table::rows_from_pairs(&f.headers, window, cx);
-                self.folder_var_rows = kv_table::rows_from_pairs(&f.variables, window, cx);
+                self.folder_param_rows = kv_table::rows_from_pairs(&f.params, self.state.clone(), window, cx);
+                self.folder_header_rows = kv_table::rows_from_pairs(&f.headers, self.state.clone(), window, cx);
+                self.folder_var_rows = kv_table::rows_from_pairs(&f.variables, self.state.clone(), window, cx);
                 cx.notify();
                 true
             }
@@ -968,44 +947,16 @@ impl RequestPanel {
         };
         let name = self.folder_name.read(cx).value().to_string();
         let description = self.folder_desc.read(cx).text().to_string();
-        let base_url_raw = self.folder_base_url.read(cx).value().trim().to_string();
         let params = kv_table::pairs_from_rows(&self.folder_param_rows, cx);
         let headers = kv_table::pairs_from_rows(&self.folder_header_rows, cx);
         let variables = kv_table::pairs_from_rows(&self.folder_var_rows, cx);
-        // Read the currently-stored base_url (before the mutable update below)
-        // and the substitution vars, so we can keep the {{key}} reference when
-        // the input still shows its resolved value (i.e. the user didn't edit it).
-        let (old_base_url, subst_vars) = match self.state.read(cx).active_project() {
-            Some(p) => (
-                p.find_folder(&id).and_then(|(_, f)| f.base_url.clone()),
-                p.base_url_subst_vars(),
-            ),
-            None => (None, Default::default()),
-        };
-        let base_url = if base_url_raw.is_empty() {
-            None
-        } else {
-            // Preserve the {{key}} reference if the (displayed) resolved value
-            // equals the input — otherwise the user edited it, store literally.
-            let preserved = old_base_url
-                .as_ref()
-                .filter(|cur| cur.contains("{{"))
-                .and_then(|cur| {
-                    let resolved = crate::http::variable::substitute(cur, &subst_vars);
-                    if resolved == base_url_raw {
-                        Some(cur.clone())
-                    } else {
-                        None
-                    }
-                });
-            preserved.or(Some(base_url_raw))
-        };
         self.state.update(cx, |s, cx| {
             if let Some(project) = s.active_project_mut() {
                 if let Some((_, folder)) = project.find_folder_mut(&id) {
                     folder.name = name;
                     folder.description = description;
-                    folder.base_url = base_url;
+                    // base_url 由前置URL下拉动作（set_folder_base_url）维护，
+                    // 此处不覆盖，避免清空已设置的 {{var}} 引用。
                     folder.params = params;
                     folder.headers = headers;
                     folder.variables = variables;
@@ -1940,10 +1891,28 @@ impl Render for RequestPanel {
                                 //   None (inherit)          → resolved folder base_url, or "前置URL"
                                 let label_text = match &self.req_base_mode {
                                     Some(None) => "不使用前置URL".to_string(),
-                                    _ => {
-                                        // Substitute any {{var}} placeholder so the
-                                        // button label shows the resolved URL, not the
-                                        // raw placeholder text.
+                                    // Inherit the folder's base_url: resolve the
+                                    // folder chain and show the actual URL.
+                                    None => {
+                                        let req_id = self.request_id.clone();
+                                        let resolved = self
+                                            .state
+                                            .read(cx)
+                                            .active_project()
+                                            .and_then(|p| {
+                                                let id = req_id.as_deref()?;
+                                                let (chain, _) = p.find_request(id)?;
+                                                resolve_folder_base_url(p, &chain)
+                                            });
+                                        match resolved {
+                                            Some(url) if !url.trim().is_empty() => url,
+                                            _ => "前置URL".to_string(),
+                                        }
+                                    }
+                                    // Override with a specific value (literal or
+                                    // {{var}} placeholder): substitute so the label
+                                    // shows the resolved URL, not raw placeholder text.
+                                    Some(Some(_)) => {
                                         let base_val = if base_val_raw.contains("{{") {
                                             let vars = self.effective_vars(cx);
                                             crate::http::variable::substitute(&base_val_raw, &vars)

@@ -78,10 +78,11 @@ impl KvManagerView {
         cx: &mut Context<Self>,
     ) -> Self {
         let pairs = read_scope(&state, scope, cx);
+        let rows = kv_table::rows_from_pairs(&pairs, state.clone(), window, cx);
         let mut view = Self {
             state,
             scope,
-            rows: kv_table::rows_from_pairs(&pairs, window, cx),
+            rows,
             pending_add: false,
             pending_reload: false,
             _subs: Vec::new(),
@@ -174,12 +175,12 @@ impl Render for KvManagerView {
         if self.pending_reload {
             self.pending_reload = false;
             let pairs = read_scope(&self.state, self.scope, cx);
-            self.rows = kv_table::rows_from_pairs(&pairs, window, cx);
+            self.rows = kv_table::rows_from_pairs(&pairs, self.state.clone(), window, cx);
         }
         // Reconcile a pending add-row (needs a Window).
         if self.pending_add {
             self.pending_add = false;
-            self.rows.push(KvRow::empty(window, cx));
+            self.rows.push(KvRow::empty(self.state.clone(), window, cx));
         }
         let theme = cx.theme().clone();
         let scope = self.scope;

@@ -4,8 +4,8 @@
 use super::folder_helpers::{IfaceEntry, collect_iface_entries, folder_tab_label, set_folder_base_url,
 };
 use super::{FolderKvSection, FolderTab, ReqTab, RequestPanel};
-use crate::state::models::*;
 use crate::state::AppEvent;
+use crate::state::models::*;
 use crate::ui::kv_table::{self, KvRow};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -254,11 +254,36 @@ impl RequestPanel {
                                         ),
                                     )
                                     .child(
-                                        Input::new(&self.folder_base_url).small(),
-                                    )
-                                    .child(
-                                        // Dropdown to select base URL from environment variables.
+                                        // Base URL dropdown: the trigger shows the resolved
+                                        // current base_url; the menu offers clear + env-var options.
                                         {
+                                            // Resolve the trigger label from the stored base_url.
+                                            let proj = self.state.read(cx).active_project();
+                                            let raw_base = proj
+                                                .and_then(|p| {
+                                                    self.folder_id.as_deref().and_then(|fid| p.find_folder(fid))
+                                                })
+                                                .and_then(|(_, f)| f.base_url.clone())
+                                                .unwrap_or_default();
+                                            let label_text = {
+                                                let raw = raw_base.trim();
+                                                if raw.is_empty() {
+                                                    "前置URL".to_string()
+                                                } else if raw.contains("{{") {
+                                                    let vars = proj
+                                                        .map(|p| p.base_url_subst_vars())
+                                                        .unwrap_or_default();
+                                                    let resolved = crate::http::variable::substitute(raw, &vars);
+                                                    if resolved.trim().is_empty() {
+                                                        "前置URL".to_string()
+                                                    } else {
+                                                        resolved
+                                                    }
+                                                } else {
+                                                    raw.to_string()
+                                                }
+                                            };
+
                                             let active_env = self.state.read(cx).active_project()
                                                 .and_then(|p| p.active_environment.as_ref())
                                                 .and_then(|eid| {
@@ -274,149 +299,143 @@ impl RequestPanel {
                                                 })
                                                 .unwrap_or_default();
 
-                                            if env_vars.is_empty() {
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child("（当前环境没有 URL 变量）")
-                                                    .into_any_element()
-                                            } else {
-                                                let open = self.folder_baseurl_open;
-                                                let folder_id_upd = self.folder_id.clone();
-                                                let state_upd = self.state.clone();
-                                                let fb_input = self.folder_base_url.clone();
-                                                let theme_c = theme.clone();
+                                            let open = self.folder_baseurl_open;
+                                            let folder_id = self.folder_id.clone();
+                                            let state = self.state.clone();
+                                            let theme_c = theme.clone();
+                                            let panel_entity = cx.entity();
 
-                                                let folder_id = folder_id_upd.clone();
-                                                let state = state_upd.clone();
-                                                let fb_input_clone = fb_input.clone();
-                                                let panel_entity = cx.entity();
-
-                                                Popover::new("folder-baseurl-popover")
-                                                    .anchor(gpui::Anchor::BottomLeft)
-                                                    .open(open)
-                                                    .on_open_change(cx.listener(|this, open, _, cx| {
-                                                        this.folder_baseurl_open = *open;
-                                                        cx.notify();
-                                                    }))
-                                                    .trigger(
-                                                        Button::new("folder-baseurl-trigger")
-                                                            .ghost()
-                                                            .small()
-                                                            .icon(IconName::ChevronDown)
-                                                            .label("选择环境变量"),
-                                                    )
-                                                    .p(px(4.))
-                                                    .child(
-                                                        v_flex()
-                                                            .w(px(300.))
-                                                            .gap(px(2.))
-                                                            .child(
-                                                                div()
-                                                                    .text_xs()
-                                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                                    .text_color(theme_c.muted_foreground)
-                                                                    .px_2()
-                                                                    .py_1()
-                                                                    .child("从环境变量选择"),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .id("folder-baseurl-scroll")
-                                                                    .max_h(px(300.))
-                                                                    .overflow_y_scroll()
-                                                                    .children(env_vars.iter().enumerate().map(|(i, (k, v))| {
-                                                                let val_display = v.trim_end_matches('/').to_string();
-                                                                let key = k.clone();
-                                                                // Store the {{key}} placeholder so the stored
-                                                                // value stays in sync when the env var changes;
-                                                                // the literal value is only shown in the
-                                                                // dropdown as a preview.
-                                                                let placeholder = format!("{{{{{}}}}}", key);
-                                                                let fid = folder_id.clone();
-                                                                let st = state.clone();
-                                                                let tc = theme_c.clone();
-                                                                let fb_in = fb_input_clone.clone();
-                                                                let panel = panel_entity.clone();
-
-                                                                div()
-                                                                    .id(("baseurl-opt", i))
-                                                                    .px_2()
-                                                                    .py_1()
-                                                                    .rounded_md()
-                                                                    .cursor_pointer()
-                                                                    .hover(|s| s.bg(tc.muted))
-                                                                    .child(
-                                                                        v_flex()
-                                                                            .gap(px(1.))
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_sm()
-                                                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                                                    .child(key.clone()),
-                                                                            )
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_xs()
-                                                                                    .text_color(tc.muted_foreground)
-                                                                                    .child(val_display),
-                                                                            ),
-                                                                    )
-                                                                    .on_mouse_down(MouseButton::Left, move |_ev, window, cx: &mut App| {
+                                            Popover::new("folder-baseurl-popover")
+                                                .anchor(gpui::Anchor::BottomLeft)
+                                                .open(open)
+                                                .on_open_change(cx.listener(|this, open, _, cx| {
+                                                    this.folder_baseurl_open = *open;
+                                                    cx.notify();
+                                                }))
+                                                .trigger(
+                                                    Button::new("folder-baseurl-trigger")
+                                                        .outline()
+                                                        .small()
+                                                        .w(px(280.))
+                                                        .icon(IconName::ChevronDown)
+                                                        .label(label_text),
+                                                )
+                                                .p(px(4.))
+                                                .child(
+                                                    v_flex()
+                                                        .w(px(300.))
+                                                        .gap(px(2.))
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .text_color(theme_c.muted_foreground)
+                                                                .px_2()
+                                                                .py_1()
+                                                                .child("选择前置URL"),
+                                                        )
+                                                        .child({
+                                                            let fid = folder_id.clone();
+                                                            let st = state.clone();
+                                                            let panel = panel_entity.clone();
+                                                            div()
+                                                                .id("folder-baseurl-clear")
+                                                                .px_2()
+                                                                .py_1()
+                                                                .rounded_md()
+                                                                .cursor_pointer()
+                                                                .hover(|s| s.bg(theme_c.muted))
+                                                                .child(
+                                                                    div()
+                                                                        .text_sm()
+                                                                        .text_color(theme_c.muted_foreground)
+                                                                        .child("（空）不使用前置URL"),
+                                                                )
+                                                                .on_mouse_down(
+                                                                    MouseButton::Left,
+                                                                    move |_ev, _window, cx: &mut App| {
                                                                         let fid_clone = fid.clone().unwrap_or_default();
-                                                                        let val_set = placeholder.clone();
-                                                                        // Show the resolved URL (without `{{}}`) while the stored
-                                                                        // value stays the `{{key}}` reference.
-                                                                        let display = if val_set.contains("{{") {
-                                                                            let vars = st
-                                                                                .read(cx)
-                                                                                .active_project()
-                                                                                .map(|p| p.base_url_subst_vars())
-                                                                                .unwrap_or_default();
-                                                                            crate::http::variable::substitute(&val_set, &vars)
-                                                                        } else {
-                                                                            val_set.clone()
-                                                                        };
                                                                         let _ = st.update(cx, |s, cx| {
                                                                             if let Some(p) = s.active_project_mut() {
-                                                                                set_folder_base_url(&mut p.folders, &fid_clone, Some(val_set.clone()));
+                                                                                set_folder_base_url(&mut p.folders, &fid_clone, None);
                                                                             }
                                                                             s.notify_edited(cx);
                                                                         });
-                                                                        let _ = fb_in.update(cx, |input, cx| {
-                                                                            input.set_value(&display, window, cx);
-                                                                        });
-                                                                        // Close the popover by setting folder_baseurl_open = false.
                                                                         let _ = panel.update(cx, |this, cx| {
                                                                             this.folder_baseurl_open = false;
                                                                             cx.notify();
                                                                         });
-                                                                        window.refresh();
-                                                                    })
-                                                            })),
-                                                            ),
-                                                    )
-                                                    .into_any_element()
-                                            }
-                                        },
-                                    )
-                                    .child(
-                                        {
-                                            let state = self.state.clone();
-                                            let folder_id = self.folder_id.clone();
-                                            Button::new("clear-base-url")
-                                                .ghost()
-                                                .xsmall()
-                                                .label("清除")
-                                                .on_click(move |_, _, cx: &mut App| {
-                                                    let fid = folder_id.clone().unwrap_or_default();
-                                                    let _ = state.update(cx, |s, cx| {
-                                                        if let Some(p) = s.active_project_mut() {
-                                                            set_folder_base_url(&mut p.folders, &fid, None);
-                                                        }
-                                                        s.notify_edited(cx);
-                                                    });
-                                                })
+                                                                    },
+                                                                )
+                                                        })
+                                                        .child(if env_vars.is_empty() {
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(theme_c.muted_foreground)
+                                                                .px_2()
+                                                                .py_1()
+                                                                .child("（当前环境没有 URL 变量）")
+                                                                .into_any_element()
+                                                        } else {
+                                                            div()
+                                                                .id("folder-baseurl-scroll")
+                                                                .max_h(px(300.))
+                                                                .overflow_y_scroll()
+                                                                .children(env_vars.iter().enumerate().map(|(i, (k, v))| {
+                                                                    let val_display = v.trim_end_matches('/').to_string();
+                                                                    let key = k.clone();
+                                                                    // Store the {{key}} placeholder so the stored
+                                                                    // value stays in sync when the env var changes;
+                                                                    // the literal value is shown as a preview.
+                                                                    let placeholder = format!("{{{{{}}}}}", key);
+                                                                    let fid = folder_id.clone();
+                                                                    let st = state.clone();
+                                                                    let tc = theme_c.clone();
+                                                                    let panel = panel_entity.clone();
+
+                                                                    div()
+                                                                        .id(("baseurl-opt", i))
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .rounded_md()
+                                                                        .cursor_pointer()
+                                                                        .hover(|s| s.bg(tc.muted))
+                                                                        .child(
+                                                                            v_flex()
+                                                                                .gap(px(1.))
+                                                                                .child(
+                                                                                    div()
+                                                                                        .text_sm()
+                                                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                                                        .child(key.clone()),
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .text_xs()
+                                                                                        .text_color(tc.muted_foreground)
+                                                                                        .child(val_display),
+                                                                                ),
+                                                                        )
+                                                                        .on_mouse_down(MouseButton::Left, move |_ev, window, cx: &mut App| {
+                                                                            let fid_clone = fid.clone().unwrap_or_default();
+                                                                            let val_set = placeholder.clone();
+                                                                            let _ = st.update(cx, |s, cx| {
+                                                                                if let Some(p) = s.active_project_mut() {
+                                                                                    set_folder_base_url(&mut p.folders, &fid_clone, Some(val_set.clone()));
+                                                                                }
+                                                                                s.notify_edited(cx);
+                                                                            });
+                                                                            let _ = panel.update(cx, |this, cx| {
+                                                                                this.folder_baseurl_open = false;
+                                                                                cx.notify();
+                                                                            });
+                                                                            window.refresh();
+                                                                        })
+                                                                }))
+                                                                .into_any_element()
+                                                        }),
+                                                )
+                                                .into_any_element()
                                         },
                                     ),
                             )
@@ -886,7 +905,8 @@ impl RequestPanel {
     /// Process pending folder kv additions now that a Window is available.
     pub fn reconcile_folder_kv(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(section) = self.pending_folder_kv_add.take() {
-            self.folder_rows_mut(section).push(KvRow::empty(window, cx));
+            let st = self.state.clone();
+            self.folder_rows_mut(section).push(KvRow::empty(st, window, cx));
             cx.notify();
         }
     }
@@ -936,14 +956,15 @@ impl RequestPanel {
     pub fn reconcile_pending_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_kv_add {
             self.pending_kv_add = false;
+            let st = self.state.clone();
             if let Some(rows) = self.active_rows_mut() {
-                rows.push(KvRow::empty(window, cx));
+                rows.push(KvRow::empty(st, window, cx));
             }
         }
         // Visual-mode add row (needs a Window to create InputState entities).
         if self.pending_visual_add {
             self.pending_visual_add = false;
-            self.raw_visual_rows.push(KvRow::empty(window, cx));
+            self.raw_visual_rows.push(KvRow::empty(self.state.clone(), window, cx));
         }
         // File picker for form-data file fields (needs a Window).
         if let Some(ix) = self.pending_file_pick.take() {

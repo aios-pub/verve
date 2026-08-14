@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::Local;
+
 /// Replace every `{{name}}` occurrence in `input` with the matching value.
 pub fn substitute(input: &str, vars: &BTreeMap<String, String>) -> String {
     let mut out = String::with_capacity(input.len());
@@ -60,33 +62,39 @@ pub fn substitute(input: &str, vars: &BTreeMap<String, String>) -> String {
 /// Returns `None` for anything else (left intact by `substitute`).
 fn dynamic_variable(name: &str) -> Option<String> {
     match name {
-        "$random" => Some(random_alphanumeric(10)),
+        "$random" => Some(random_digits(12)),
         "$uuid" => Some(uuid::Uuid::new_v4().to_string()),
+        "$uuidV7" => Some(uuid::Uuid::now_v7().to_string()),
+        "$timestamp" => Some(Local::now().timestamp().to_string()),
+        "$timestampMs" => Some(Local::now().timestamp_millis().to_string()),
+        "$datetime" => Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        "$date" => Some(Local::now().format("%Y-%m-%d").to_string()),
         "$sparkid" => Some(sparkid::SparkId::new().to_string()),
-        "$timestamp" => Some(current_unix_seconds()),
         _ => None,
     }
 }
 
-/// Current Unix time in seconds (defensive: falls back to "0" if the clock is
-/// before the epoch, which never happens in practice).
-fn current_unix_seconds() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_string())
+/// Names + short descriptions of every supported dynamic variable, in the order
+/// shown by the completion menu. Keep this in sync with [`dynamic_variable`].
+pub fn dynamic_variable_names() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("$uuid", "随机 UUID v4"),
+        ("$uuidV7", "时间排序 UUID v7"),
+        ("$timestamp", "Unix 时间戳（秒）"),
+        ("$timestampMs", "Unix 时间戳（毫秒）"),
+        ("$datetime", "本地时间 YYYY-MM-dd HH:MM:SS"),
+        ("$date", "本地日期 YYYY-MM-dd"),
+        ("$random", "12 位随机数字"),
+        ("$sparkid", "时间可排序 ID（Base58）"),
+    ]
 }
 
-/// Generate an `n`-character alphanumeric string (A-Z a-z 0-9) without pulling
-/// in a `rand` dependency. Seeds from high-resolution wall-clock nanos and
-/// mixes each draw through a splitmix64 step; this is **not** cryptographically
-/// secure — its purpose is producing distinct, human-friendly id values for
-/// debugging/tracing headers (matching Postman `$random`'s intent).
-fn random_alphanumeric(n: usize) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    // Seed: nanos since epoch. Combining with an internal counter is not needed
-    // because nanosecond resolution already differentiates rapid successive
-    // calls well enough for this use case.
+/// Generate an `n`-digit numeric string (0-9) without pulling in a `rand`
+/// dependency. Seeds from high-resolution wall-clock nanos and mixes each draw
+/// through a splitmix64 step; this is **not** cryptographically secure — its
+/// purpose is producing distinct id values for request data.
+fn random_digits(n: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789";
     let mut state = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -99,10 +107,10 @@ fn random_alphanumeric(n: usize) -> String {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
         z ^= z >> 31;
-        // Index into the 62-char alphabet; modulus is safe (ALPHABET is non-empty).
-        let idx = (z % ALPHABET.len() as u64) as usize;
-        // ALPHABET is ASCII, so pushing a byte as a char is boundary-safe.
-        buf.push(ALPHABET[idx] as char);
+        // Index into the 10-digit table; modulus is safe (DIGITS is non-empty).
+        let idx = (z % DIGITS.len() as u64) as usize;
+        // DIGITS is ASCII, so pushing a byte as a char is boundary-safe.
+        buf.push(DIGITS[idx] as char);
     }
     buf
 }
@@ -175,11 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_random_is_10_alphanumeric() {
+    fn dynamic_random_is_12_digits() {
         let m = vars(&[]);
         let v = substitute("{{$random}}", &m);
-        assert_eq!(v.len(), 10);
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(v.len(), 12);
+        assert!(v.chars().all(|c| c.is_ascii_digit()), "expected all digits");
         // Two calls should differ (nanosecond seed makes collisions vanishingly
         // rare). On the off chance they collide, retry a couple of times before
         // failing so the test is robust rather than flaky.
@@ -192,6 +200,45 @@ mod tests {
             }
         }
         assert!(differ, "{{$random}} produced the same value repeatedly");
+    }
+
+    #[test]
+    fn dynamic_uuid_v7_is_valid() {
+        let m = vars(&[]);
+        let v = substitute("{{$uuidV7}}", &m);
+        assert_eq!(v.len(), 36, "expected canonical UUID length");
+        // Version nibble for v7 is '7' at position 14.
+        let bytes = v.as_bytes();
+        assert_eq!(bytes[14], b'7', "expected UUID v7 marker");
+    }
+
+    #[test]
+    fn dynamic_datetime_and_date_formats() {
+        let m = vars(&[]);
+        let dt = substitute("{{$datetime}}", &m);
+        // YYYY-MM-dd HH:MM:SS → 19 chars with '-', ' ', ':' separators.
+        assert_eq!(dt.len(), 19);
+        let b = dt.as_bytes();
+        assert_eq!(b[4], b'-');
+        assert_eq!(b[7], b'-');
+        assert_eq!(b[10], b' ');
+        assert_eq!(b[13], b':');
+        assert_eq!(b[16], b':');
+
+        let d = substitute("{{$date}}", &m);
+        // YYYY-MM-dd → 10 chars.
+        assert_eq!(d.len(), 10);
+        let bd = d.as_bytes();
+        assert_eq!(bd[4], b'-');
+        assert_eq!(bd[7], b'-');
+    }
+
+    #[test]
+    fn dynamic_timestamp_ms_is_digits() {
+        let m = vars(&[]);
+        let v = substitute("{{$timestampMs}}", &m);
+        assert!(!v.is_empty());
+        assert!(v.chars().all(|c| c.is_ascii_digit()));
     }
 
     #[test]

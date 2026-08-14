@@ -6,6 +6,7 @@
 //! dispatch back to it directly. This matches gpui-component's stateless
 //! `RenderOnce` philosophy.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -18,6 +19,8 @@ use gpui_component::{
     h_flex, v_flex,
 };
 
+use super::var_completion::VarCompletionProvider;
+use crate::state::AppState;
 use crate::state::models::{FieldType, KeyValue};
 
 /// Approximate display width of `s` inside a `small` value cell, in "units"
@@ -64,7 +67,7 @@ pub struct KvRow {
 }
 
 impl KvRow {
-    pub fn new(kv: &KeyValue, window: &mut Window, cx: &mut App) -> Self {
+    pub fn new(kv: &KeyValue, state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Self {
         let key = cx.new(|cx| {
             let mut s = InputState::new(window, cx).placeholder("key");
             s.set_value(kv.key.clone(), window, cx);
@@ -79,6 +82,8 @@ impl KvRow {
                 .multi_line(true)
                 .soft_wrap(true);
             s.set_value(kv.value.clone(), window, cx);
+            // Offer {{var}} completions (dynamic + user variables) when typing.
+            s.lsp.completion_provider = Some(Rc::new(VarCompletionProvider::new(state.clone())));
             s
         });
         let description = cx.new(|cx| {
@@ -101,11 +106,11 @@ impl KvRow {
     /// enabled so that anything the user types immediately takes effect (e.g.
     /// shows up in generated curl, is sent with the request) without requiring
     /// an extra click on the checkbox.
-    pub fn empty(window: &mut Window, cx: &mut App) -> Self {
+    pub fn empty(state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Self {
         let mut kv = KeyValue::default();
         kv.enabled = true;
         kv.required = true;
-        Self::new(&kv, window, cx)
+        Self::new(&kv, state, window, cx)
     }
 
     pub fn to_kv(&self, cx: &App) -> KeyValue {
@@ -475,8 +480,8 @@ impl RenderOnce for KvTable {
 
 /// Helper: build a fresh set of rows from `pairs`, ensuring exactly one
 /// trailing empty row for quick entry.
-pub fn rows_from_pairs(pairs: &[KeyValue], window: &mut Window, cx: &mut App) -> Vec<KvRow> {
-    let mut rows: Vec<KvRow> = pairs.iter().map(|kv| KvRow::new(kv, window, cx)).collect();
+pub fn rows_from_pairs(pairs: &[KeyValue], state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Vec<KvRow> {
+    let mut rows: Vec<KvRow> = pairs.iter().map(|kv| KvRow::new(kv, state.clone(), window, cx)).collect();
     let needs_trailing = rows
         .last()
         .map(|r| {
@@ -484,7 +489,7 @@ pub fn rows_from_pairs(pairs: &[KeyValue], window: &mut Window, cx: &mut App) ->
         })
         .unwrap_or(true);
     if needs_trailing {
-        rows.push(KvRow::empty(window, cx));
+        rows.push(KvRow::empty(state.clone(), window, cx));
     }
     rows
 }

@@ -34,5 +34,6 @@ pub mod ssh_panel;
 pub mod stress_panel;
 pub mod theme;
 pub mod themes;
+pub mod var_completion;
 
 pub use app::VerveApp;

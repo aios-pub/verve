@@ -1,26 +1,19 @@
 //! Request-tab rendering: the active-tab body (params/headers/body/scripts/docs),
 //! the mock tab, and the auth tab.
-use super::folder_helpers::*;
-use super::{FolderKvSection, FolderTab, ReqTab, RequestPanel};
-use crate::http;
+use super::{ReqTab, RequestPanel};
 use crate::state::models::*;
-use crate::state::{AppEvent, AppState};
-use crate::ui::kv_table::{self, KvRow};
+use crate::ui::kv_table::KvRow;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::Icon;
 use gpui_component::WindowExt as _;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::input::{Input, InputState};
+use gpui_component::select::Select;
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
     h_flex,
-    popover::Popover,
     v_flex,
 };
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl RequestPanel {
@@ -588,7 +581,7 @@ impl RequestPanel {
                                             }),
                                             on_add: Arc::new(move |window, cx| {
                                                 let _ = ent_add1.update(cx, |this, cx| {
-                                                    this.mock_headers_rows.push(KvRow::empty(window, cx));
+                                                    this.mock_headers_rows.push(KvRow::empty(this.state.clone(), window, cx));
                                                     this.commit_to_model(cx);
                                                     cx.notify();
                                                 });
@@ -703,7 +696,7 @@ impl RequestPanel {
                                                     }),
                                                     on_add: Arc::new(move |window, cx| {
                                                         let _ = ent_add2.update(cx, |this, cx| {
-                                                            this.mock_match_query_rows.push(KvRow::empty(window, cx));
+                                                            this.mock_match_query_rows.push(KvRow::empty(this.state.clone(), window, cx));
                                                             this.commit_to_model(cx);
                                                             cx.notify();
                                                         });
@@ -739,7 +732,7 @@ impl RequestPanel {
                                                     }),
                                                     on_add: Arc::new(move |window, cx| {
                                                         let _ = ent_add3.update(cx, |this, cx| {
-                                                            this.mock_match_header_rows.push(KvRow::empty(window, cx));
+                                                            this.mock_match_header_rows.push(KvRow::empty(this.state.clone(), window, cx));
                                                             this.commit_to_model(cx);
                                                             cx.notify();
                                                         });

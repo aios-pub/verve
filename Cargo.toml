@@ -126,8 +126,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 smol = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+# CompletionProvider (variable hints in kv tables) — versions aligned with gpui-component.
+lsp-types = { version = "0.97.0", features = ["proposed"] }
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
 rust-i18n = "=4.0.0"
 # Pin to match rust-i18n 4.0.0's non-feature-gated try_load_locales API.
 rust-i18n-support = "=4.0.0"

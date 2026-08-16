@@ -679,25 +679,63 @@ impl TerminalView {
     }
 }
 
+/// xterm modifier parameter for a keystroke: 1 + shift(1) + alt(2) + ctrl(4).
+/// The platform key (Cmd/Win) is excluded — those combos are OS shortcuts
+/// that previously sent (and keep sending) the plain sequence.
+fn xterm_modifier_param(ks: &gpui::Keystroke) -> usize {
+    1 + usize::from(ks.modifiers.shift)
+        + usize::from(ks.modifiers.alt) * 2
+        + usize::from(ks.modifiers.control) * 4
+}
+
+/// Navigation key (arrows/Home/End): the plain sequence, or the xterm
+/// modified form `\x1b[1;<mods><F>` when shift/alt/ctrl are held (this is
+/// what shells/readline expect for e.g. Ctrl+Left = backward-word).
+fn nav_seq(ks: &gpui::Keystroke, plain: &[u8], final_ch: char) -> Vec<u8> {
+    let m = xterm_modifier_param(ks);
+    if m > 1 {
+        format!("\x1b[1;{m}{final_ch}").into_bytes()
+    } else {
+        plain.to_vec()
+    }
+}
+
+/// `~`-terminated navigation key (Delete/PgUp/PgDn) with optional modifiers.
+fn tilde_seq(ks: &gpui::Keystroke, plain: &[u8], code: u8) -> Vec<u8> {
+    let m = xterm_modifier_param(ks);
+    if m > 1 {
+        format!("\x1b[{code};{m}~").into_bytes()
+    } else {
+        plain.to_vec()
+    }
+}
+
 /// Convert a GPUI keystroke to the byte sequence an SSH terminal expects
 /// (ANSI escape sequences for special keys, raw bytes for printable chars).
 fn keystroke_to_bytes(ks: &gpui::Keystroke) -> Vec<u8> {
     // Handle modifier combinations first.
     match ks.key.as_str() {
         "enter" | "return" => return b"\r".to_vec(),
-        "backspace" => return b"\x7f".to_vec(),
+        "backspace" => {
+            // Alt/Option+Backspace = delete word (ESC DEL) in shells.
+            return if ks.modifiers.alt {
+                b"\x1b\x7f".to_vec()
+            } else {
+                b"\x7f".to_vec()
+            };
+        }
         "tab" => return b"\t".to_vec(),
         "escape" => return b"\x1b".to_vec(),
         "space" => return b" ".to_vec(),
-        "up" => return b"\x1b[A".to_vec(),
-        "down" => return b"\x1b[B".to_vec(),
-        "right" => return b"\x1b[C".to_vec(),
-        "left" => return b"\x1b[D".to_vec(),
-        "home" => return b"\x1b[H".to_vec(),
-        "end" => return b"\x1b[F".to_vec(),
-        "delete" => return b"\x1b[3~".to_vec(),
-        "pageup" => return b"\x1b[5~".to_vec(),
-        "pagedown" => return b"\x1b[6~".to_vec(),
+        "up" => return nav_seq(ks, b"\x1b[A", 'A'),
+        "down" => return nav_seq(ks, b"\x1b[B", 'B'),
+        "right" => return nav_seq(ks, b"\x1b[C", 'C'),
+        "left" => return nav_seq(ks, b"\x1b[D", 'D'),
+        "home" => return nav_seq(ks, b"\x1b[H", 'H'),
+        "end" => return nav_seq(ks, b"\x1b[F", 'F'),
+        "delete" => return tilde_seq(ks, b"\x1b[3~", 3),
+        "pageup" => return tilde_seq(ks, b"\x1b[5~", 5),
+        "pagedown" => return tilde_seq(ks, b"\x1b[6~", 6),
         _ => {}
     }
 
@@ -1348,7 +1386,7 @@ impl Render for TerminalView {
             },
         ];
 
-        let lines: Vec<RowData> = {
+        let (lines, cursor_cell): (Vec<RowData>, Option<(usize, usize)>) = {
             let Ok(term) = self.term.lock() else {
                 return div()
                     .id("terminal-view")
@@ -1373,20 +1411,41 @@ impl Render for TerminalView {
             // history (negative line coordinates, which alacritty supports).
             let viewport_top = bottommost - screen_lines as i32 + 1 - display_offset as i32;
 
+            // Cursor cell (visible row index, column) for the caret overlay.
+            // Hidden while the program disables it (ESC[?25l, e.g. vim) or
+            // when the cursor sits outside the visible viewport.
+            let cursor_cell = if term
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::SHOW_CURSOR)
+            {
+                let row = grid.cursor.point.line.0 - viewport_top;
+                let col = grid.cursor.point.column.0;
+                if row >= 0 && (row as usize) < screen_lines && col < num_cols {
+                    Some((row as usize, col))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             // Do NOT trim trailing whitespace: trailing spaces can carry a
             // colored background (e.g. a TUI status bar), and trimming would
             // cut that background short.
-            (0..screen_lines)
-                .map(|row_idx| {
-                    let grid_line = viewport_top + row_idx as i32;
-                    build_row(
-                        grid,
-                        alacritty_terminal::index::Line(grid_line),
-                        num_cols,
-                        &fonts,
-                    )
-                })
-                .collect::<Vec<_>>()
+            (
+                (0..screen_lines)
+                    .map(|row_idx| {
+                        let grid_line = viewport_top + row_idx as i32;
+                        build_row(
+                            grid,
+                            alacritty_terminal::index::Line(grid_line),
+                            num_cols,
+                            &fonts,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                cursor_cell,
+            )
         };
 
         // Update cached geometry so mouse events can map positions back to rows.
@@ -1472,6 +1531,28 @@ impl Render for TerminalView {
         let fh = focus_handle.clone();
         let bounds_for_paint: Arc<StdMutex<Bounds<Pixels>>> = self.bounds.clone();
 
+        // Caret overlay: a translucent block at the cursor cell, painted after
+        // (above) the text rows. Uses the same px_2/pt_1 padding as the content
+        // div and the measured cell width from resize_to_bounds; skipped until
+        // a real cell width exists (first frame).
+        let cursor_el = {
+            let char_w = self.last_char_width;
+            if char_w > 0.0 {
+                cursor_cell.map(|(row, col)| {
+                    div()
+                        .absolute()
+                        .left(px(8.0 + col as f32 * char_w))
+                        .top(px(4.0 + row as f32 * line_height))
+                        .w(px(char_w.ceil()))
+                        .h(px(line_height))
+                        .bg(default_fg.opacity(0.45))
+                        .rounded(px(1.))
+                })
+            } else {
+                None
+            }
+        };
+
         div()
             .id("terminal-view")
             .track_focus(&focus_handle)
@@ -1489,6 +1570,7 @@ impl Render for TerminalView {
                     .items_start()
                     .children(lines_rendered),
             )
+            .when_some(cursor_el, |el, caret| el.child(caret))
             .on_key_down({
                 let lines_for_copy = lines.clone();
                 cx.listener(move |this, event: &KeyDownEvent, window, cx| {

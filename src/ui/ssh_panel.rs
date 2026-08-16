@@ -24,6 +24,7 @@ use futures::FutureExt as _;
 use crate::ssh::client::SshConnection;
 use crate::ssh::credentials;
 use crate::ssh::host_store;
+use crate::ssh::local_pty::LocalPtySession;
 use crate::ssh::models::SshHost;
 use crate::ssh::port_forward::LocalForward;
 use crate::ssh::terminal::TerminalView;
@@ -49,6 +50,52 @@ enum ZmPathReply {
 static SESSION_UID_COUNTER: AtomicU64 = AtomicU64::new(1);
 fn rand_session_seed() -> u64 {
     SESSION_UID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Force-switch to English input method when opening a terminal session, so
+/// keystrokes reach the shell immediately instead of being swallowed by the
+/// Chinese IME. Only switches at open — the user can freely toggle back to
+/// Chinese afterwards. Best-effort per platform; failures are logged, never
+/// block session creation.
+fn switch_to_english_input() {
+    #[cfg(target_os = "macos")]
+    {
+        // Preferred path: the Carbon TIS API. Synchronous, permission-free,
+        // and deterministic (System Events key simulation needs Accessibility
+        // access that unsigned builds don't have, and races with fast typists).
+        match crate::ssh::macos_input::select_english_keyboard_layout() {
+            Ok(source_id) => {
+                log::info!("输入法已切换为英文键盘布局: {source_id}");
+            }
+            Err(err) => {
+                log::warn!("TIS 切换输入法失败({err}),回退 osascript 按键模拟");
+                std::thread::spawn(|| {
+                    let _ = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(r#"tell application "System Events" to key code 102"#)
+                        .output();
+                });
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // ActivateKeyboardLayout switches the calling (UI) thread's layout,
+        // so only Verve's window is affected.
+        match crate::ssh::windows_input::select_english_keyboard_layout() {
+            Ok(id) => log::info!("输入法已切换为英文键盘布局: {id}"),
+            Err(err) => log::warn!("切换英文键盘布局失败: {err}"),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        match crate::ssh::linux_input::select_english_keyboard_layout() {
+            Ok(via) => log::info!("输入法已切换为英文输入: {via}"),
+            Err(err) => log::warn!("切换英文输入失败: {err}"),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {}
 }
 
 /// Elide a server-supplied prompt to `max` characters (by `char` count, not
@@ -149,6 +196,17 @@ pub struct TerminalSession {
     /// A freshly-arrived MFA challenge awaiting UI setup. Set from the spawn
     /// loop (no window access); consumed in `render` to build `mfa_input`.
     pub(crate) pending_mfa_prompt: Option<(String, tokio::sync::oneshot::Sender<String>)>,
+    /// Local PTY handle when this tab is a "local terminal" (the user's own
+    /// shell on this machine, no SSH involved). `None` = remote SSH session.
+    pub local: Option<LocalPtySession>,
+}
+
+impl TerminalSession {
+    /// True when this tab runs the local shell in a local PTY — SFTP/forwards
+    /// and reconnect logic do not apply.
+    pub fn is_local(&self) -> bool {
+        self.local.is_some()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -390,6 +448,15 @@ impl SshPanel {
                         .text_color(muted)
                         .child("还没有 SSH 主机。点击右上角「新建主机」添加一台。"),
                 )
+                .child(
+                    Button::new("ssh-local-term-empty")
+                        .primary()
+                        .small()
+                        .label("打开本地终端")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.start_local_session(cx);
+                        })),
+                )
                 .into_any_element();
         }
 
@@ -405,6 +472,52 @@ impl SshPanel {
         let grid = h_flex()
             .flex_wrap()
             .gap_3()
+            // Local terminal quick card — always first in the grid.
+            .child(
+                v_flex()
+                    .id("ssh-local-term-card")
+                    .w(px(220.))
+                    .h(px(120.))
+                    .gap_2()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .bg(theme.background)
+                    .hover(|d| d.border_color(accent))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().text_lg().child("⌨️"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("本地终端"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("在本机伪终端中打开默认 Shell"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .mt_1()
+                            .child(
+                                Button::new("ssh-local-term-open")
+                                    .primary()
+                                    .xsmall()
+                                    .label("打开")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.start_local_session(cx);
+                                    })),
+                            ),
+                    ),
+            )
             .children(self.hosts.iter().enumerate().map(|(ix, host)| {
                 let theme_c = theme.clone();
                 let _theme_c2 = theme.clone();
@@ -708,18 +821,8 @@ impl SshPanel {
             ^ rand_session_seed();
 
         // Force-switch to English input method on macOS when opening a new
-        // SSH session. Uses AppleScript to select the ABC/US keyboard layout.
-        // After this initial switch, the user can manually toggle to Chinese
-        // — we only force English at init, not block later IME changes.
-        #[cfg(target_os = "macos")]
-        {
-            std::thread::spawn(|| {
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(r#"tell application "System Events" to key code 102"#)
-                    .output();
-            });
-        }
+        // session; see `switch_to_english_input` for details.
+        switch_to_english_input();
 
         // Create a terminal view with a wider initial size so ls uses multi-column.
         let terminal = cx.new(|cx| TerminalView::new(180, 50, cx));
@@ -1373,7 +1476,127 @@ impl SshPanel {
             mfa_prompt: String::new(),
             mfa_reply_tx: None,
             pending_mfa_prompt: None,
+            local: None,
         });
+        self.active_tab = self.sessions.len() - 1;
+        cx.notify();
+    }
+
+    /// Start a "local terminal" session: the user's default shell in a local
+    /// pseudo-terminal, reusing the same TerminalView + channel wiring as the
+    /// remote SSH sessions. This is the Terminal.app-replacement mode.
+    pub fn start_local_session(&mut self, cx: &mut Context<Self>) {
+        // Same as SSH sessions: open with English input so keystrokes go
+        // straight to the shell (user can toggle back afterwards).
+        switch_to_english_input();
+
+        // Same uid scheme as start_session (nanos ^ monotonic counter).
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let session_uid = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ rand_session_seed();
+
+        let terminal = cx.new(|cx| TerminalView::new(180, 50, cx));
+
+        match crate::ssh::local_pty::spawn_local_pty(180, 50) {
+            Ok((pty, output_rx)) => {
+                let shell_name = pty.shell_name();
+                terminal.update(cx, |tv, _| {
+                    tv.set_input_tx(pty.input_tx.clone());
+                    tv.set_resize_tx(pty.resize_tx.clone());
+                });
+
+                // PTY output → terminal view. Same pattern as the Docker exec
+                // sessions: the tokio channel is awaited on the GPUI executor.
+                // Status updates locate the tab by session_uid so closing
+                // neighboring tabs can't misroute them.
+                let mut output_rx = output_rx;
+                let term_weak = terminal.downgrade();
+                let panel = cx.entity().downgrade();
+                let uid_for_task = session_uid;
+                cx.spawn(async move |_this, cx| {
+                    use crate::ssh::local_pty::LocalPtyEvent;
+                    while let Some(ev) = output_rx.recv().await {
+                        match ev {
+                            LocalPtyEvent::Data(data) => {
+                                let _ = term_weak.update(cx, |tv, cx| {
+                                    tv.feed(&data);
+                                    cx.notify();
+                                });
+                            }
+                            LocalPtyEvent::Closed => {
+                                let _ = term_weak.update(cx, |tv, cx| {
+                                    tv.feed("\r\n\x1b[90m○ 本地 shell 已退出\x1b[0m\r\n".as_bytes());
+                                    cx.notify();
+                                });
+                                let _ = panel.update(cx, move |this, cx| {
+                                    if let Some(s) = this
+                                        .sessions
+                                        .iter_mut()
+                                        .find(|s| s.session_uid == uid_for_task)
+                                    {
+                                        s.status = SessionStatus::Closed;
+                                        cx.notify();
+                                    }
+                                });
+                                break;
+                            }
+                        }
+                    }
+                })
+                .detach();
+
+                self.sessions.push(TerminalSession {
+                    host_name: format!("本地 {shell_name}"),
+                    host_id: "local".to_string(),
+                    session_uid,
+                    terminal,
+                    sftp_browser: None,
+                    view: SessionView::Terminal,
+                    connection: None,
+                    input_tx: Some(pty.input_tx.clone()),
+                    resize_tx: Some(pty.resize_tx.clone()),
+                    status: SessionStatus::Connected,
+                    zm_state: ZmUiState::default(),
+                    active_forwards: Vec::new(),
+                    mfa_input: None,
+                    mfa_prompt: String::new(),
+                    mfa_reply_tx: None,
+                    pending_mfa_prompt: None,
+                    local: Some(pty),
+                });
+            }
+            Err(err) => {
+                // Spawn failure: still create the tab so the error is visible
+                // in the terminal area + status bar (mirrors the SSH error UX).
+                let msg = format!("\r\n\x1b[31m✕ {err:#}\x1b[0m\r\n");
+                terminal.update(cx, |tv, cx| {
+                    tv.feed(msg.as_bytes());
+                    cx.notify();
+                });
+                self.sessions.push(TerminalSession {
+                    host_name: "本地终端".to_string(),
+                    host_id: "local".to_string(),
+                    session_uid,
+                    terminal,
+                    sftp_browser: None,
+                    view: SessionView::Terminal,
+                    connection: None,
+                    input_tx: None,
+                    resize_tx: None,
+                    status: SessionStatus::Error(format!("{err:#}")),
+                    zm_state: ZmUiState::default(),
+                    active_forwards: Vec::new(),
+                    mfa_input: None,
+                    mfa_prompt: String::new(),
+                    mfa_reply_tx: None,
+                    pending_mfa_prompt: None,
+                    local: None,
+                });
+            }
+        }
         self.active_tab = self.sessions.len() - 1;
         cx.notify();
     }
@@ -1444,6 +1667,13 @@ impl SshPanel {
             .sessions
             .get(active)
             .map(|s| s.connection.is_some())
+            .unwrap_or(false);
+
+        // Local-terminal tabs have no SSH transport: SFTP/forwards N/A.
+        let active_is_local = self
+            .sessions
+            .get(active)
+            .map(|s| s.is_local())
             .unwrap_or(false);
 
         let active_zm_state = self
@@ -1562,9 +1792,13 @@ impl SshPanel {
                                             s.view = SessionView::Terminal;
                                         }
                                         cx.notify();
-                                    })),
+                                    }))
                             )
-                            .child({
+                            // Files/Forwards need the SSH transport — hidden
+                            // for local-terminal tabs.
+                            .when(!active_is_local, |row| {
+                                row
+                                    .child({
                                 let can_open = active_has_conn;
                                 Button::new("ssh-view-files")
                                     .ghost()
@@ -1617,6 +1851,7 @@ impl SshPanel {
                                         }
                                         cx.notify();
                                     }))
+                                    })
                             }),
                     ),
             )
@@ -2446,9 +2681,13 @@ impl SshPanel {
 
     /// Close a terminal session by tab index.
     pub fn close_session(&mut self, idx: usize, cx: &mut Context<Self>) {
-        // Drop the input sender to signal the background task to stop.
-        if idx < self.sessions.len() {
-            self.sessions[idx].input_tx.take();
+        // Drop the input sender to signal the background task to stop, and
+        // terminate a local shell if this is a local-terminal tab.
+        if let Some(session) = self.sessions.get_mut(idx) {
+            if let Some(mut pty) = session.local.take() {
+                pty.kill();
+            }
+            session.input_tx.take();
             self.sessions.remove(idx);
             if self.active_tab >= self.sessions.len() && !self.sessions.is_empty() {
                 self.active_tab = self.sessions.len() - 1;
@@ -2472,10 +2711,17 @@ impl SshPanel {
         };
         let host_id = session.host_id.clone();
         let host_name = session.host_name.clone();
+        let session_is_local = session.is_local();
         log::info!(
             "duplicate_session: idx={} host_id={} host_name={:?}",
             idx, host_id, host_name
         );
+
+        // Local-terminal tabs duplicate into a fresh local shell.
+        if session_is_local {
+            self.start_local_session(cx);
+            return;
+        }
 
         // Priority 1: reuse an already-authenticated connection (skips
         // connect + MFA — the duplicated tab gets a fresh independent shell on
@@ -2524,9 +2770,13 @@ impl SshPanel {
             return;
         }
         // Move the kept session out (swap_remove avoids a shift), then drain the
-        // rest — taking each one's input_tx so its background SSH task exits.
+        // rest — taking each one's input_tx so its background SSH task exits,
+        // and killing any local shells.
         let kept = self.sessions.swap_remove(keep);
         for mut s in self.sessions.drain(..) {
+            if let Some(mut pty) = s.local.take() {
+                pty.kill();
+            }
             s.input_tx.take();
         }
         self.sessions.push(kept);
@@ -2665,6 +2915,51 @@ impl SshPanel {
                                     })),
                             ),
                     )
+                    // Local terminal entry — the user's shell on this machine
+                    // (Terminal.app replacement), no SSH involved.
+                    .child({
+                        let tc = theme.clone();
+                        let panel_c = panel.clone();
+                        h_flex()
+                            .id("picker-local")
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .gap_2()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(border)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(tc.muted))
+                            .child(div().text_lg().child("⌨️"))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("本地终端"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child("在本机打开默认 Shell"),
+                                    ),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |_event, _window, cx: &mut App| {
+                                    cx.stop_propagation();
+                                    let _ = panel_c.update(cx, |this, cx| {
+                                        this.show_host_picker = false;
+                                        this.start_local_session(cx);
+                                    });
+                                },
+                            )
+                    })
                     .children(self.hosts.iter().enumerate().map(|(i, host)| {
                         let host_id = host.id.clone();
                         let host_name = host.name.clone();

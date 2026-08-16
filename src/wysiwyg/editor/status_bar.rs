@@ -500,7 +500,7 @@ fn is_table_separator(t: &str) -> bool {
 fn strip_block_markers(mut t: &str) -> &str {
     loop {
         let trimmed = t.trim_start();
-        let mut rest = trimmed;
+        let rest = trimmed;
 
         // ATX heading marker.
         let hashes = rest.chars().take_while(|&c| c == '#').count();

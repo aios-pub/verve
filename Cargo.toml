@@ -157,6 +157,10 @@ russh = "0.60"
 russh-sftp = "2.3"
 zmodem2 = "0.7"
 alacritty_terminal = "0.24"
+# Local PTY for the SSH panel's "local terminal" mode (spawn the user's shell
+# in a pseudo-terminal, replacing the OS Terminal app). Unix: openpty via libc;
+# Windows: ConPTY. No OpenSSL / native-tls in the dependency tree.
+portable-pty = "0.9"
 aes-gcm = "0.10"
 zeroize = "1"
 secrecy = "0.8"

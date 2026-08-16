@@ -71,17 +71,24 @@ const PREFERRED_IDS: [&str; 3] = [
 /// # Safety
 /// `source` must be a valid `TISInputSourceRef`.
 unsafe fn source_id(source: TISInputSourceRef) -> Option<String> {
-    let id_str = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+    // SAFETY: `source` is valid per the function contract; the property key
+    // is a framework constant.
+    let id_str = unsafe { TISGetInputSourceProperty(source, kTISPropertyInputSourceID) };
     if id_str.is_null() {
         return None;
     }
     let mut buf = [0u8; 256];
-    if !CFStringGetCString(
-        id_str as CFStringRef,
-        buf.as_mut_ptr(),
-        buf.len() as isize,
-        KCF_STRING_ENCODING_UTF8,
-    ) {
+    // SAFETY: `id_str` is a CFStringRef returned by TIS; `buf` is a valid
+    // 256-byte buffer with room for the NUL terminator.
+    let copied = unsafe {
+        CFStringGetCString(
+            id_str as CFStringRef,
+            buf.as_mut_ptr(),
+            buf.len() as isize,
+            KCF_STRING_ENCODING_UTF8,
+        )
+    };
+    if !copied {
         return None;
     }
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
@@ -93,11 +100,13 @@ unsafe fn source_id(source: TISInputSourceRef) -> Option<String> {
 /// # Safety
 /// `source` must be a valid `TISInputSourceRef`.
 unsafe fn source_bool_property(source: TISInputSourceRef, key: CFStringRef) -> bool {
-    let value = TISGetInputSourceProperty(source, key);
+    // SAFETY: `source` is valid per the function contract.
+    let value = unsafe { TISGetInputSourceProperty(source, key) };
     if value.is_null() {
         return false;
     }
-    CFBooleanGetValue(value as CFBooleanRef)
+    // SAFETY: boolean TIS properties return a CFBooleanRef.
+    unsafe { CFBooleanGetValue(value as CFBooleanRef) }
 }
 
 /// Enumerate the user's ENABLED hardware keyboard layouts (excludes IMEs like

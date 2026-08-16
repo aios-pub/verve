@@ -456,7 +456,7 @@ impl Render for VerveApp {
                                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
                                 window_min_size: Some(gpui::size(px(820.), px(520.))),
                                 titlebar: None,
-                                is_minimizable: false,
+                                is_minimizable: true,
                                 ..Default::default()
                             },
                             |window, cx| {
@@ -488,7 +488,7 @@ impl Render for VerveApp {
                                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
                                 window_min_size: Some(gpui::size(px(600.), px(440.))),
                                 titlebar: None,
-                                is_minimizable: false,
+                                is_minimizable: true,
                                 ..Default::default()
                             },
                             |window, cx| {

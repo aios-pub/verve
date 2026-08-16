@@ -15,7 +15,7 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
-    ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
+    ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -1288,29 +1288,43 @@ impl Render for SettingsWindow {
             .bg(theme.background)
             .text_color(theme.foreground)
             // ---- Title bar ----
+            // TitleBar provides the drag region plus drawn min/max/close on
+            // Windows/Linux. macOS gets no native chrome for this window
+            // (titlebar: None), so the self-drawn close button stays there
+            // only. Left padding is forced to 12px because the 80px default
+            // assumes macOS traffic lights, which this window doesn't have.
             .child(
-                h_flex()
+                TitleBar::new()
                     .h(px(38.))
-                    .px_3()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(border)
+                    .pl_3()
                     .bg(theme.muted)
+                    .border_color(border)
+                    .on_close_window(|_, window, _cx| window.remove_window())
                     .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(rust_i18n::t!("settings.title").to_string()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        gpui_component::button::Button::new("settings-close")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .tooltip(rust_i18n::t!("settings.close").to_string())
-                            .on_click(|_, window, _cx: &mut App| {
-                                window.remove_window();
+                        h_flex()
+                            .h_full()
+                            .w_full()
+                            .min_w_0()
+                            .pr_3()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(rust_i18n::t!("settings.title").to_string()),
+                            )
+                            .child(div().flex_1())
+                            .when(cfg!(target_os = "macos"), |row| {
+                                row.child(
+                                    gpui_component::button::Button::new("settings-close")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .tooltip(rust_i18n::t!("settings.close").to_string())
+                                        .on_click(|_, window, _cx: &mut App| {
+                                            window.remove_window();
+                                        }),
+                                )
                             }),
                     ),
             )

@@ -15,8 +15,8 @@ use crate::ui::k8s_panel::View as K8sView;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{img, *};
 use gpui_component::{
-    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, WindowExt,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, TitleBar,
+    WindowExt, button::{Button, ButtonVariants as _},
     h_flex,
     popover::Popover,
     v_flex,
@@ -24,7 +24,8 @@ use gpui_component::{
 
 impl VerveApp {
     pub(super) fn render_title_bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        match self.active_view {
+        let theme = cx.theme().clone();
+        let bar = match self.active_view {
             SideView::Ssh => self.render_ssh_title_bar(cx).into_any_element(),
             SideView::Docker => self.render_docker_title_bar(cx).into_any_element(),
             SideView::K8s => self.render_k8s_title_bar(cx).into_any_element(),
@@ -35,7 +36,24 @@ impl VerveApp {
             SideView::AutoTest => self.render_autotest_title_bar(cx).into_any_element(),
             SideView::Relocate => self.render_relocate_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
-        }
+        };
+        // The gpui-component TitleBar owns the cross-platform window chrome:
+        // the bar area is a drag region, and Windows/Linux get drawn
+        // min/max/close controls (macOS keeps its native traffic lights).
+        // Without it the Windows build has no title bar at all — the main
+        // window is created with `appears_transparent`, which hides the
+        // native one (issue #2). Refined to keep Verve's existing 40px
+        // height, muted background, and border so macOS is unchanged.
+        TitleBar::new()
+            .h(px(40.))
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
+            .bg(theme.muted)
+            .border_color(theme.border)
+            // Linux close button: match the window's should-close behavior
+            // (hide instead of quitting) instead of the default remove_window.
+            .on_close_window(|_, window, _cx| window.minimize_window())
+            .child(bar)
+            .into_any_element()
     }
 
     pub(super) fn render_api_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -70,17 +88,15 @@ impl VerveApp {
         let _ = theme.clone();
 
         h_flex()
-            .h(px(40.))
-            // On macOS the (transparent) titlebar hosts the traffic-light
-            // buttons on the left; pad the content past them.
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            // The outer TitleBar (render_title_bar) owns the height, left
+            // padding, border, and background — including the platform window
+            // controls on Windows/Linux.
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             // Far-left activity rail collapse/expand toggle.
             .child(self.render_rail_toggle(cx))
             // Sidebar (tree) collapse/expand toggle.
@@ -766,17 +782,15 @@ impl VerveApp {
         let ssh = self.ssh.clone();
 
         h_flex()
-            .h(px(40.))
-            // On macOS the (transparent) titlebar hosts the traffic-light
-            // buttons on the left; pad the content past them.
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            // The outer TitleBar (render_title_bar) owns the height, left
+            // padding, border, and background — including the platform window
+            // controls on Windows/Linux.
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // SSH context: terminal icon + title + saved-host count badge.
             .child(
@@ -846,15 +860,12 @@ impl VerveApp {
         let docker_add = docker.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // Docker context: icon + title + host badge.
             .child(
@@ -972,15 +983,12 @@ impl VerveApp {
         let k8s_add = k8s.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // K8s context: icon + title + current context badge.
             .child(
@@ -1112,15 +1120,12 @@ impl VerveApp {
         let notes_collapse = notes.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             // Far-left rail toggle (shared across views).
             .child(self.render_rail_toggle(cx))
             // Sidebar collapse button — "收起笔记列表" / "展开笔记列表".
@@ -1300,15 +1305,12 @@ impl VerveApp {
         let theme = cx.theme().clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // Icon + title
             .child(
@@ -1403,15 +1405,12 @@ impl VerveApp {
         let relocate = self.relocate.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             .child(
                 h_flex()
@@ -1459,15 +1458,12 @@ impl VerveApp {
         let theme = cx.theme().clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // Icon + title
             .child(
@@ -1537,15 +1533,12 @@ impl VerveApp {
         let md_export_pop = md.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             // Far-left rail toggle (shared across views, so the window chrome
             // never shifts when switching views).
             .child(self.render_rail_toggle(cx))
@@ -1888,15 +1881,12 @@ impl VerveApp {
         let at_run = at.clone();
 
         h_flex()
-            .h(px(40.))
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(78.)))
-            .when(!cfg!(target_os = "macos"), |this| this.pl_3())
+            .h_full()
+            .w_full()
+            .min_w_0()
             .pr_3()
             .gap_2()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted)
             .child(self.render_rail_toggle(cx))
             // Icon + title + suite count badge
             .child(

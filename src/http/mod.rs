@@ -1,6 +1,7 @@
 //! HTTP layer: request preparation, variable substitution, and execution.
 
 pub mod client;
+pub mod curl;
 pub mod grpc;
 pub mod sse;
 pub mod tcp;

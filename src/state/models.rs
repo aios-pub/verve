@@ -713,6 +713,14 @@ pub struct Response {
     /// True while a streaming protocol (SSE/WebSocket) is actively receiving.
     #[serde(default)]
     pub streaming: bool,
+    /// The request that was actually sent (variables substituted, query
+    /// params appended to the URL, base_url joined), as a rendered text
+    /// block for the "实际请求" tab. Populated right after `prepare()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_request: Option<String>,
+    /// The same actually-sent request as an executable curl command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_curl: Option<String>,
 }
 
 /// A saved response example, stored on the request for the "响应示例" tab.

@@ -297,6 +297,8 @@ async fn execute_request_step(step: &RequestStep, ctx: &mut RunContext<'_>) {
             is_json: false,
             error: prepared_err,
             streaming: false,
+            actual_request: None,
+            actual_curl: None,
         }
     };
 

@@ -191,6 +191,8 @@ pub fn stream(
             is_json: false,
             error: None,
             streaming: false,
+            actual_request: None,
+            actual_curl: None,
         })
     }
     .boxed()

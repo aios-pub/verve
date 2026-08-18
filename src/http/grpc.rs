@@ -146,6 +146,8 @@ pub async fn execute_grpc_web(
             None
         },
         streaming: false,
+        actual_request: None,
+        actual_curl: None,
     }
 }
 

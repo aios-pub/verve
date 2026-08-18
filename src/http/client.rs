@@ -20,6 +20,75 @@ pub struct PreparedRequest {
     pub body: Vec<u8>,
 }
 
+/// Cap for the body text shown in the "实际请求" tab / curl snapshot so huge
+/// uploads (e.g. file parts) don't bloat the response model.
+const ACTUAL_BODY_DISPLAY_MAX: usize = 64 * 1024;
+
+/// Lossy UTF-8 body for display, truncated at a char boundary when huge.
+fn display_body(body: &[u8]) -> String {
+    let owned = String::from_utf8_lossy(body).into_owned();
+    if owned.len() <= ACTUAL_BODY_DISPLAY_MAX {
+        return owned;
+    }
+    let mut end = ACTUAL_BODY_DISPLAY_MAX;
+    while end > 0 && !owned.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut head = owned[..end].to_string();
+    head.push_str(&format!("\n…（已截断，完整请求体共 {} 字节）", body.len()));
+    head
+}
+
+impl PreparedRequest {
+    /// Render the request that was actually sent: request line (method +
+    /// final URL with substituted variables and appended query params),
+    /// headers, and body. This is the post-`prepare()` truth, not the
+    /// authored template.
+    pub fn request_text(&self) -> String {
+        let mut text = format!("{} {}", self.method, self.url);
+        if !self.headers.is_empty() {
+            text.push_str("\n\n[Headers]");
+            for (k, v) in &self.headers {
+                text.push_str(&format!("\n{k}: {v}"));
+            }
+        }
+        if !self.body.is_empty() {
+            text.push_str("\n\n[Body]\n");
+            text.push_str(&display_body(&self.body));
+        }
+        text
+    }
+
+    /// The actually-sent request as an executable curl command. Auth is
+    /// already baked into the headers/URL by `prepare()`, and query params
+    /// are already encoded into the URL.
+    pub fn to_curl(&self) -> String {
+        let content_type = self
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| "text/plain".to_string());
+        let body = if self.body.is_empty() {
+            super::curl::CurlBody::None
+        } else {
+            super::curl::CurlBody::Raw {
+                text: display_body(&self.body),
+                content_type,
+            }
+        };
+        super::curl::render(&super::curl::CurlSpec {
+            method: self.method,
+            url: self.url.clone(),
+            params: Vec::new(),
+            headers: self.headers.clone(),
+            cookies: Vec::new(),
+            auth: AuthConfig::default(),
+            body,
+        })
+    }
+}
+
 /// Resolve an [`crate::state::models::ApiRequest`] against a variable map into
 /// a concrete `PreparedRequest`: substitute path variables + variables, build
 /// the query string, apply headers/cookies/auth, and serialize the body.
@@ -488,6 +557,8 @@ pub async fn execute(
                 is_json: false,
                 error: Some(format!("{e}")),
                 streaming: false,
+                actual_request: None,
+                actual_curl: None,
             };
         }
     };
@@ -533,5 +604,70 @@ pub async fn execute(
         is_json,
         error: None,
         streaming: false,
+        actual_request: None,
+        actual_curl: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prepared() -> PreparedRequest {
+        PreparedRequest {
+            method: RequestMethod::Get,
+            url: "https://api.io/users?page=1&kw=%E4%B8%AD".to_string(),
+            headers: vec![
+                ("Authorization".to_string(), "Bearer tok".to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: b"{\"a\":1}".to_vec(),
+        }
+    }
+
+    #[test]
+    fn request_text_shows_final_url_headers_body() {
+        let text = prepared().request_text();
+        assert!(text.contains("GET https://api.io/users?page=1&kw=%E4%B8%AD"), "{text}");
+        assert!(text.contains("[Headers]"), "{text}");
+        assert!(text.contains("Authorization: Bearer tok"), "{text}");
+        assert!(text.contains("[Body]"), "{text}");
+        assert!(text.contains("{\"a\":1}"), "{text}");
+    }
+
+    #[test]
+    fn to_curl_renders_prepared_request_verbatim() {
+        let out = prepared().to_curl();
+        // URL (params already encoded in) + substituted headers + body.
+        assert!(out.contains("-X GET"), "{out}");
+        assert!(
+            out.contains("'https://api.io/users?page=1&kw=%E4%B8%AD'"),
+            "{out}"
+        );
+        assert!(out.contains("-H 'Authorization: Bearer tok'"), "{out}");
+        // Content-Type already present → not injected twice.
+        assert_eq!(out.matches("Content-Type").count(), 1, "{out}");
+        assert!(out.contains("--data-raw '{\"a\":1}'"), "{out}");
+    }
+
+    #[test]
+    fn empty_body_renders_no_data_flag() {
+        let mut p = prepared();
+        p.body = Vec::new();
+        let out = p.to_curl();
+        assert!(!out.contains("--data-raw"), "{out}");
+        let text = p.request_text();
+        assert!(!text.contains("[Body]"), "{text}");
+    }
+
+    #[test]
+    fn huge_body_is_truncated_at_char_boundary() {
+        let mut p = prepared();
+        p.body = "中".repeat(40 * 1024).into_bytes(); // 120KB of multibyte chars
+        let text = p.request_text();
+        assert!(text.contains("已截断"), "{text}");
+        // Truncation must not split a UTF-8 char: the lossy decode never
+        // produces U+FFFD from our own slicing (we cut at a boundary).
+        assert!(!text.contains('\u{FFFD}'), "{text}");
     }
 }

@@ -32,7 +32,7 @@ use crate::ui::kv_table::{self, KvRow};
 gpui::actions!(verve, [SendRequest]);
 
 // ---- sibling impl modules (split by responsibility) ----
-mod folder_helpers;
+pub(crate) mod folder_helpers;
 mod kv;
 mod send;
 mod tabs;
@@ -185,6 +185,11 @@ pub struct RequestPanel {
     /// Entity ids currently subscribed in `kv_focus_subs`; used to skip
     /// rebuilding when the set of rows is unchanged.
     kv_focus_ids: HashSet<gpui::EntityId>,
+    /// Curl-tab preview cache: (input signature, rendered command). Dynamic
+    /// variables (`{{$random}}`, `{{$uuid}}` …) regenerate on every
+    /// substitution, so without a cache the preview churns on each re-render.
+    /// Regenerated only when the request inputs actually change.
+    curl_preview_cache: Option<(String, String)>,
     focus_handle: FocusHandle,
     /// Focus handle bound to the tab-overflow popover content. The popover
     /// renders in a deferred overlay and steals focus on open, so `Cmd+W`
@@ -418,6 +423,7 @@ impl RequestPanel {
             _subs: Vec::new(),
             kv_focus_subs: Vec::new(),
             kv_focus_ids: HashSet::new(),
+            curl_preview_cache: None,
             focus_handle: cx.focus_handle(),
             tab_overflow_focus: cx.focus_handle(),
         };
@@ -1199,62 +1205,179 @@ impl RequestPanel {
         map
     }
 
-    /// Execute the active request on a background task and store the response.
     /// Generate a curl command from the current request's editable fields.
-    pub(super) fn generate_curl(&self, cx: &mut Context<Self>) -> String {
-        // For curl display, substitute variables so the user sees the real URL.
-        let url_raw = self.url.read(cx).value().to_string();
+    /// Mirrors the real send path (`http::client::prepare`): variables are
+    /// substituted, query params are appended to the URL (never moved into a
+    /// body), cookies collapse into a Cookie header, and the method flag is
+    /// always emitted so a GET with a body stays a GET in curl.
+    ///
+    /// The result is cached against an input signature: dynamic variables
+    /// (`{{$random}}` requestids etc.) regenerate on every substitution, so
+    /// without a cache the preview would churn on each re-render. With it,
+    /// values stay stable while the request is unchanged; actual sends keep
+    /// generating fresh values per click (see the send path / 实际请求 tab).
+    pub(super) fn generate_curl(&mut self, cx: &mut Context<Self>) -> String {
         let vars = self.effective_vars(cx);
-        let url = crate::http::variable::substitute(&url_raw, &vars);
+        let sig = self.curl_input_signature(&vars, cx);
+        if let Some((cached_sig, cached)) = &self.curl_preview_cache {
+            if *cached_sig == sig {
+                return cached.clone();
+            }
+        }
+        let curl = self.render_curl(&vars, cx);
+        self.curl_preview_cache = Some((sig, curl.clone()));
+        curl
+    }
+
+    /// Build a signature covering every input the curl preview depends on:
+    /// method/URL, all kv rows, body, auth, base-URL mode, and the effective
+    /// variable map (so environment/global/folder edits also count as
+    /// changes). Identical signature ⇒ the cached preview is still current.
+    fn curl_input_signature(
+        &self,
+        vars: &BTreeMap<String, String>,
+        cx: &mut Context<Self>,
+    ) -> String {
+        let rows_sig = |rows: &Vec<KvRow>, sig: &mut String| {
+            for row in rows {
+                sig.push_str(if row.enabled { "1" } else { "0" });
+                sig.push('\u{1}');
+                sig.push_str(&row.key.read(cx).value());
+                sig.push('\u{1}');
+                sig.push_str(&row.value.read(cx).value());
+                sig.push('\u{1}');
+            }
+        };
+        let mut sig = String::new();
+        sig.push_str(
+            &self
+                .method_select
+                .read(cx)
+                .selected_value()
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+        );
+        sig.push('\u{1}');
+        sig.push_str(&self.url.read(cx).value());
+        sig.push('\u{1}');
+        rows_sig(&self.path_rows, &mut sig);
+        rows_sig(&self.params_rows, &mut sig);
+        rows_sig(&self.headers_rows, &mut sig);
+        rows_sig(&self.cookie_rows, &mut sig);
+        sig.push_str(&format!("{:?}", self.body_type));
+        sig.push('\u{1}');
+        sig.push_str(
+            &self
+                .body_lang_select
+                .read(cx)
+                .selected_value()
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+        );
+        sig.push('\u{1}');
+        sig.push_str(&self.body_editor.read(cx).text().to_string());
+        sig.push('\u{1}');
+        for row in &self.body_rows {
+            sig.push_str(if row.enabled { "1" } else { "0" });
+            sig.push('\u{1}');
+            sig.push_str(&row.key.read(cx).value());
+            sig.push('\u{1}');
+            sig.push_str(&row.value.read(cx).value());
+            sig.push('\u{1}');
+            sig.push_str(&format!("{:?}", row.field_type));
+            sig.push('\u{1}');
+            sig.push_str(row.file_path.as_deref().unwrap_or(""));
+            sig.push('\u{1}');
+        }
+        sig.push_str(&format!(
+            "{:?}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{:?}\u{1}",
+            self.auth_type,
+            self.auth_token.read(cx).value(),
+            self.auth_username.read(cx).value(),
+            self.auth_password.read(cx).value(),
+            self.auth_key.read(cx).value(),
+            self.auth_value.read(cx).value(),
+            self.auth_target,
+        ));
+        sig.push_str(&format!("{:?}", self.req_base_mode));
+        sig.push('\u{1}');
+        sig.push_str(&self.req_base_url.read(cx).value());
+        sig.push('\u{1}');
+        // BTreeMap iterates in key order, so the map's fingerprint is stable.
+        for (k, v) in vars {
+            sig.push_str(k);
+            sig.push('\u{2}');
+            sig.push_str(v);
+            sig.push('\u{1}');
+        }
+        sig
+    }
+
+    /// Substitute `vars` into the live request fields and render the curl
+    /// command (uncached; see [`Self::generate_curl`]).
+    fn render_curl(&self, vars: &BTreeMap<String, String>, cx: &mut Context<Self>) -> String {
+        use crate::http::curl::{CurlBody, CurlFormPart, CurlSpec};
+
+        let sub = |s: &str| crate::http::variable::substitute(s, vars);
         let method = self
             .method_select
             .read(cx)
             .selected_value()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| "GET".into());
+            .and_then(|s| RequestMethod::parse(&s))
+            .unwrap_or(RequestMethod::Get);
 
-        let mut parts: Vec<String> = Vec::new();
-        parts.push("curl".into());
-
-        // Method.
-        if method != "GET" {
-            parts.push(format!("-X {}", method));
-        }
-
-        // Headers. Track whether the user already set a Content-Type so we
-        // don't override it when auto-injecting one for the body.
-        let mut has_content_type = false;
-        for kv in &self.headers_rows {
-            let key = kv.key.read(cx).value().to_string();
-            let val = kv.value.read(cx).value().to_string();
-            if kv.enabled && !key.trim().is_empty() {
-                if key.eq_ignore_ascii_case("content-type") {
-                    has_content_type = true;
-                }
-                parts.push(format!("-H '{}: {}'", key, val));
+        // Path variables substitute into the URL at top priority (prepare()).
+        let mut url_vars = vars.clone();
+        for row in &self.path_rows {
+            let k = row.key.read(cx).value().to_string();
+            if row.enabled && !k.trim().is_empty() {
+                let v = row.value.read(cx).value().to_string();
+                url_vars.insert(k.trim().to_string(), v);
             }
         }
 
-        // Auth headers.
-        match self.auth_type {
-            crate::state::models::AuthType::Bearer => {
-                let token = self.auth_token.read(cx).value().to_string();
-                if !token.is_empty() {
-                    parts.push(format!("-H 'Authorization: Bearer {}'", token));
+        // URL: substitute → join base_url for relative paths → normalize scheme.
+        let url_raw = self.url.read(cx).value().to_string();
+        let mut url = crate::http::variable::substitute(&url_raw, &url_vars);
+        if !url.contains("://") {
+            if let Some(base) = url_vars.get("__folder_base_url__") {
+                if !base.is_empty() {
+                    let base = base.trim_end_matches('/');
+                    let path = url.trim_start_matches('/');
+                    url = format!("{}/{}", base, path);
                 }
             }
-            crate::state::models::AuthType::Basic => {
-                let user = self.auth_username.read(cx).value().to_string();
-                let pass = self.auth_password.read(cx).value().to_string();
-                if !user.is_empty() {
-                    parts.push(format!("-u '{}:{}'", user, pass));
-                }
-            }
-            _ => {}
         }
+        url = crate::http::normalize_url(&url, method);
 
-        // Body. Auto-inject a Content-Type when missing, matching the real
-        // HTTP client prepare() logic.
+        let kv_pairs = |rows: &Vec<KvRow>| -> Vec<(String, String)> {
+            rows.iter()
+                .filter(|row| row.enabled)
+                .filter_map(|row| {
+                    let k = row.key.read(cx).value().to_string();
+                    if k.trim().is_empty() {
+                        return None;
+                    }
+                    let v = row.value.read(cx).value().to_string();
+                    Some((sub(&k), sub(&v)))
+                })
+                .collect()
+        };
+        let params = kv_pairs(&self.params_rows);
+        let headers = kv_pairs(&self.headers_rows);
+        let cookies = kv_pairs(&self.cookie_rows);
+
+        let auth = AuthConfig {
+            auth_type: self.auth_type,
+            token: sub(&self.auth_token.read(cx).value()),
+            username: sub(&self.auth_username.read(cx).value()),
+            password: sub(&self.auth_password.read(cx).value()),
+            key: sub(&self.auth_key.read(cx).value()),
+            value: sub(&self.auth_value.read(cx).value()),
+            add_to: self.auth_target,
+        };
+
         let body_lang = self
             .body_lang_select
             .read(cx)
@@ -1262,108 +1385,70 @@ impl RequestPanel {
             .cloned()
             .and_then(|s| RawLanguage::parse_name(&s))
             .unwrap_or_default();
-        if self.body_type == crate::state::models::BodyType::Raw {
-            let raw = self.body_editor.read(cx).text().to_string();
-            if !raw.trim().is_empty() {
-                if !has_content_type {
-                    let ct = body_lang.content_type();
-                    parts.push(format!("-H 'Content-Type: {}'", ct));
+        let body = match self.body_type {
+            BodyType::None => CurlBody::None,
+            BodyType::Raw => {
+                let raw = self.body_editor.read(cx).text().to_string();
+                if raw.trim().is_empty() {
+                    CurlBody::None
+                } else {
+                    CurlBody::Raw {
+                        text: sub(&raw),
+                        content_type: body_lang.content_type().to_string(),
+                    }
                 }
-                parts.push(format!("-d '{}'", raw.replace('\'', "'\\''")));
             }
-        } else if self.body_type == crate::state::models::BodyType::FormData {
-            let mut has_form_field = false;
-            for kv in &self.body_rows {
-                let key = kv.key.read(cx).value().to_string();
-                if kv.enabled && !key.trim().is_empty() {
-                    // File rows send the file via curl's `@path` syntax; text
-                    // rows use the literal value.
-                    if kv.field_type == FieldType::File {
-                        let path = kv.file_path.clone().unwrap_or_default();
+            BodyType::Urlencoded => {
+                let pairs = kv_pairs(&self.body_rows);
+                if pairs.is_empty() {
+                    CurlBody::None
+                } else {
+                    CurlBody::Urlencoded(pairs)
+                }
+            }
+            BodyType::FormData => {
+                let mut items = Vec::new();
+                for row in &self.body_rows {
+                    if !row.enabled {
+                        continue;
+                    }
+                    let name = row.key.read(cx).value().to_string();
+                    if name.trim().is_empty() {
+                        continue;
+                    }
+                    if row.field_type == FieldType::File {
+                        let path = row.file_path.clone().unwrap_or_default();
                         if !path.trim().is_empty() {
-                            // Quote the path so paths with spaces/special chars
-                            // survive the shell. The leading `@` tells curl to
-                            // read & upload the file.
-                            parts.push(format!("-F '{}=@\"{}\"'", key, path.replace('"', "\\\"")));
-                            has_form_field = true;
+                            items.push(CurlFormPart::File {
+                                name: sub(&name),
+                                path: sub(&path),
+                            });
                         }
                     } else {
-                        let val = kv.value.read(cx).value().to_string();
-                        parts.push(format!("-F '{}={}'", key, val));
-                        has_form_field = true;
+                        let v = row.value.read(cx).value().to_string();
+                        items.push(CurlFormPart::Field {
+                            name: sub(&name),
+                            value: sub(&v),
+                        });
                     }
                 }
-            }
-            // curl sets multipart/form-data automatically when using -F, so
-            // no need to inject Content-Type manually here.
-            let _ = has_form_field;
-        } else if self.body_type == crate::state::models::BodyType::Urlencoded {
-            let pairs: Vec<String> = self
-                .body_rows
-                .iter()
-                .filter(|kv| kv.enabled)
-                .map(|kv| {
-                    let k = kv.key.read(cx).value().to_string();
-                    let v = kv.value.read(cx).value().to_string();
-                    format!("{}={}", k, v)
-                })
-                .collect();
-            if !pairs.is_empty() {
-                if !has_content_type {
-                    parts.push("-H 'Content-Type: application/x-www-form-urlencoded'".into());
-                }
-                parts.push(format!("-d '{}'", pairs.join("&")));
-            }
-        }
-
-        // URL (with base_url prefix and query params appended).
-        let final_url = {
-            // If the URL is a relative path, prepend the effective base_url
-            // (per-request override or folder base_url) so the curl command
-            // is complete and runnable.
-            let url_with_base = if !url.starts_with("http://") && !url.starts_with("https://") {
-                if let Some(base) = vars.get("__folder_base_url__") {
-                    if !base.is_empty() {
-                        let base = base.trim_end_matches('/');
-                        let path = url.trim_start_matches('/');
-                        format!("{}/{}", base, path)
-                    } else {
-                        url.clone()
-                    }
+                if items.is_empty() {
+                    CurlBody::None
                 } else {
-                    url.clone()
+                    CurlBody::Form(items)
                 }
-            } else {
-                url.clone()
-            };
-            let mut url_with_params = url_with_base;
-            let query_pairs: Vec<String> = self
-                .params_rows
-                .iter()
-                .filter(|kv| kv.enabled)
-                .filter_map(|kv| {
-                    let k = kv.key.read(cx).value().to_string();
-                    if k.trim().is_empty() {
-                        return None;
-                    }
-                    let v = kv.value.read(cx).value().to_string();
-                    Some(format!("{}={}", k, v))
-                })
-                .collect();
-            if !query_pairs.is_empty() {
-                let sep = if url_with_params.contains('?') {
-                    "&"
-                } else {
-                    "?"
-                };
-                url_with_params = format!("{}{}{}", url_with_params, sep, query_pairs.join("&"));
             }
-            url_with_params
         };
 
-        parts.push(format!("'{}'", final_url));
-
-        parts.join(" \\\n  ")
+        crate::http::curl::render(&CurlSpec {
+            method,
+            url,
+            params,
+            headers,
+            cookies,
+            auth,
+            body,
+        })
     }
 }
 

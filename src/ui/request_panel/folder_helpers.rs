@@ -142,7 +142,7 @@ pub(super) fn set_folder_base_url(
 /// by picking an environment variable from the dropdown). These are
 /// substituted against the active environment + global variables so the
 /// resolved value always reflects the current environment.
-pub(super) fn resolve_folder_base_url(
+pub(crate) fn resolve_folder_base_url(
     project: &crate::state::models::Project,
     chain: &[String],
 ) -> Option<String> {
@@ -198,7 +198,7 @@ pub(super) fn resolve_folder_base_url(
 /// disable, or override that resolves to empty). The caller injects the
 /// result as the `__folder_base_url__` variable; a `None` return means that
 /// variable is simply not set, so the relative URL stays relative.
-pub(super) fn resolve_effective_base_url(
+pub(crate) fn resolve_effective_base_url(
     mode: &Option<Option<String>>,
     raw_input: &str,
     vars: &BTreeMap<String, String>,

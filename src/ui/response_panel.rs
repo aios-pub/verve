@@ -720,7 +720,8 @@ impl Render for ResponsePanel {
                             self.render_example_tab(&theme, cx).into_any_element()
                         }
                         RespTab::ActualRequest => {
-                            render_actual_request(&active_request, &theme).into_any_element()
+                            render_actual_request(&active_request, &response, &theme)
+                                .into_any_element()
                         }
                         RespTab::Console => render_console(&response, &theme).into_any_element(),
                     })
@@ -823,16 +824,31 @@ fn render_cookies(
     v_flex().w_full().gap_1().children(rows).into_any_element()
 }
 
-/// Render the actual-request tab: the method/URL/headers/body that was sent.
+/// Render the actual-request tab. Prefers the post-`prepare()` snapshot
+/// stored on the response (variables substituted, query params appended,
+/// base_url joined) so the user sees exactly what went over the wire, plus
+/// an equivalent curl command. Falls back to approximating from the stored
+/// request model for entries captured before the snapshot existed.
 fn render_actual_request(
     active_request: &Option<crate::state::models::ApiRequest>,
+    response: &Option<crate::state::models::Response>,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
+    if let Some(text) = response.as_ref().and_then(|r| r.actual_request.as_deref()) {
+        let mut full = text.to_string();
+        if let Some(curl) = response.as_ref().and_then(|r| r.actual_curl.as_deref()) {
+            full.push_str("\n\n── 等效 cURL ──\n");
+            full.push_str(curl);
+        }
+        return code_block(&full, theme);
+    }
+    // Fallback: approximate from the authored model (no substitution).
     let req = match active_request {
         Some(r) => r,
-        None => return empty_state("暂无请求信息。", theme),
+        None => return empty_state("暂无请求信息。发送请求后，此处显示实际发送的请求（变量已替换）。", theme),
     };
-    let mut text = format!("{} {} {}\n", req.protocol, req.method, req.url);
+    let mut text = String::from("// 发送后将在此显示实际发送的请求；以下为请求定义（变量未替换）\n");
+    text.push_str(&format!("{} {} {}\n", req.protocol, req.method, req.url));
     if !req.headers.is_empty() {
         text.push_str("\n[Headers]\n");
         for h in req.headers.iter().filter(|h| h.enabled && !h.is_empty()) {

@@ -2035,7 +2035,11 @@ impl ProjectTreePanel {
             }
             TreeAction::CopyAsCurl(_) => {
                 if let Some(r) = req_snapshot {
-                    let curl = build_curl(&r);
+                    // Substitute variables (and resolve the folder base URL)
+                    // so the copied command is runnable as-is, matching the
+                    // request panel's curl tab.
+                    let vars = request_effective_vars(self, &r, cx);
+                    let curl = build_curl(&r, &vars);
                     self.copy_to_clipboard(curl, cx);
                     self.show_info("复制为 cURL", "已复制到剪贴板。", window, cx);
                 }
@@ -2114,80 +2118,162 @@ impl ProjectTreePanel {
     }
 }
 
-/// Build a `curl` command string for a request (best-effort, variables left
-/// as-is since they are unresolved at copy time).
-fn build_curl(r: &crate::state::models::ApiRequest) -> String {
-    use crate::state::models::BodyType;
-    let mut parts: Vec<String> = vec!["curl".into(), "-X".into(), r.method.to_string()];
-    parts.push(format!("'{}'", r.url));
+/// Effective variable map for a stored request (no live editors involved):
+/// system vars + global + active environment + folder-chain + request vars,
+/// plus the resolved base URL injected as `__folder_base_url__`/`baseUrl` —
+/// the same map the request panel builds before sending / generating curl.
+fn request_effective_vars(
+    this: &ProjectTreePanel,
+    req: &crate::state::models::ApiRequest,
+    cx: &gpui::App,
+) -> std::collections::BTreeMap<String, String> {
+    let st = this.state.read(cx);
+    let Some(project) = st.active_project() else {
+        return std::collections::BTreeMap::new();
+    };
+    let Some((chain, _)) = project.find_request(&req.id) else {
+        return std::collections::BTreeMap::new();
+    };
+    let mut folder_vars: Vec<crate::state::models::KeyValue> = Vec::new();
+    for slice in project.folder_variables_chain(&chain) {
+        folder_vars.extend_from_slice(slice);
+    }
+    let mut system = std::collections::BTreeMap::new();
+    let remote_cfg = crate::state::persistence::load_remote_config();
+    system.insert(
+        "mock_server".to_string(),
+        crate::share::remote::mock_server_url(&remote_cfg),
+    );
+    let mut map = crate::state::models::effective_variables(
+        &system,
+        &project.global_variables,
+        project.active_env_variables(),
+        &folder_vars,
+        &req.variables,
+    );
+    let override_raw = req.base_url_override.clone().flatten().unwrap_or_default();
+    if let Some(base) = crate::ui::request_panel::folder_helpers::resolve_effective_base_url(
+        &req.base_url_override,
+        &override_raw,
+        &map,
+        project,
+        &chain,
+    ) {
+        map.insert("__folder_base_url__".to_string(), base.clone());
+        map.entry("baseUrl".to_string()).or_insert(base);
+    }
+    map
+}
 
-    // Track whether user already set a Content-Type so we don't override it
-    // when auto-injecting one for the body.
-    let mut has_content_type = false;
-    for h in r.headers.iter().filter(|h| h.enabled && !h.is_empty()) {
-        if h.key.eq_ignore_ascii_case("content-type") {
-            has_content_type = true;
+/// Build a `curl` command for a request, mirroring the real send path
+/// (`http::client::prepare`): variables are substituted against `vars`, query
+/// params are appended to the URL (never moved into a body), cookies collapse
+/// into a `Cookie` header, and bodies keep their Content-Type.
+fn build_curl(
+    r: &crate::state::models::ApiRequest,
+    vars: &std::collections::BTreeMap<String, String>,
+) -> String {
+    use crate::http::curl::{CurlBody, CurlFormPart, CurlSpec};
+    use crate::state::models::{BodyType, KeyValue};
+
+    let sub = |s: &str| crate::http::variable::substitute(s, vars);
+
+    // Path variables substitute into the URL at top priority (mirrors
+    // prepare(): they override every other variable source).
+    let mut url_vars = vars.clone();
+    for kv in &r.path {
+        if kv.enabled && !kv.is_empty() {
+            url_vars.insert(kv.key.trim().to_string(), kv.value.clone());
         }
-        parts.push("-H".into());
-        parts.push(format!("'{}: {}'", h.key, h.value));
     }
 
-    // Auth headers (Bearer/Basic).
-    use crate::state::models::AuthType;
-    match r.auth.auth_type {
-        AuthType::Bearer if !r.auth.token.is_empty() => {
-            parts.push("-H".into());
-            parts.push(format!("'Authorization: Bearer {}'", r.auth.token));
-        }
-        AuthType::Basic if !r.auth.username.is_empty() => {
-            parts.push("-u".into());
-            parts.push(format!("'{}:{}'", r.auth.username, r.auth.password));
-        }
-        _ => {}
-    }
-
-    match r.body.body_type {
-        BodyType::Raw if !r.body.raw.is_empty() => {
-            if !has_content_type {
-                let ct = r.body.raw_language.content_type();
-                parts.push("-H".into());
-                parts.push(format!("'Content-Type: {}'", ct));
+    // URL: substitute → join base_url for relative paths → normalize scheme.
+    let mut url = crate::http::variable::substitute(&r.url, &url_vars);
+    if !url.contains("://") {
+        if let Some(base) = url_vars.get("__folder_base_url__") {
+            if !base.is_empty() {
+                let base = base.trim_end_matches('/');
+                let path = url.trim_start_matches('/');
+                url = format!("{}/{}", base, path);
             }
-            parts.push("-d".into());
-            parts.push(format!("'{}'", r.body.raw.replace('\'', "'\\''")));
+        }
+    }
+    url = crate::http::normalize_url(&url, r.method);
+
+    let kv_pairs = |rows: &[KeyValue]| -> Vec<(String, String)> {
+        rows.iter()
+            .filter(|kv| kv.enabled && !kv.is_empty())
+            .map(|kv| (sub(&kv.key), sub(&kv.value)))
+            .collect()
+    };
+    let auth = crate::state::models::AuthConfig {
+        auth_type: r.auth.auth_type,
+        token: sub(&r.auth.token),
+        username: sub(&r.auth.username),
+        password: sub(&r.auth.password),
+        key: sub(&r.auth.key),
+        value: sub(&r.auth.value),
+        add_to: r.auth.add_to,
+    };
+
+    let body = match r.body.body_type {
+        BodyType::None => CurlBody::None,
+        BodyType::Raw => {
+            if r.body.raw.trim().is_empty() {
+                CurlBody::None
+            } else {
+                CurlBody::Raw {
+                    text: sub(&r.body.raw),
+                    content_type: r.body.raw_language.content_type().to_string(),
+                }
+            }
         }
         BodyType::Urlencoded => {
-            let kv: Vec<String> = r
-                .body
-                .urlencoded
-                .iter()
-                .filter(|kv| kv.enabled && !kv.is_empty())
-                .map(|kv| format!("{}={}", kv.key, kv.value))
-                .collect();
-            if !kv.is_empty() {
-                if !has_content_type {
-                    parts.push("-H".into());
-                    parts.push("'Content-Type: application/x-www-form-urlencoded'".into());
-                }
-                parts.push("-d".into());
-                parts.push(format!("'{}'", kv.join("&")));
+            let pairs = kv_pairs(&r.body.urlencoded);
+            if pairs.is_empty() {
+                CurlBody::None
+            } else {
+                CurlBody::Urlencoded(pairs)
             }
         }
         BodyType::FormData => {
-            for kv in r
-                .body
-                .form_data
-                .iter()
-                .filter(|kv| kv.enabled && !kv.is_empty())
-            {
-                parts.push("-F".into());
-                parts.push(format!("'{}={}'", kv.key, kv.value));
+            let mut items = Vec::new();
+            for kv in &r.body.form_data {
+                if !kv.enabled || kv.is_empty() {
+                    continue;
+                }
+                match kv.file_path.as_deref() {
+                    Some(path) if !path.trim().is_empty() => {
+                        items.push(CurlFormPart::File {
+                            name: sub(&kv.key),
+                            path: sub(path),
+                        });
+                    }
+                    _ => {
+                        items.push(CurlFormPart::Field {
+                            name: sub(&kv.key),
+                            value: sub(&kv.value),
+                        });
+                    }
+                }
             }
-            // curl auto-sets multipart/form-data with boundary when using -F.
+            if items.is_empty() {
+                CurlBody::None
+            } else {
+                CurlBody::Form(items)
+            }
         }
-        _ => {}
-    }
-    parts.join(" \\\n  ")
+    };
+
+    crate::http::curl::render(&CurlSpec {
+        method: r.method,
+        url,
+        params: kv_pairs(&r.params),
+        headers: kv_pairs(&r.headers),
+        cookies: kv_pairs(&r.cookies),
+        auth,
+        body,
+    })
 }
 
 /// Collect all folder node-ids ("folder:<id>") recursively.

@@ -2282,17 +2282,25 @@ impl Render for Editor {
             .collect();
 
         // For documents small enough to mount entirely, skip windowing and mount
-        // every row. The virtualization's row-height estimate can be wildly wrong
-        // for unmeasured rows (a document whose head is dominated by tall tables/
-        // code fences ends up with an inflated total height, so the scrollbar
-        // reaches "phantom space" past the real content and the viewport lands on
-        // a spacer — perceived as a black screen that only fills in after enough
-        // scrolling to measure those rows). Mounting all rows makes every height
-        // real, so the scroll range is exact and content always paints. The cost
-        // is layout of a few hundred blocks per frame, negligible for typical
-        // notes; very large documents still window.
+        // every row — UNTIL every row's stride has been measured, after which
+        // windowing takes over even below the limit. Full-mounting re-lays-out
+        // every block on every scroll frame, which is what made scrolling a
+        // few-hundred-row document janky; the initial full-mount frame measures
+        // all row heights exactly, so windowing starts from exact strides (no
+        // phantom scrollbar space — the artifact full-mounting was added to
+        // fix, which only occurs with *estimated* heights). A structural edit
+        // introduces unmeasured rows and falls back to full-mount for one
+        // frame to re-measure them. The last row is exempt from the check:
+        // its stride is derived from the row below, which a bottom window
+        // never mounts, so it is never cached.
         const FULL_MOUNT_ROW_LIMIT: usize = 400;
-        let render_window = if row_first_ids.len() <= FULL_MOUNT_ROW_LIMIT {
+        let all_strides_measured = row_first_ids.len() > 1
+            && (0..row_first_ids.len() - 1).all(|row| {
+                self.row_stride_cache.contains_key(&row_first_ids[row])
+            });
+        let render_window = if row_first_ids.len() <= FULL_MOUNT_ROW_LIMIT
+            && !all_strides_measured
+        {
             RenderWindow {
                 run_start: 0,
                 run_end: row_first_ids.len(),

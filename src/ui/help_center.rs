@@ -74,7 +74,10 @@ impl ShortcutRow {
             .collect::<Vec<_>>()
             .join(" ");
         let raw = key_strs.join(" ");
-        let haystack = format!("{label} {formatted} {raw}").to_lowercase();
+        // Notes carry the wording users actually search for (e.g. the Esc row
+        // is about "global shortcuts"), so index them alongside the label.
+        let note_text = note.as_deref().unwrap_or_default();
+        let haystack = format!("{label} {formatted} {raw} {note_text}").to_lowercase();
         Self {
             label,
             keys,
@@ -438,6 +441,11 @@ pub struct HelpCenter {
     global_rows: Vec<ShortcutRow>,
     /// View-switching rows (⌘1..⌘5 plus the Esc unlock).
     rail_rows: Vec<ShortcutRow>,
+    /// Esc documented at the top of the editor section: while a block is
+    /// focused the editor owns ⌘1..⌘6/⌘0, and Esc hands the keys back to
+    /// the app (rail view switching). This is the answer to "⌘1..⌘5 stopped
+    /// working in a note", so it must not be buried in the rail group alone.
+    editor_esc_row: ShortcutRow,
     /// Editor shortcut rows grouped by category, in definition order.
     editor_groups: Vec<(String, Vec<ShortcutRow>)>,
     /// Feature-guide cards, in rail order.
@@ -478,6 +486,12 @@ impl HelpCenter {
             }
         }
 
+        let editor_esc_row = ShortcutRow::new(
+            rust_i18n::t!("help.sc_e_esc").to_string(),
+            vec!["escape".to_string()],
+            Some(rust_i18n::t!("help.sc_e_esc_note").to_string()),
+        );
+
         let features = SideView::ALL
             .iter()
             .map(|&view| {
@@ -497,6 +511,7 @@ impl HelpCenter {
             active_section: HelpSection::GettingStarted,
             global_rows: build_global_rows(),
             rail_rows: build_rail_rows(),
+            editor_esc_row,
             editor_groups,
             features,
             _sub: search_sub,
@@ -568,6 +583,7 @@ impl HelpCenter {
         content = content.child(
             section_heading(rust_i18n::t!("help.group_editor").to_string(), fg).mt(px(16.)),
         );
+        content = content.child(render_shortcut_row(&self.editor_esc_row, theme));
         content = content.child(note_box(
             rust_i18n::t!("help.sc_custom_note").to_string(),
             theme,
@@ -624,6 +640,9 @@ impl HelpCenter {
             if row.haystack.contains(query) {
                 matches.push((rust_i18n::t!("help.group_rail").to_string(), row));
             }
+        }
+        if self.editor_esc_row.haystack.contains(query) {
+            matches.push((rust_i18n::t!("help.group_editor").to_string(), &self.editor_esc_row));
         }
         for (group, rows) in &self.editor_groups {
             for row in rows {
@@ -824,7 +843,7 @@ impl Render for HelpCenter {
 mod tests {
     // No `use super::*` glob — it would pull in gpui's own `test` attribute
     // macro (via the parent's `use gpui::*`) and shadow builtin `#[test]`.
-    use super::{parse_display_keys, sc_label};
+    use super::{ShortcutRow, parse_display_keys, sc_label};
     use std::collections::BTreeMap;
 
     #[test]
@@ -837,6 +856,19 @@ mod tests {
     fn distinct_alternatives_are_kept() {
         let keys = parse_display_keys(&["cmd-g".to_string(), "f3".to_string()]);
         assert_eq!(keys.len(), 2);
+    }
+
+    /// The Esc row is only findable when its note text is indexed — users
+    /// search for the effect ("global view switching"), not the key name.
+    #[test]
+    fn shortcut_row_haystack_includes_the_note() {
+        let row = ShortcutRow::new(
+            "leave block".to_string(),
+            vec!["escape".to_string()],
+            Some("restores global view switching".to_string()),
+        );
+        assert!(row.haystack.contains("global view switching"));
+        assert!(row.haystack.contains("esc"));
     }
 
     /// The help center's editor table is built from the same function that

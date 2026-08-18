@@ -448,7 +448,7 @@ help:
   start_t1: Verve 是什么
   start_p1: Verve 是离线优先的开发者工作台，把 API 调试、SSH 运维、Markdown 与笔记、JSON 格式化、压测、抓包等日常工具集成到一个应用。所有数据保存在本地 ~/.verve 目录，无需账号，不依赖云端。
   start_t2: 视图切换
-  start_p2: 左侧功能栏可点击切换或拖拽排序，常用视图有固定快捷键：⌘1 API 管理、⌘2 SSH 管理、⌘3 JSON 格式化、⌘4 记事本、⌘5 Markdown 编辑器（Windows/Linux 为 Ctrl+1..5）。
+  start_p2: 左侧功能栏可点击切换或拖拽排序，常用视图有固定快捷键：⌘1 API 管理、⌘2 SSH 管理、⌘3 JSON 格式化、⌘4 记事本、⌘5 Markdown 编辑器（Windows/Linux 为 Ctrl+1..5）。在 Markdown / 记事本的编辑块内，这些数字键优先用作标题/正文格式，按 Esc 退出块焦点后即可恢复视图切换。
   start_t3: 编辑器
   start_p3: 记事本与 Markdown 编辑器共用同一 WYSIWYG 引擎：直接在渲染后的文档上编辑，支持标题、列表、表格、代码块、图片等，也可切换源码模式。完整按键见「快捷键」一节。
   start_t4: 环境变量
@@ -471,8 +471,8 @@ help:
     docker: Docker 管理：容器 / 镜像列表、日志、终端与常用操作。
     ssh: SSH 管理：主机卡片管理连接信息，多标签终端会话，SFTP 文件浏览与传输。
     hosts: Hosts 快速编辑器：多配置组管理 hosts 条目，一键应用到系统 /etc/hosts 或应用内虚拟覆盖。
-    notes: 记事本：轻量 Markdown 笔记（WYSIWYG 编辑），自动保存、搜索与笔记树管理。
-    markdowneditor: Markdown 编辑器：多标签打开 .md 文件，所见即所得编辑、源码模式、查找替换、导出 PDF。
+    notes: 记事本：轻量 Markdown 笔记（WYSIWYG 编辑），自动保存、搜索与笔记树管理。编辑块聚焦时 ⌘1..⌘6 / ⌘0 用作标题与正文格式，按 Esc 退出块焦点后恢复全局视图切换。
+    markdowneditor: Markdown 编辑器：多标签打开 .md 文件，所见即所得编辑、源码模式、查找替换、导出 PDF。编辑块聚焦时 ⌘1..⌘6 / ⌘0 用作标题与正文格式，按 Esc 退出块焦点后恢复全局视图切换。
     jsonformat: JSON 格式化：粘贴原始 JSON 即时格式化，可折叠树浏览、数组精简预览、复制节点值。
     pdfeditor: PDF 编辑器：打开查看 PDF，页面编辑与保存。
     relocate: 磁盘迁移：把工作区数据目录迁移到外置磁盘等其他位置。
@@ -493,8 +493,10 @@ help:
   sc_g_open: 打开 Markdown 文件
   sc_g_open_new_tab: 打开 Markdown 文件（新标签页）
   sc_g_close: 关闭当前标签（文档 / 笔记 / 请求 / SSH / K8s）
-  sc_rail_note: 在 Markdown / 记事本的编辑块内，⌘1..⌘6 / ⌘0 优先用作标题与正文格式；按 Esc 退出块焦点后恢复视图切换。
-  sc_esc: 退出编辑块焦点（恢复视图切换快捷键）
+  sc_rail_note: 在 Markdown / 记事本的编辑块内，⌘1..⌘6 / ⌘0 优先用作标题与正文格式；按 Esc 退出块焦点后，全局视图切换等快捷键恢复可用。
+  sc_esc: 退出编辑块焦点，把 ⌘1..⌘5 等全局视图切换快捷键还给应用
+  sc_e_esc: 退出编辑块焦点 / 关闭弹层
+  sc_e_esc_note: Esc 会先关闭查找栏、右键菜单等弹层；无弹层打开时退出当前编辑块焦点，⌘1..⌘5 视图切换等全局快捷键恢复可用。
   sc_custom_note: 编辑器快捷键可在 设置 → 快捷键 中自定义，此处显示当前实际生效的键位（含自定义）。
   sc:
     newline: 新行

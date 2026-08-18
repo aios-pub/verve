@@ -3427,3 +3427,116 @@ async fn scroll_keeps_mounting_rows_into_viewport(cx: &mut TestAppContext) {
          scrolling reaches empty space (black screen)",
     );
 }
+
+/// Regression: a viewport WIDTH change reflows every row, so the cached row
+/// strides must be dropped and re-measured. Windowing against stale strides
+/// mounts the wrong rows and the viewport lands on spacers — scrolling shows
+/// unrendered content (the bug that reappeared once documents below the
+/// full-mount limit started windowing).
+#[gpui::test]
+async fn viewport_width_change_remeasures_row_strides(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+
+    // Long wrapped paragraphs: narrowing the column reflows every row taller.
+    let markdown = (0..60)
+        .map(|i| {
+            format!(
+                "paragraph {i} with a long body of text that wraps across the \
+                 column at both the wide and the narrow viewport widths used \
+                 below, so every row's height changes when the width changes."
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (editor, mut cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+
+    let handle: AnyWindowHandle = cx.update(|window, _cx| window.window_handle());
+    cx.simulate_window_resize(handle, gpui::size(px(900.0), px(729.0)));
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    let wide_sum: f32 = editor.update(cx, |editor, _cx| {
+        editor
+            .row_stride_cache
+            .values()
+            .copied()
+            .filter(|s| *s > 0.0)
+            .sum()
+    });
+    assert!(wide_sum > 0.0, "strides should be measured after settling");
+
+    // Narrow the column: every wrapped row grows taller.
+    cx.simulate_window_resize(handle, gpui::size(px(420.0), px(729.0)));
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    let narrow_sum: f32 = editor.update(cx, |editor, _cx| {
+        editor
+            .row_stride_cache
+            .values()
+            .copied()
+            .filter(|s| *s > 0.0)
+            .sum()
+    });
+    assert!(
+        narrow_sum > wide_sum * 1.15,
+        "strides were not re-measured after the width change: \
+         {wide_sum:.0} -> {narrow_sum:.0}"
+    );
+}
+
+/// Regression: when several mounted rows re-measure to heights that differ
+/// from their cached strides (a global metrics change such as a late font
+/// swap), the whole cache is dropped and re-measured from a full mount.
+/// Stale strides outside the window shift the cumulative positions the
+/// window is computed against, so the viewport lands on spacers.
+#[gpui::test]
+async fn stride_drift_drops_stale_measurements(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+
+    let markdown = (0..60)
+        .map(|i| format!("paragraph {i} with some body text."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (editor, mut cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+
+    let handle: AnyWindowHandle = cx.update(|window, _cx| window.window_handle());
+    cx.simulate_window_resize(handle, gpui::size(px(900.0), px(729.0)));
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    // Poison a few cached strides (rows near the top are mounted at scroll 0)
+    // to simulate measurements that have gone stale.
+    editor.update(cx, |editor, _cx| {
+        let ids: Vec<gpui::EntityId> = editor
+            .document
+            .visible_blocks()
+            .iter()
+            .take(4)
+            .map(|visible| visible.entity.entity_id())
+            .collect();
+        for id in ids {
+            editor.row_stride_cache.insert(id, 4321.0);
+        }
+    });
+
+    // Drift triggers a drop + full-mount on the first redraw; the second
+    // re-populates the cache from the full mount's measurements.
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    let (max_cached, count) = editor.update(cx, |editor, _cx| {
+        let values: Vec<f32> = editor.row_stride_cache.values().copied().collect();
+        (values.iter().copied().fold(0.0f32, f32::max), values.len())
+    });
+    assert!(
+        max_cached < 1000.0,
+        "poisoned stride survived the drift re-measure: max_cached={max_cached:.0}"
+    );
+    assert!(
+        count > 10,
+        "cache should be re-populated after the full mount, got {count} entries"
+    );
+}

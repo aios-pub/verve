@@ -388,6 +388,15 @@ impl Editor {
             || (f32::from(previous.height) - f32::from(current.height)).abs() > EPSILON
     }
 
+    /// Whether the viewport's WIDTH changed — unlike a height-only change,
+    /// this reflows every row (different wrapping) and invalidates all
+    /// cached row strides.
+    pub(super) fn viewport_width_changed(previous: Size<Pixels>, current: Size<Pixels>) -> bool {
+        const EPSILON: f32 = 0.5;
+
+        (f32::from(previous.width) - f32::from(current.width)).abs() > EPSILON
+    }
+
     pub(crate) fn show_info_dialog(&mut self, kind: InfoDialogKind, cx: &mut Context<Self>) {
         if self.show_unsaved_changes_dialog {
             return;

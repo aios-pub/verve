@@ -757,6 +757,18 @@ impl Editor {
         match self.last_scroll_viewport_size {
             Some(previous) if Self::viewport_size_changed(previous, viewport_size) => {
                 self.last_scroll_viewport_size = Some(viewport_size);
+                // A WIDTH change reflows every row (different wrapping), so
+                // every cached stride is stale. Windowing against stale
+                // strides mounts the wrong rows and the viewport lands on
+                // spacers — the "scroll into unrendered content" bug. Drop
+                // the caches so this frame falls back to a full mount and
+                // re-measures every row exactly. Height-only changes don't
+                // affect row heights, so they keep their measurements.
+                if Self::viewport_width_changed(previous, viewport_size) {
+                    self.row_stride_cache.clear();
+                    self.row_painted_tops.clear();
+                    self.prev_render_window = None;
+                }
                 self.request_active_block_scroll_into_view(cx);
             }
             Some(_) => {}
@@ -2201,19 +2213,60 @@ impl Render for Editor {
             }
         }
 
+        // Rows below the full-mount limit re-measure from scratch (clear the
+        // caches → one full-mount frame) when heights drift; see the stride
+        // update below and the windowing decision further down.
+        const FULL_MOUNT_ROW_LIMIT: usize = 400;
+        // A re-measured stride differing from its cached value by more than
+        // this counts as drift (sub-pixel float jitter between identical
+        // frames must not).
+        const STRIDE_DRIFT_EPSILON_PX: f32 = 2.0;
+        // Typing inside one block drifts a single row and self-corrects in
+        // place; a global metrics change (late font swap, media layout)
+        // drifts many mounted rows at once. Only the latter justifies the
+        // full re-measure.
+        const STRIDE_DRIFT_ROWS_TO_REMEASURE: usize = 3;
+
         // Rows mounted together last frame shared one scroll offset, so their
         // adjacent painted-top differences are scroll-free heights. Caching those,
         // not raw positions, is what keeps the window stable while scrolling.
         if !structural_change {
             if let Some((prev_start, prev_end)) = self.prev_render_window {
                 let prev_end = prev_end.min(row_first_ids.len());
+                let mut drifted_rows = 0usize;
                 for row in prev_start..prev_end.saturating_sub(1) {
                     if let (Some(top), Some(next_top)) = (row_tops[row], row_tops[row + 1]) {
                         let stride = next_top - top;
                         if stride > 0.0 && stride.is_finite() {
+                            match self.row_stride_cache.get(&row_first_ids[row]) {
+                                Some(&cached)
+                                    if (cached - stride).abs() > STRIDE_DRIFT_EPSILON_PX =>
+                                {
+                                    drifted_rows += 1;
+                                }
+                                _ => {}
+                            }
                             self.row_stride_cache.insert(row_first_ids[row], stride);
                         }
                     }
+                }
+                // Several mounted rows re-measuring to different heights than
+                // their cached strides means row heights changed since they
+                // were measured (async font/metrics swap, late media layout)
+                // — and rows OUTSIDE the window are stale the same way,
+                // silently shifting every cumulative position the window is
+                // computed against: the viewport lands on spacers and
+                // scrolling shows unrendered content. Documents that can
+                // afford it re-measure from scratch: drop the caches so this
+                // frame full-mounts. Larger documents keep per-row
+                // self-correction — dropping their measurements would
+                // re-inflate the estimate bootstrap (the black-screen bug).
+                if drifted_rows >= STRIDE_DRIFT_ROWS_TO_REMEASURE
+                    && row_first_ids.len() <= FULL_MOUNT_ROW_LIMIT
+                {
+                    self.row_stride_cache.clear();
+                    self.row_painted_tops.clear();
+                    self.prev_render_window = None;
                 }
             }
         }
@@ -2288,12 +2341,13 @@ impl Render for Editor {
         // few-hundred-row document janky; the initial full-mount frame measures
         // all row heights exactly, so windowing starts from exact strides (no
         // phantom scrollbar space — the artifact full-mounting was added to
-        // fix, which only occurs with *estimated* heights). A structural edit
-        // introduces unmeasured rows and falls back to full-mount for one
-        // frame to re-measure them. The last row is exempt from the check:
+        // fix, which only occurs with *estimated* heights). Three events drop
+        // the measurements and return to a full-mount re-measure frame: a
+        // structural edit (new rows), a viewport WIDTH change (every row
+        // reflows), and multi-row stride drift (a global metrics change such
+        // as a late font swap). The last row is exempt from the check:
         // its stride is derived from the row below, which a bottom window
         // never mounts, so it is never cached.
-        const FULL_MOUNT_ROW_LIMIT: usize = 400;
         let all_strides_measured = row_first_ids.len() > 1
             && (0..row_first_ids.len() - 1).all(|row| {
                 self.row_stride_cache.contains_key(&row_first_ids[row])

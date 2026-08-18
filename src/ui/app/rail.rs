@@ -20,6 +20,17 @@ use gpui_component::{
     v_flex,
 };
 
+/// Shortcut hint for the i-th of `SideView::SHORTCUT_VIEWS`: ⌘N on macOS,
+/// Ctrl+N elsewhere (N = i + 1).
+fn rail_slot_hint(i: usize) -> String {
+    let digit = char::from(b'1' + i.min(8) as u8);
+    if cfg!(target_os = "macos") {
+        format!("⌘{digit}")
+    } else {
+        format!("Ctrl+{digit}")
+    }
+}
+
 impl VerveApp {
     pub(super) fn refresh_switchers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let st = self.state.read(cx);
@@ -98,26 +109,52 @@ impl VerveApp {
         }
     }
 
-    pub(super) fn render_activity_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let active = self.active_view;
-        let hidden = self.hidden_rails.clone();
-        let entity = cx.entity();
-
-        // Build ordered list of visible views from self.rail_order.
-        let ordered_views: Vec<SideView> = self
-            .rail_order
+    /// The rail-selectable views in the user's custom order (`rail_order`,
+    /// minus the home view and hidden rails) — exactly what the activity rail
+    /// renders.
+    pub(super) fn visible_rail_views(&self) -> Vec<SideView> {
+        self.rail_order
             .iter()
             .filter_map(|name| {
                 let v = SideView::parse(name);
                 // Filter home view and hidden views.
-                if v != self.home_view && !hidden.contains(v.name()) {
+                if v != self.home_view && !self.hidden_rails.contains(v.name()) {
                     Some(v)
                 } else {
                     None
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    /// Switch the workbench to `view`, lazily activating panels that shouldn't
+    /// connect at app startup. Shared by the rail buttons and the rail-switch
+    /// keyboard shortcuts.
+    pub(super) fn activate_view(
+        &mut self,
+        view: SideView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_view = view;
+        match view {
+            SideView::Docker => {
+                self.docker.update(cx, |d, cx| d.activate(cx));
+            }
+            SideView::K8s => {
+                self.k8s.update(cx, |k, cx| k.activate(window, cx));
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    pub(super) fn render_activity_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let active = self.active_view;
+        let entity = cx.entity();
+
+        let ordered_views = self.visible_rail_views();
 
         let entity_cancel = entity.clone();
         v_flex()
@@ -167,30 +204,27 @@ impl VerveApp {
                 let is_active = active == view;
                 let is_dragging = self.dragging_rail.as_deref() == Some(view_name.as_str());
                 let is_drop_target = self.rail_drop_target.as_deref() == Some(view_name.as_str());
+                // Fixed shortcut (⌘1..⌘5), if this view has one.
+                let shortcut_hint = SideView::SHORTCUT_VIEWS
+                    .iter()
+                    .position(|&v| v == view)
+                    .map(rail_slot_hint);
 
                 let btn = Button::new(format!("rail-btn-{}", view.name()))
                     .ghost()
                     .with_size(Medium)
                     .icon(Self::rail_icon_for(view))
                     .selected(is_active)
-                    .tooltip(view.label())
+                    .tooltip(match shortcut_hint {
+                        Some(hint) => format!("{} ({})", view.label(), hint),
+                        None => view.label(),
+                    })
                     .when(is_active, |btn| {
                         btn.bg(theme.accent.opacity(0.5))
                             .text_color(theme.foreground)
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.active_view = view;
-                        // Lazy-activate panels that shouldn't connect at app startup.
-                        match view {
-                            SideView::Docker => {
-                                this.docker.update(cx, |d, cx| d.activate(cx));
-                            }
-                            SideView::K8s => {
-                                this.k8s.update(cx, |k, cx| k.activate(window, cx));
-                            }
-                            _ => {}
-                        }
-                        cx.notify();
+                        this.activate_view(view, window, cx);
                     }));
 
                 let drop_name = view_name.clone();
@@ -380,5 +414,36 @@ impl VerveApp {
                             .child(build_items(&names[per * 2..], per * 2, &active, &entity))
                     })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Import only what's under test — a `use super::*` glob would pull in
+    // gpui's own `test` attribute macro (via the parent's `use gpui::*`) and
+    // shadow the builtin `#[test]`.
+    use super::rail_slot_hint;
+    use super::super::{SideView, rail_slot_keybindings};
+
+    #[test]
+    fn rail_slot_hint_digits() {
+        for (i, _) in SideView::SHORTCUT_VIEWS.iter().enumerate() {
+            let digit = char::from(b'1' + i as u8);
+            let expected = if cfg!(target_os = "macos") {
+                format!("⌘{digit}")
+            } else {
+                format!("Ctrl+{digit}")
+            };
+            assert_eq!(rail_slot_hint(i), expected);
+        }
+    }
+
+    /// `KeyBinding::new` panics on an invalid keystroke string at app
+    /// startup, so make sure every rail-switch binding constructs.
+    #[test]
+    fn rail_slot_keybindings_parse() {
+        let n = SideView::SHORTCUT_VIEWS.len();
+        assert_eq!(rail_slot_keybindings("cmd").len(), n);
+        assert_eq!(rail_slot_keybindings("ctrl").len(), n);
     }
 }

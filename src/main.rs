@@ -175,6 +175,7 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("cmd-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("cmd-shift-o", ui::app::OpenMarkdownFileNewTab, None),
     ]);
+    cx.bind_keys(ui::app::rail_slot_keybindings("cmd"));
     #[cfg(not(target_os = "macos"))]
     cx.bind_keys([
         KeyBinding::new("ctrl-enter", ui::request_panel::SendRequest, None),
@@ -185,6 +186,7 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("ctrl-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("ctrl-shift-o", ui::app::OpenMarkdownFileNewTab, None),
     ]);
+    cx.bind_keys(ui::app::rail_slot_keybindings("ctrl"));
 
     let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
 

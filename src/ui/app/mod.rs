@@ -15,6 +15,37 @@ actions!(
         CloseFile
     ]
 );
+/// Switch to one of the fixed shortcut views (payload indexes
+/// `SideView::SHORTCUT_VIEWS`). This rev of gpui's `actions!` macro only
+/// defines unit actions, so data-carrying actions are declared via the
+/// derive; `no_json` because it only originates from in-code keybindings,
+/// never from JSON.
+#[derive(Clone, PartialEq, Debug, gpui::Action)]
+#[action(namespace = verve, no_json)]
+pub struct SelectRailSlot(pub usize);
+
+/// Keybindings for the rail switcher: ⌘/Ctrl + 1..=N switch to the Nth of
+/// `SideView::SHORTCUT_VIEWS` (the commonly-used views).
+///
+/// Context "!BlockEditor": a context-less binding ties with the deepest key
+/// context and — being registered after the editor's — would override the
+/// WYSIWYG editor's ⌘1..⌘6/⌘0 block-formatting shortcuts. With the negated
+/// context, those win while an editor block is focused; Esc in the Markdown
+/// view refocuses the app root (dropping BlockEditor from the focus path),
+/// which re-enables these shortcuts.
+pub fn rail_slot_keybindings(modifier: &str) -> Vec<KeyBinding> {
+    SideView::SHORTCUT_VIEWS
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            KeyBinding::new(
+                &format!("{}-{}", modifier, i + 1),
+                SelectRailSlot(i),
+                Some("!BlockEditor"),
+            )
+        })
+        .collect()
+}
 use crate::assets::{
     BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
     K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
@@ -128,6 +159,11 @@ pub struct VerveApp {
     pub show_console: bool,
     /// Which sidebar view is active (left activity rail selection).
     pub active_view: SideView,
+    /// Root focus handle, focused at startup so keybinding actions (⌘1..⌘5,
+    /// cmd-s/n/w/…) reach the root `on_action` handlers even before the user
+    /// has focused any panel. With no focus at all, gpui dispatches actions
+    /// at the window-root node and they never bubble down to this view.
+    pub focus_handle: gpui::FocusHandle,
     /// The view the brand mark "V" (首页) points to. The corresponding rail
     /// button is hidden to avoid a duplicate entry. Defaults to Api.
     pub home_view: SideView,
@@ -273,25 +309,40 @@ pub enum SideView {
 }
 
 impl SideView {
-    /// All rail-selectable views, in rail order.
+    /// All rail-selectable views, in default rail order. The fixed-shortcut
+    /// views (`SHORTCUT_VIEWS`) come first so ⌘1..⌘5 match the visible rail
+    /// top.
     pub const ALL: &'static [SideView] = &[
+        // Fixed-shortcut views first (⌘1..⌘5).
         SideView::Api,
+        SideView::Ssh,
+        SideView::JsonFormat,
+        SideView::Notes,
+        SideView::MarkdownEditor,
+        // Everything else, previous relative order.
         SideView::Share,
         SideView::Mock,
         SideView::ProjectManage,
         SideView::Stress,
         SideView::AutoTest,
-        SideView::JsonFormat,
         SideView::Hosts,
         SideView::Proxy,
-        SideView::Ssh,
         SideView::Docker,
         SideView::K8s,
         SideView::PdfEditor,
         SideView::History,
+        SideView::Relocate,
+    ];
+
+    /// The commonly-used views with dedicated rail-switch shortcuts
+    /// (⌘/Ctrl + 1..=5), in key order. Drives `rail_slot_keybindings`, the
+    /// shortcut handler, and the rail tooltips — keep these consistent.
+    pub const SHORTCUT_VIEWS: &'static [SideView] = &[
+        SideView::Api,
+        SideView::Ssh,
+        SideView::JsonFormat,
         SideView::Notes,
         SideView::MarkdownEditor,
-        SideView::Relocate,
     ];
 
     /// A stable string key for persistence.
@@ -703,6 +754,7 @@ impl Render for VerveApp {
 
         v_flex()
             .id("verve-app-root")
+            .track_focus(&self.focus_handle)
             .size_full()
             .overflow_hidden()
             .bg(theme.background)
@@ -712,6 +764,21 @@ impl Render for VerveApp {
             .on_action(cx.listener(Self::on_save_workspace))
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_close_file))
+            .on_action(cx.listener(Self::on_select_rail_slot))
+            // Esc in the Markdown/Notes views releases the block editor's
+            // shortcut lock: while a block is focused, ⌘1..⌘5 keep their
+            // editor meaning (heading levels). Refocusing the app root drops
+            // the BlockEditor key context from the focus path, re-enabling
+            // the rail-switch shortcuts.
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                if ev.keystroke.key == "escape"
+                    && ev.keystroke.modifiers.number_of_modifiers() == 0
+                    && matches!(this.active_view, SideView::MarkdownEditor | SideView::Notes)
+                {
+                    window.focus(&this.focus_handle, cx);
+                    cx.notify();
+                }
+            }))
             .child(self.render_title_bar(cx))
             .child(
                 h_flex()

@@ -205,7 +205,13 @@ impl VerveApp {
             None
         };
 
+        // Focus the app root so keybinding actions fire even when no panel
+        // has been focused/clicked yet (see the field docs on `focus_handle`).
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+
         let mut app = Self {
+            focus_handle,
             state: state.clone(),
             tree,
             request,
@@ -266,7 +272,7 @@ impl VerveApp {
                 let saved = crate::state::persistence::load_rail_order();
                 let default: Vec<String> =
                     SideView::ALL.iter().map(|v| v.name().to_string()).collect();
-                match saved {
+                let mut order = match saved {
                     None => default,
                     Some(mut order) => {
                         let existing: std::collections::HashSet<_> =
@@ -283,7 +289,16 @@ impl VerveApp {
                         order.retain(|n| default_set.contains(n));
                         order
                     }
+                };
+                // One-time reorder: put the fixed-shortcut views (⌘1..⌘5) at
+                // the front so the rail matches the key order. Runs once (not
+                // every launch) so later drag-to-reorder isn't overridden.
+                if !crate::state::persistence::rail_shortcut_migrated() {
+                    shortcut_first_rail_order(&mut order);
+                    crate::state::persistence::save_rail_order(&order);
+                    crate::state::persistence::mark_rail_shortcut_migrated();
                 }
+                order
             },
             dragging_rail: None,
             rail_drop_target: None,
@@ -690,5 +705,49 @@ impl VerveApp {
             let url = info.download_url.as_deref().unwrap_or(&info.release_url);
             cx.open_url(url);
         }
+    }
+}
+
+/// Reorder rail names so the fixed-shortcut views (`SideView::SHORTCUT_VIEWS`)
+/// come first in key order, preserving the relative order of the rest.
+fn shortcut_first_rail_order(order: &mut Vec<String>) {
+    let shortcut_names: Vec<&str> = SideView::SHORTCUT_VIEWS.iter().map(|v| v.name()).collect();
+    let mut front: Vec<String> = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
+    for name in order.drain(..) {
+        if shortcut_names.contains(&name.as_str()) {
+            front.push(name);
+        } else {
+            rest.push(name);
+        }
+    }
+    front.sort_by_key(|n| {
+        shortcut_names
+            .iter()
+            .position(|s| *s == n.as_str())
+            .unwrap_or(usize::MAX)
+    });
+    order.extend(front);
+    order.extend(rest);
+}
+
+#[cfg(test)]
+mod tests {
+    // No `use super::*` here: it would glob in gpui's `test` attribute macro
+    // (the parent does `use gpui::*`) and shadow the builtin `#[test]`.
+    use super::shortcut_first_rail_order;
+
+    #[test]
+    fn shortcut_views_move_to_front_in_key_order() {
+        let mut order: Vec<String> = ["Share", "Ssh", "Mock", "Notes", "Api", "JsonFormat"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        shortcut_first_rail_order(&mut order);
+        let expected: Vec<String> = ["Api", "Ssh", "JsonFormat", "Notes", "Share", "Mock"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(order, expected);
     }
 }

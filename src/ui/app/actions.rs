@@ -1,9 +1,11 @@
 //! Keybinding action handlers: open/save/close Markdown files and the
-//! workspace. These are wired via `on_action` in the root Render.
+//! workspace, plus rail-view switching (⌘/Ctrl + 1..=5). These are wired
+//! via `on_action` in the root Render.
 
 use super::SideView;
 use super::{
-    CloseFile, NewFile, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace, VerveApp,
+    CloseFile, NewFile, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace, SelectRailSlot,
+    VerveApp,
 };
 use gpui::{img, *};
 
@@ -69,6 +71,27 @@ impl VerveApp {
             }
         }
         cx.notify();
+    }
+
+    /// ⌘/Ctrl + 1..=5 — switch to one of the fixed shortcut views (Api, Ssh,
+    /// JsonFormat, Notes, MarkdownEditor). The bindings carry a "!BlockEditor"
+    /// context, so inside the Markdown editor ⌘1..⌘6/⌘0 keep their editor
+    /// meaning; pressing Esc there refocuses the app root (see the root
+    /// render's key handler) to make these shortcuts active again. Hidden
+    /// rails are skipped.
+    pub(super) fn on_select_rail_slot(
+        &mut self,
+        a: &SelectRailSlot,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(&view) = SideView::SHORTCUT_VIEWS.get(a.0) else {
+            return;
+        };
+        if self.hidden_rails.contains(view.name()) {
+            return;
+        }
+        self.activate_view(view, w, cx);
     }
 
     /// cmd-w — close. Closes the active tab of whichever view has focus:

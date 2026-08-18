@@ -342,6 +342,11 @@ pub struct PanelLayout {
     /// buttons render in this order. Items not in the list appear after in default order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rail_order: Option<Vec<String>>,
+    /// Whether the one-time "shortcut views first" rail reorder (fixed ⌘1..⌘5
+    /// shortcuts → Api/Ssh/JsonFormat/Notes/MarkdownEditor at the front of the
+    /// saved rail order) has been applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rail_shortcut_migrated: Option<bool>,
     /// Remote document-sharing server configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteConfig>,
@@ -691,6 +696,22 @@ pub fn save_rail_order(order: &[String]) {
     let mut layout = load_layout().unwrap_or_default();
     layout.rail_order = Some(order.to_vec());
     let _ = save_layout(&layout);
+}
+
+/// Whether the one-time "shortcut views first" rail reorder has run.
+pub fn rail_shortcut_migrated() -> bool {
+    load_layout()
+        .and_then(|l| l.rail_shortcut_migrated)
+        .unwrap_or(false)
+}
+
+/// Mark the one-time "shortcut views first" rail reorder as done.
+pub fn mark_rail_shortcut_migrated() {
+    let mut layout = load_layout().unwrap_or_default();
+    if layout.rail_shortcut_migrated != Some(true) {
+        layout.rail_shortcut_migrated = Some(true);
+        let _ = save_layout(&layout);
+    }
 }
 
 /// Load the remote sharing-server configuration (defaults to local-only).

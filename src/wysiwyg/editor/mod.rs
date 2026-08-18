@@ -107,12 +107,12 @@ pub struct Editor {
     pending_window_edited: bool,
     pending_window_title_refresh: bool,
     document_dirty: bool,
-    /// Throttled `(total, selection, computed_at)` word-count cache. Computing
-    /// the count serializes the whole document, so re-doing it every render
-    /// frame (the markdown side-view rebuilds on every scroll tick) is O(doc)
-    /// per frame. The cache is refreshed at most once per `WORD_COUNT_THROTTLE`,
-    /// which is imperceptible for a live word counter.
-    word_count_cache: Cell<Option<(usize, Option<usize>, Instant)>>,
+    /// Word-count cache: `(total, doc_revision, content_epoch, computed_at)`.
+    /// Computing the total serializes the whole document; keying by the
+    /// document's content version makes idle re-renders (caret blink, hover,
+    /// switching back to the host panel) pure cache hits, while the timestamp
+    /// caps the recompute rate while typing. See [`Editor::word_count`].
+    word_count_cache: Cell<Option<(usize, u64, u64, Instant)>>,
     file_path: Option<PathBuf>,
     /// Whether this editor owns its host window (standalone app mode). When
     /// true the editor mutates the window: close guard, `set_window_edited`,
@@ -412,8 +412,9 @@ impl Editor {
     const HISTORY_LIMIT: usize = 200;
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
-    /// Minimum interval between full-document word-count recomputes. See
-    /// [`Editor::word_count`].
+    /// Minimum interval between full-document word-count recomputes while the
+    /// content keeps changing (typing). Idle re-renders never recompute — the
+    /// cache is keyed by content version. See [`Editor::word_count`].
     const WORD_COUNT_THROTTLE: Duration = Duration::from_millis(250);
 
     pub fn from_markdown(
@@ -633,21 +634,35 @@ impl Editor {
         self.document_dirty
     }
 
-    /// `(total, selection)` word counts, throttled. Serializing the whole
-    /// document to count words is O(doc); hosts re-render on every scroll tick,
-    /// so an un-throttled count would serialize the document 60×/sec while
-    /// scrolling. The cached value is refreshed at most once per
-    /// [`WORD_COUNT_THROTTLE`] — imperceptible lag for a word counter.
+    /// `(total, selection)` word counts. The total is cached against the
+    /// document's content version (`document.revision()` + `content_epoch`)
+    /// and recomputed only when the content actually changed — at most once
+    /// per [`WORD_COUNT_THROTTLE`] while typing — so idle re-renders (caret
+    /// blink, hover, view switches back to the host panel) are pure cache
+    /// hits. A time-only throttle used to expire on every periodic re-render,
+    /// re-serializing the whole document ~2×/s. The selection count is
+    /// bounded by the selection size and stays live (recomputed per call).
     pub fn word_count(&self, cx: &App) -> (usize, Option<usize>) {
-        if let Some((total, selection, computed_at)) = self.word_count_cache.get()
-            && Instant::now().duration_since(computed_at) < Self::WORD_COUNT_THROTTLE
-        {
-            return (total, selection);
-        }
-        let total = count_words(&self.serialized_document_text(cx));
+        let now = Instant::now();
+        let total = match self.word_count_cache.get() {
+            Some((cached, revision, epoch, computed_at))
+                if (revision == self.document.revision() && epoch == self.content_epoch)
+                    || now.duration_since(computed_at) < Self::WORD_COUNT_THROTTLE =>
+            {
+                cached
+            }
+            _ => {
+                let total = count_words(&self.serialized_document_text(cx));
+                self.word_count_cache.set(Some((
+                    total,
+                    self.document.revision(),
+                    self.content_epoch,
+                    now,
+                )));
+                total
+            }
+        };
         let selection = self.selected_markdown_text(cx).as_deref().map(count_words);
-        self.word_count_cache
-            .set(Some((total, selection, Instant::now())));
         (total, selection)
     }
 

@@ -822,12 +822,28 @@ pub fn migrate_one(
             return MigrateOutcome::Failed { reason };
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = super::rollback::restore_from_external(source, &dest);
-        return MigrateOutcome::Failed {
-            reason: "当前平台不支持符号链接（已从外置副本恢复原目录）".into(),
-        };
+        // Windows supports directory symlinks via symlink_dir; creating one
+        // may require Developer Mode or admin privileges — failures follow
+        // the same restore-from-external path as Unix.
+        if let Err(e) = std::os::windows::fs::symlink_dir(&abs_dest, source) {
+            let restore_err = super::rollback::restore_from_external(source, &dest);
+            let reason = match restore_err {
+                Ok(()) => format!(
+                    "创建符号链接失败 {}: {}（已从外置副本恢复原目录；Windows 需开启开发者模式或以管理员运行才能创建符号链接）",
+                    source.display(),
+                    e
+                ),
+                Err(re) => format!(
+                    "创建符号链接失败 {} 且恢复原目录失败：{}（外置副本仍在 {}）",
+                    source.display(),
+                    e,
+                    re
+                ),
+            };
+            return MigrateOutcome::Failed { reason };
+        }
     }
 
     // 8. Build the task record (PRD §3.5, §8.2.7).

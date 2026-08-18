@@ -98,22 +98,41 @@ pub(crate) async fn build_client(host: Option<&DockerHost>) -> Result<Docker, Do
             Docker::connect_with_local_defaults()
         }
         Some(h) if h.uses_ssh_tunnel() => {
-            let url = resolve_ssh_tunnel(h)?;
-            // url is "unix://<path>"; bollard wants the bare socket path.
-            let path = url
-                .strip_prefix("unix://")
-                .unwrap_or(&url);
-            Docker::connect_with_unix(path, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+            #[cfg(unix)]
+            {
+                let url = resolve_ssh_tunnel(h)?;
+                // url is "unix://<path>"; bollard wants the bare socket path.
+                let path = url
+                    .strip_prefix("unix://")
+                    .unwrap_or(&url);
+                Docker::connect_with_unix(path, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+            }
+            #[cfg(windows)]
+            {
+                let _ = h;
+                return Err(DockerError(
+                    "SSH 隧道依赖本地 Unix socket，暂不支持 Windows。请使用 tcp:// 地址连接远程 Docker。".into(),
+                ));
+            }
         }
         Some(h) => {
             let scheme = h.host.split("://").next().unwrap_or("");
             match scheme {
                 "unix" => {
-                    let path = h
-                        .host
-                        .strip_prefix("unix://")
-                        .unwrap_or(&h.host);
-                    Docker::connect_with_unix(path, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+                    #[cfg(unix)]
+                    {
+                        let path = h
+                            .host
+                            .strip_prefix("unix://")
+                            .unwrap_or(&h.host);
+                        Docker::connect_with_unix(path, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+                    }
+                    #[cfg(windows)]
+                    {
+                        return Err(DockerError(
+                            "Windows 不支持 unix:// socket 连接。请使用 tcp:// 地址。".into(),
+                        ));
+                    }
                 }
                 // Plain TCP / HTTP — no TLS.
                 "tcp" | "http" => {
@@ -136,8 +155,19 @@ pub(crate) async fn build_client(host: Option<&DockerHost>) -> Result<Docker, Do
                     )));
                 }
                 _ => {
-                    // Unknown scheme: try treating it as a local socket address.
-                    Docker::connect_with_unix(&h.host, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+                    // Unknown scheme: try treating it as a local socket address
+                    // (Unix only; Windows has no local unix-socket docker).
+                    #[cfg(unix)]
+                    {
+                        Docker::connect_with_unix(&h.host, DOCKER_TIMEOUT_SECS, API_DEFAULT_VERSION)
+                    }
+                    #[cfg(windows)]
+                    {
+                        return Err(DockerError(format!(
+                            "无法识别的 Docker 地址: {}",
+                            h.host
+                        )));
+                    }
                 }
             }
         }

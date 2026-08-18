@@ -22,14 +22,22 @@
 //!   local socket and disconnect the SSH transport.
 
 use std::path::PathBuf;
+
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use tokio::runtime::Runtime;
+#[cfg(unix)]
 use tokio::sync::Mutex;
+#[cfg(unix)]
 use tokio::task::JoinHandle;
 
+#[cfg(unix)]
 use crate::ssh::client::SshConnection;
 use crate::ssh::host_store as ssh_host_store;
 use crate::ssh::models::SshHost;
@@ -37,6 +45,7 @@ use crate::ssh::models::SshHost;
 /// Default remote Docker socket path (matches `dockerd` defaults on Linux).
 /// We don't connect to it directly; we rely on `docker system dial-stdio`
 /// which uses the local default socket on the remote side.
+#[cfg(unix)]
 const _DEFAULT_REMOTE_SOCK: &str = "/var/run/docker.sock";
 
 /// Remote command that proxies stdio to the docker daemon. This is an official
@@ -46,6 +55,7 @@ const _DEFAULT_REMOTE_SOCK: &str = "/var/run/docker.sock";
 /// We prepend common Docker install paths to PATH because non-interactive SSH
 /// exec sessions often have a minimal PATH (e.g. just /usr/bin:/bin) that
 /// excludes `/usr/local/bin/docker` or snap-installed docker.
+#[cfg(unix)]
 const REMOTE_DIAL_CMD: &str =
     "PATH=/usr/bin:/usr/local/bin:/bin:/snap/bin:$PATH docker system dial-stdio";
 
@@ -59,6 +69,7 @@ const REMOTE_DIAL_CMD: &str =
 ///
 /// Dropping the handle closes the listener, aborts the accept loop, and shuts
 /// down the runtime.
+#[cfg(unix)]
 pub struct SocketTunnel {
     /// Absolute path of the local Unix socket docker CLI connects to.
     pub local_path: PathBuf,
@@ -67,6 +78,15 @@ pub struct SocketTunnel {
     _task: JoinHandle<()>,
 }
 
+/// Windows stub: bollard and tokio have no local Unix socket support here, so
+/// the SSH-tunnel transport is Unix-only. The type exists so callers
+/// (`cli.rs`, panels) compile unchanged; opening always fails.
+#[cfg(windows)]
+pub struct SocketTunnel {
+    pub local_path: PathBuf,
+}
+
+#[cfg(unix)]
 impl Drop for SocketTunnel {
     fn drop(&mut self) {
         self._task.abort();
@@ -76,6 +96,7 @@ impl Drop for SocketTunnel {
     }
 }
 
+#[cfg(unix)]
 impl SocketTunnel {
     /// Open an SSH connection to `ssh_host` and start forwarding a local
     /// temporary Unix socket to the remote docker daemon via
@@ -159,6 +180,17 @@ impl SocketTunnel {
     }
 }
 
+#[cfg(windows)]
+impl SocketTunnel {
+    pub fn open(_ssh_host: &crate::ssh::models::SshHost) -> Result<Self, String> {
+        Err("SSH 隧道依赖本地 Unix socket，暂不支持 Windows。请在主机上使用 tcp:// 地址连接远程 Docker。".to_string())
+    }
+
+    pub fn docker_host_env(&self) -> String {
+        format!("unix://{}", self.local_path.display())
+    }
+}
+
 /// Bridge one accepted local Unix stream to the remote docker daemon by
 /// opening an SSH exec channel running `docker system dial-stdio` and copying
 /// bytes bidirectionally until EOF.
@@ -168,6 +200,7 @@ impl SocketTunnel {
 /// — `docker system dial-stdio` may fail (docker CLI not installed, PATH issue
 /// in non-interactive shell, permission denied on docker.sock) and we want
 /// that error reported in the UI, not a silent hang.
+#[cfg(unix)]
 async fn bridge_one(
     handle: Arc<Mutex<russh::client::Handle<crate::ssh::client::SshHandler>>>,
     mut local: UnixStream,

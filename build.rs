@@ -109,8 +109,10 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         // The prebuilt pdfium archive ships the import library pdfium.dll.lib
-        // in lib/ and the runtime pdfium.dll in bin/. Link against the .lib.
-        println!("cargo:rustc-link-lib=dylib=pdfium");
+        // in lib/ and the runtime pdfium.dll in bin/. Link name is "pdfium.dll"
+        // so MSVC resolves it to pdfium.dll.lib (linking "pdfium" would make
+        // the linker look for a non-existent pdfium.lib).
+        println!("cargo:rustc-link-lib=dylib=pdfium.dll");
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
     }
     #[cfg(target_os = "linux")]

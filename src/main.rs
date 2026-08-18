@@ -174,6 +174,9 @@ fn launch_main_app(cx: &mut App) {
         // Open a Markdown file in a new tab of the markdown editor view.
         KeyBinding::new("cmd-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("cmd-shift-o", ui::app::OpenMarkdownFileNewTab, None),
+        // Help center (same action on F1 for the Windows convention).
+        KeyBinding::new("cmd-/", ui::app::OpenHelpCenter, None),
+        KeyBinding::new("f1", ui::app::OpenHelpCenter, None),
     ]);
     cx.bind_keys(ui::app::rail_slot_keybindings("cmd"));
     #[cfg(not(target_os = "macos"))]
@@ -185,6 +188,8 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("ctrl-w", ui::app::CloseFile, None),
         KeyBinding::new("ctrl-o", ui::app::OpenMarkdownFile, None),
         KeyBinding::new("ctrl-shift-o", ui::app::OpenMarkdownFileNewTab, None),
+        KeyBinding::new("ctrl-/", ui::app::OpenHelpCenter, None),
+        KeyBinding::new("f1", ui::app::OpenHelpCenter, None),
     ]);
     cx.bind_keys(ui::app::rail_slot_keybindings("ctrl"));
 

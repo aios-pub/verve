@@ -12,7 +12,8 @@ actions!(
         OpenMarkdownFile,
         OpenMarkdownFileNewTab,
         NewFile,
-        CloseFile
+        CloseFile,
+        OpenHelpCenter
     ]
 );
 /// Switch to one of the fixed shortcut views (payload indexes
@@ -104,6 +105,8 @@ mod workspaces;
 
 // Make sibling-module helpers visible to mod.rs's Render impl.
 use widgets::*;
+// Re-exported for the help center's feature cards (⌘N hints).
+pub(crate) use rail::rail_slot_hint;
 
 pub struct VerveApp {
     pub state: Entity<AppState>,
@@ -143,6 +146,11 @@ pub struct VerveApp {
     pub pdf: Entity<PdfPanel>,
     /// Disk-directory migration panel (relocate).
     pub relocate: Entity<RelocatePanel>,
+    /// Handle of the open help-center window, if any. The rail button and
+    /// ⌘/ bring the existing window to the front instead of opening a
+    /// duplicate; the handle goes stale when that window is closed, which
+    /// `open_help_center` detects and recovers from.
+    pub help_window: Option<gpui::WindowHandle<gpui_component::Root>>,
     /// Live share HTTP server handle (started when any share config exists).
     pub share_server: Option<ShareServer>,
     /// Shared config store backing the share server (hot-swappable).
@@ -765,6 +773,7 @@ impl Render for VerveApp {
             .on_action(cx.listener(Self::on_new_file))
             .on_action(cx.listener(Self::on_close_file))
             .on_action(cx.listener(Self::on_select_rail_slot))
+            .on_action(cx.listener(Self::on_open_help_center))
             // Esc in the Markdown/Notes views releases the block editor's
             // shortcut lock: while a block is focused, ⌘1..⌘5 keep their
             // editor meaning (heading levels). Refocusing the app root drops

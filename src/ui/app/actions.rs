@@ -4,10 +4,11 @@
 
 use super::SideView;
 use super::{
-    CloseFile, NewFile, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace, SelectRailSlot,
-    VerveApp,
+    CloseFile, NewFile, OpenHelpCenter, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace,
+    SelectRailSlot, VerveApp,
 };
 use gpui::{img, *};
+use gpui_component::ActiveTheme as _;
 
 impl VerveApp {
     pub(super) fn on_open_markdown_file(
@@ -92,6 +93,51 @@ impl VerveApp {
             return;
         }
         self.activate_view(view, w, cx);
+    }
+
+    /// cmd-/ / F1 — open the help-center window (or bring the existing one
+    /// to the front). See [`Self::open_help_center`].
+    pub(super) fn on_open_help_center(
+        &mut self,
+        _: &OpenHelpCenter,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_help_center(cx);
+    }
+
+    /// Open the help-center window, or activate the already-open one. A
+    /// stale handle (the window was closed since) makes `update` fail, in
+    /// which case a fresh window opens.
+    pub(super) fn open_help_center(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.help_window.take() {
+            if handle
+                .update(cx, |_root, window, _cx| window.activate_window())
+                .is_ok()
+            {
+                self.help_window = Some(handle);
+                return;
+            }
+        }
+        let bounds = gpui::Bounds::centered(None, gpui::size(px(880.), px(640.)), cx);
+        match cx.open_window(
+            gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                window_min_size: Some(gpui::size(px(660.), px(480.))),
+                titlebar: None,
+                is_minimizable: true,
+                ..Default::default()
+            },
+            |window, cx| {
+                let view = cx.new(|cx| crate::ui::help_center::HelpCenter::new(window, cx));
+                cx.new(|cx| {
+                    gpui_component::Root::new(view, window, cx).bg(cx.theme().background)
+                })
+            },
+        ) {
+            Ok(handle) => self.help_window = Some(handle),
+            Err(err) => log::error!("failed to open help-center window: {err:#}"),
+        }
     }
 
     /// cmd-w — close. Closes the active tab of whichever view has focus:

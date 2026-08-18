@@ -5,8 +5,8 @@
 use super::widgets::vicon;
 use super::{PendingDialog, RailDrag, SideView, VerveApp};
 use crate::assets::{
-    BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, FILE_PDF, HISTORY, K8S as K8S_ICON, KANBAN, MARKDOWN,
-    NOTEBOOK, SERVER,
+    BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, FILE_PDF, HELP, HISTORY, K8S as K8S_ICON, KANBAN,
+    MARKDOWN, NOTEBOOK, SERVER,
 };
 use crate::state::AppEvent;
 use gpui::prelude::FluentBuilder as _;
@@ -21,8 +21,9 @@ use gpui_component::{
 };
 
 /// Shortcut hint for the i-th of `SideView::SHORTCUT_VIEWS`: ⌘N on macOS,
-/// Ctrl+N elsewhere (N = i + 1).
-fn rail_slot_hint(i: usize) -> String {
+/// Ctrl+N elsewhere (N = i + 1). Also used by the help center's feature
+/// cards.
+pub(crate) fn rail_slot_hint(i: usize) -> String {
     let digit = char::from(b'1' + i.min(8) as u8);
     if cfg!(target_os = "macos") {
         format!("⌘{digit}")
@@ -53,7 +54,7 @@ impl VerveApp {
         });
     }
 
-    pub(super) fn rail_icon_for(view: SideView) -> Icon {
+    pub(crate) fn rail_icon_for(view: SideView) -> Icon {
         match view {
             SideView::Api => IconName::Network.into(),
             SideView::AutoTest => IconName::Play.into(),
@@ -327,7 +328,7 @@ impl VerveApp {
                         });
                     })
             })
-            // Separator + Settings + theme picker.
+            // Separator + Help center + Settings + theme picker.
             .child(
                 div()
                     .w(px(24.))
@@ -335,6 +336,24 @@ impl VerveApp {
                     .my_1()
                     .bg(theme.border.opacity(0.5)),
             )
+            .child({
+                let hint = if cfg!(target_os = "macos") {
+                    "⌘/"
+                } else {
+                    "Ctrl+/"
+                };
+                Button::new("rail-help")
+                    .ghost()
+                    .with_size(Medium)
+                    .icon(vicon(HELP))
+                    .tooltip(format!(
+                        "{} ({hint})",
+                        rust_i18n::t!("help.open_hint")
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_help_center(cx);
+                    }))
+            })
             .child(
                 Button::new("rail-settings")
                     .ghost()

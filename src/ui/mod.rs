@@ -8,6 +8,7 @@ pub mod docker_host_dialog;
 pub mod docker_panel;
 pub mod env_panel;
 pub mod environments_view;
+pub mod help_center;
 pub mod hosts_panel;
 pub mod json_panel;
 pub mod k8s_cluster_dialog;

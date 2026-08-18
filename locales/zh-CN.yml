@@ -434,3 +434,136 @@ toolbar:
   image: 图片
   video: 插入视频
   clear_formatting: 清除格式
+
+help:
+  title: 帮助中心
+  open_hint: 帮助中心
+  search_ph: 搜索功能或快捷键…
+  nav_start: 快速上手
+  nav_features: 功能导览
+  nav_shortcuts: 快捷键
+  nav_about: 关于
+  search_results: 搜索结果
+  no_results: 没有匹配的内容，换个关键词试试
+  start_t1: Verve 是什么
+  start_p1: Verve 是离线优先的开发者工作台，把 API 调试、SSH 运维、Markdown 与笔记、JSON 格式化、压测、抓包等日常工具集成到一个应用。所有数据保存在本地 ~/.verve 目录，无需账号，不依赖云端。
+  start_t2: 视图切换
+  start_p2: 左侧功能栏可点击切换或拖拽排序，常用视图有固定快捷键：⌘1 API 管理、⌘2 SSH 管理、⌘3 JSON 格式化、⌘4 记事本、⌘5 Markdown 编辑器（Windows/Linux 为 Ctrl+1..5）。
+  start_t3: 编辑器
+  start_p3: 记事本与 Markdown 编辑器共用同一 WYSIWYG 引擎：直接在渲染后的文档上编辑，支持标题、列表、表格、代码块、图片等，也可切换源码模式。完整按键见「快捷键」一节。
+  start_t4: 环境变量
+  start_p4: 在请求的 URL、Header、Body 中用 {{变量名}} 占位符引用环境变量 / 全局变量；顶栏切换环境，设置 → 环境管理中维护变量，重命名变量时占位符会自动同步。
+  start_t5: 数据与同步
+  start_p5: 工作区数据以本地 git 仓库自动保存（间隔可在设置中调整），支持历史回溯；「磁盘迁移」视图可将数据目录迁移到外置磁盘。
+  start_t6: 自定义
+  start_p6: 左下角 ⚙ 打开设置：界面语言、主题、首页视图、隐藏菜单项、编辑器快捷键自定义等。
+  view_desc_intro: 应用内的每个功能视图（对应左侧功能栏）：
+  view_desc:
+    api: API 管理与调试：项目 / 文件夹 / 请求树，构建请求（参数、Header、Body、认证），查看响应与历史示例，cURL 导入导出，环境变量替换。
+    history: 按时间线查看请求历史与响应，可回溯重发。
+    mock: Mock 服务：为接口配置 Mock 规则并本地起服，方便前端联调。
+    projectmanage: 项目管理：Git 状态、暂存与提交、历史与分支管理（gix 后端）。
+    share: 文档管理：把本地文档发布为在线分享链接，管理与查看分享配置。
+    autotest: 自动化测试：编排测试套件 / 用例 / 步骤，一键运行并查看报告。
+    stress: 压力测试：图形化配置并发、时长等参数发起压测，实时查看结果曲线。
+    proxy: HTTP 抓包：本地代理捕获请求流量，查看与调试接口。
+    k8s: Kubernetes 管理：集群资源浏览、Pod 日志与终端。
+    docker: Docker 管理：容器 / 镜像列表、日志、终端与常用操作。
+    ssh: SSH 管理：主机卡片管理连接信息，多标签终端会话，SFTP 文件浏览与传输。
+    hosts: Hosts 快速编辑器：多配置组管理 hosts 条目，一键应用到系统 /etc/hosts 或应用内虚拟覆盖。
+    notes: 记事本：轻量 Markdown 笔记（WYSIWYG 编辑），自动保存、搜索与笔记树管理。
+    markdowneditor: Markdown 编辑器：多标签打开 .md 文件，所见即所得编辑、源码模式、查找替换、导出 PDF。
+    jsonformat: JSON 格式化：粘贴原始 JSON 即时格式化，可折叠树浏览、数组精简预览、复制节点值。
+    pdfeditor: PDF 编辑器：打开查看 PDF，页面编辑与保存。
+    relocate: 磁盘迁移：把工作区数据目录迁移到外置磁盘等其他位置。
+  group_global: 全局
+  group_rail: 视图切换
+  group_editor: Markdown / 记事本编辑器
+  group_cat_file: 文件
+  group_cat_edit: 编辑
+  group_cat_navigation: 导航
+  group_cat_markdown: Markdown 格式
+  group_cat_block: 块操作
+  group_cat_other: 其他
+  sc_g_help: 打开帮助中心
+  sc_g_send: 发送请求（API 视图）
+  sc_g_save: 保存（Markdown 保存文档 / 记事本立即保存笔记）
+  sc_g_new_request: 新建 API 请求
+  sc_g_new_file: 新建文件（记事本新建笔记 / Markdown 新建文档）
+  sc_g_open: 打开 Markdown 文件
+  sc_g_open_new_tab: 打开 Markdown 文件（新标签页）
+  sc_g_close: 关闭当前标签（文档 / 笔记 / 请求 / SSH / K8s）
+  sc_rail_note: 在 Markdown / 记事本的编辑块内，⌘1..⌘6 / ⌘0 优先用作标题与正文格式；按 Esc 退出块焦点后恢复视图切换。
+  sc_esc: 退出编辑块焦点（恢复视图切换快捷键）
+  sc_custom_note: 编辑器快捷键可在 设置 → 快捷键 中自定义，此处显示当前实际生效的键位（含自定义）。
+  sc:
+    newline: 新行
+    delete_back: 删除（退格）
+    delete: 删除（向前）
+    word_delete_back: 删除前一个词
+    word_delete_forward: 删除后一个词
+    focus_prev: 聚焦上一块
+    focus_next: 聚焦下一块
+    move_left: 左移一个字符
+    move_right: 右移一个字符
+    word_move_left: 左移一个词
+    word_move_right: 右移一个词
+    home: 光标到行首
+    end: 光标到行尾
+    block_up: 上一行 / 上移
+    block_down: 下一行 / 下移
+    page_up: 向上翻页
+    page_down: 向下翻页
+    jump_to_top: 跳到文档开头
+    jump_to_bottom: 跳到文档末尾
+    select_left: 向左选中
+    select_right: 向右选中
+    word_select_left: 按词向左选中
+    word_select_right: 按词向右选中
+    select_home: 选中至行首
+    select_end: 选中至行尾
+    select_all: 全选
+    copy: 复制
+    cut: 剪切
+    paste: 粘贴
+    paste_plain_text: 粘贴为纯文本
+    undo: 撤销
+    redo: 重做
+    bold_selection: 加粗
+    italic_selection: 斜体
+    underline_selection: 下划线
+    strikethrough_selection: 删除线
+    highlight_selection: 高亮
+    superscript_selection: 上标
+    subscript_selection: 下标
+    code_selection: 行内代码
+    indent_block: 缩进 / 嵌套列表
+    outdent_block: 减少缩进
+    exit_code_block: 退出代码块（光标移到块外）
+    heading_1: 一级标题
+    heading_2: 二级标题
+    heading_3: 三级标题
+    heading_4: 四级标题
+    heading_5: 五级标题
+    heading_6: 六级标题
+    convert_to_paragraph: 转为正文段落
+    convert_to_code_block: 转为代码块
+    convert_to_bulleted_list: 转为无序列表
+    convert_to_numbered_list: 转为有序列表
+    convert_to_task_list: 转为任务列表
+    convert_to_quote: 转为引用块
+    insert_link: 插入链接
+    insert_image: 插入图片
+    insert_horizontal_rule: 插入分隔线
+    insert_table: 插入表格
+    insert_table_row_below: 在下方插入表格行
+    insert_table_column_right: 在右侧插入表格列
+    delete_table: 删除表格
+    find: 查找
+    find_next: 查找下一个
+    find_previous: 查找上一个
+    replace: 查找与替换
+    toggle_view_mode: 切换 渲染 / 源码 模式
+    toggle_workspace: 切换大纲侧栏
+  about_version: 版本
+  about_desc: 数据保存在本地 ~/.verve 目录（git 自动保存）。主题、语言、快捷键等均可在设置中调整；可在 设置 → 关于 检查更新。

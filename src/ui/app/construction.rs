@@ -233,6 +233,7 @@ impl VerveApp {
             json,
             pdf,
             relocate,
+            help_window: None,
             share_server,
             share_configs,
             share_host,

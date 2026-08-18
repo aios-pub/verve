@@ -1151,9 +1151,26 @@ fn key_binding_for(
     }
 }
 
-pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
+/// One editor shortcut exactly as it is registered in the embedded build:
+/// the definition plus its effective context and key list (user overrides
+/// and the chrome-toggle re-keying applied).
+#[derive(Clone, Debug)]
+pub struct EffectiveShortcut {
+    pub definition: ShortcutDefinition,
+    pub context: Option<&'static str>,
+    pub keys: Vec<String>,
+}
+
+/// The editor shortcuts that are actually registered in the embedded verve
+/// build: everything scoped to the block editor plus the viewport-scroll and
+/// editor-chrome commands (re-scoped to `BlockEditor`). Entries whose
+/// effective key list is empty (e.g. `replace_all`, reachable only from the
+/// find/replace bar UI) are omitted. Shared by [`resolved_keybindings`] and
+/// the help center so the documented list can never drift from the real
+/// bindings.
+pub fn effective_shortcuts(config: &BTreeMap<String, Vec<String>>) -> Vec<EffectiveShortcut> {
     let normalized = normalize_shortcut_config(config);
-    let mut bindings = Vec::new();
+    let mut out = Vec::new();
     for definition in SHORTCUT_DEFINITIONS {
         // In the embedded verve build, skip window/application-level actions
         // (context == None) so they don't shadow verve's own global bindings
@@ -1178,8 +1195,8 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
         } else {
             definition.context
         };
-        // Re-key the chrome toggles to avoid OS/app clashes (velotype's
-        // cmd-tab/ctrl-w). User overrides via config still win.
+        // Re-key the chrome toggles to avoid clashes with the OS (cmd-tab) and
+        // verve's own bindings (ctrl-w). User overrides via config still win.
         let keys = if is_editor_chrome_toggle(definition.id) {
             normalized.get(definition.id).cloned().unwrap_or_else(|| {
                 remapped_chrome_keys(definition.id)
@@ -1193,12 +1210,31 @@ pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Ve
                 .cloned()
                 .unwrap_or_else(|| default_keys(*definition))
         };
-        bindings.extend(
-            keys.iter()
-                .map(|key| key_binding_for(definition.command, key, context)),
-        );
+        if keys.is_empty() {
+            continue;
+        }
+        out.push(EffectiveShortcut {
+            definition: *definition,
+            context,
+            keys,
+        });
     }
-    bindings
+    out
+}
+
+pub(crate) fn resolved_keybindings(config: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
+    effective_shortcuts(config)
+        .into_iter()
+        .flat_map(|shortcut| {
+            let command = shortcut.definition.command;
+            let context = shortcut.context;
+            shortcut
+                .keys
+                .iter()
+                .map(move |key| key_binding_for(command, key, context))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Default keys for the editor-chrome toggles in the embedded build, chosen to

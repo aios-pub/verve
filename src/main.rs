@@ -127,11 +127,19 @@ fn main() {
         // Decide whether to show bootstrap or main app.
         let is_first_run = persistence::is_first_run();
 
+        // The main window must be opened *before* the first-run welcome
+        // dialog: Windows/Linux stack each newly opened window in front of
+        // the previously opened one, so the old order (welcome, then main)
+        // buried the welcome dialog behind the main window and users had to
+        // alt-tab to find it. The welcome window is opened afterwards and
+        // explicitly activated below so the wizard overlays the main window.
+        launch_main_app(cx);
+
         if is_first_run {
             log::info!("First run detected, showing bootstrap dialog");
             let bounds = ui::app::centered_window_bounds(px(560.), px(560.), cx);
             cx.spawn(async move |cx| {
-                cx.open_window(
+                match cx.open_window(
                     WindowOptions {
                         titlebar: Some(gpui::TitlebarOptions {
                             title: Some("Verve - Welcome".into()),
@@ -146,15 +154,21 @@ fn main() {
                         let dialog = ui::bootstrap_dialog::BootstrapDialog::new(window, cx);
                         cx.new(|cx| Root::new(dialog, window, cx))
                     },
-                )
-                .expect("Failed to open bootstrap window");
+                ) {
+                    Ok(handle) => {
+                        // Re-assert foreground over the main window opened
+                        // just before this one; a no-op where the WM already
+                        // stacked the welcome window on top.
+                        let _ = handle
+                            .update(cx, |_root, window, _cx| window.activate_window());
+                    }
+                    Err(err) => log::error!("Failed to open bootstrap window: {err}"),
+                }
             })
             .detach();
 
             persistence::mark_bootstrap_done();
         }
-
-        launch_main_app(cx);
     });
 
     let _ = Button::new("noop");
@@ -195,19 +209,22 @@ fn launch_main_app(cx: &mut App) {
 
     let bounds = ui::app::centered_window_bounds(px(1400.), px(900.), cx);
 
+    let mut options = WindowOptions {
+        titlebar: Some(gpui::TitlebarOptions {
+            title: Some("Verve".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(14.), px(16.))),
+        }),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(px(960.), px(600.))),
+        ..Default::default()
+    };
+    // Linux: drop the WM's server-side title bar — the app bar already
+    // draws min/max/close, so the WM bar would add a second close button.
+    ui::app::apply_window_chrome_fixes(&mut options, false);
+
     cx.spawn(async move |cx| {
-        cx.open_window(
-            WindowOptions {
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some("Verve".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(14.), px(16.))),
-                }),
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(960.), px(600.))),
-                ..Default::default()
-            },
-            |window, cx| {
+        cx.open_window(options, |window, cx| {
                 // The window close button (and the doc-level close) should hide
                 // the window rather than quit the app, so the process — and any
                 // in-memory state — stays alive until the user explicitly quits.

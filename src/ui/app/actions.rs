@@ -120,14 +120,19 @@ impl VerveApp {
             }
         }
         let bounds = super::centered_window_bounds(px(880.), px(640.), cx);
+        let mut options = gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            window_min_size: Some(gpui::size(px(660.), px(480.))),
+            titlebar: None,
+            is_minimizable: true,
+            ..Default::default()
+        };
+        // Linux: drop the WM's server-side title bar (the app bar already
+        // draws min/max/close). Stays a normal window — the help center is
+        // a reference doc meant to sit beside the app, not modally on top.
+        super::apply_window_chrome_fixes(&mut options, false);
         match cx.open_window(
-            gpui::WindowOptions {
-                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
-                window_min_size: Some(gpui::size(px(660.), px(480.))),
-                titlebar: None,
-                is_minimizable: true,
-                ..Default::default()
-            },
+            options,
             |window, cx| {
                 let view = cx.new(|cx| crate::ui::help_center::HelpCenter::new(window, cx));
                 cx.new(|cx| {

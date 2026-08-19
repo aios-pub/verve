@@ -127,10 +127,11 @@ impl VerveApp {
             is_minimizable: true,
             ..Default::default()
         };
-        // Linux: drop the WM's server-side title bar (the app bar already
-        // draws min/max/close). Stays a normal window — the help center is
-        // a reference doc meant to sit beside the app, not modally on top.
-        super::apply_window_chrome_fixes(&mut options, false);
+        // Linux: drop the WM's server-side title bar when the compositor
+        // honors client decorations, and open as a dialog so the WM centers
+        // it over the main window (programmatic bounds are re-placed by
+        // X11 WMs and ignored on Wayland).
+        super::apply_window_chrome_fixes(&mut options, true);
         match cx.open_window(
             options,
             |window, cx| {

@@ -4958,7 +4958,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/lijingrs/gpui-component?rev=7268e295#7268e29556b5f5efb265a1a7a6846f3e426debf2"
+source = "git+https://github.com/lijingrs/gpui-component?rev=0ea2ca91#0ea2ca9123fdfbd73d637020cdede8857f7d7bd5"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5008,7 +5008,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/lijingrs/gpui-component?rev=7268e295#7268e29556b5f5efb265a1a7a6846f3e426debf2"
+source = "git+https://github.com/lijingrs/gpui-component?rev=0ea2ca91#0ea2ca9123fdfbd73d637020cdede8857f7d7bd5"
 dependencies = [
  "anyhow",
  "gpui",
@@ -5022,7 +5022,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/lijingrs/gpui-component?rev=7268e295#7268e29556b5f5efb265a1a7a6846f3e426debf2"
+source = "git+https://github.com/lijingrs/gpui-component?rev=0ea2ca91#0ea2ca9123fdfbd73d637020cdede8857f7d7bd5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5778,7 +5778,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.6.1",
+ "windows-registry 0.5.3",
 ]
 
 [[package]]

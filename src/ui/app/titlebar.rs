@@ -22,6 +22,25 @@ use gpui_component::{
     v_flex,
 };
 
+/// Wrap a plain title-bar control so it can receive clicks on Windows.
+///
+/// The gpui-component `TitleBar` marks the whole bar as a window drag region
+/// (`WindowControlArea::Drag`). On Windows, `WM_NCHITTEST` then answers
+/// `HTCAPTION` over the bar, and a mouse-down that no handler claims falls
+/// through to `DefWindowProc`'s window-drag loop, which consumes the
+/// mouse-up — so a plain `Button`'s `on_click` never fires (its down handler
+/// deliberately does not stop propagation). macOS is unaffected because its
+/// drag path runs inside gpui, and popover triggers already stop propagation
+/// on mouse-down, which is why only plain buttons break.
+///
+/// An occluding hitbox stops the window-control hit test at the control: the
+/// drag region no longer covers it, the OS treats the spot as a normal
+/// client area, and the click completes. Dragging the empty parts of the bar
+/// still works.
+fn title_bar_control(id: &'static str, el: impl IntoElement) -> impl IntoElement {
+    div().id(id).occlude().child(el)
+}
+
 impl VerveApp {
     pub(super) fn render_title_bar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme().clone();
@@ -100,7 +119,8 @@ impl VerveApp {
             // Far-left activity rail collapse/expand toggle.
             .child(self.render_rail_toggle(cx))
             // Sidebar (tree) collapse/expand toggle.
-            .child(
+            .child(title_bar_control(
+                "sidebar-toggle-hitbox",
                 Button::new("sidebar-toggle")
                     .ghost()
                     .small()
@@ -119,7 +139,7 @@ impl VerveApp {
                         this.sidebar_collapsed = !this.sidebar_collapsed;
                         cx.notify();
                     })),
-            )
+            ))
             // Workspace switcher — lists all workspaces, allows switching,
             // creating, and deleting (except the default).
             .child(
@@ -332,7 +352,8 @@ impl VerveApp {
                     ),
             )
             // Share the whole project's docs (scope = Project).
-            .child(
+            .child(title_bar_control(
+                "share-project-hitbox",
                 Button::new("share-project")
                     .ghost()
                     .small()
@@ -349,7 +370,7 @@ impl VerveApp {
                             );
                         },
                     )),
-            )
+            ))
             .child(div().flex_1())
             // Environment switcher — a popover listing environments plus
             // management entries (环境管理/Cookie/全局参数/全局变量/新建).
@@ -511,7 +532,8 @@ impl VerveApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
+                    .child(title_bar_control(
+                        "sync-hitbox",
                         Button::new("sync")
                             .ghost()
                             .small()
@@ -533,7 +555,7 @@ impl VerveApp {
                                     g.sync_async(None, cx)
                                 });
                             })),
-                    )
+                    ))
                     // Transient result chip: green ✓ on success, red message on
                     // failure. Dismissable via the × control.
                     .when_some(last_result, |col, (msg, ok)| {
@@ -572,7 +594,8 @@ impl VerveApp {
                         )
                     })
             })
-            .child(
+            .child(title_bar_control(
+                "import-hitbox",
                 Button::new("import")
                     .ghost()
                     .small()
@@ -581,7 +604,7 @@ impl VerveApp {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.import_collection(cx);
                     })),
-            )
+            ))
             .child(self.render_export_picker(cx))
             // Update check button: shows a spinner while checking, a download
             // icon when an update is available, or a refresh icon otherwise.
@@ -591,24 +614,27 @@ impl VerveApp {
     }
 
     pub(super) fn render_rail_toggle(&self, cx: &Context<Self>) -> impl IntoElement {
-        Button::new("rail-toggle")
-            .ghost()
-            .small()
-            .icon(if self.rail_collapsed {
-                IconName::PanelLeftOpen
-            } else {
-                IconName::PanelLeftClose
-            })
-            .selected(!self.rail_collapsed)
-            .tooltip(if self.rail_collapsed {
-                "展开左侧导航栏"
-            } else {
-                "收起左侧导航栏"
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.rail_collapsed = !this.rail_collapsed;
-                cx.notify();
-            }))
+        title_bar_control(
+            "rail-toggle-hitbox",
+            Button::new("rail-toggle")
+                .ghost()
+                .small()
+                .icon(if self.rail_collapsed {
+                    IconName::PanelLeftOpen
+                } else {
+                    IconName::PanelLeftClose
+                })
+                .selected(!self.rail_collapsed)
+                .tooltip(if self.rail_collapsed {
+                    "展开左侧导航栏"
+                } else {
+                    "收起左侧导航栏"
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.rail_collapsed = !this.rail_collapsed;
+                    cx.notify();
+                })),
+        )
     }
 
     pub(super) fn render_update_button(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -629,19 +655,22 @@ impl VerveApp {
         } else {
             "检查更新".to_string()
         };
-        Button::new("update-check")
-            .ghost()
-            .small()
-            .icon(icon)
-            .tooltip(tooltip)
-            .when(checking, |b| b.disabled(true))
-            .on_click(cx.listener(move |this, _ev, window, cx| {
-                if this.update_info.is_some() {
-                    this.open_update_download(window, cx);
-                } else {
-                    this.check_updates_manual(window, cx);
-                }
-            }))
+        title_bar_control(
+            "update-check-hitbox",
+            Button::new("update-check")
+                .ghost()
+                .small()
+                .icon(icon)
+                .tooltip(tooltip)
+                .when(checking, |b| b.disabled(true))
+                .on_click(cx.listener(move |this, _ev, window, cx| {
+                    if this.update_info.is_some() {
+                        this.open_update_download(window, cx);
+                    } else {
+                        this.check_updates_manual(window, cx);
+                    }
+                })),
+        )
     }
 
     pub(super) fn render_export_picker(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -820,7 +849,8 @@ impl VerveApp {
                     ),
             )
             .child(div().flex_1())
-            .child(
+            .child(title_bar_control(
+                "ssh-title-new-host-hitbox",
                 Button::new("ssh-title-new-host")
                     .primary()
                     .small()
@@ -831,7 +861,7 @@ impl VerveApp {
                             panel.open_new_host(window, cx);
                         });
                     })),
-            )
+            ))
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }
@@ -902,7 +932,8 @@ impl VerveApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
+                    .child(title_bar_control(
+                        "docker-title-containers-hitbox",
                         Button::new("docker-title-containers")
                             .ghost()
                             .small()
@@ -911,8 +942,9 @@ impl VerveApp {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 docker_containers.update(cx, |p, cx| p.show_containers(cx));
                             })),
-                    )
-                    .child(
+                    ))
+                    .child(title_bar_control(
+                        "docker-title-images-hitbox",
                         Button::new("docker-title-images")
                             .ghost()
                             .small()
@@ -921,8 +953,9 @@ impl VerveApp {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 docker_images.update(cx, |p, cx| p.show_images(cx));
                             })),
-                    )
-                    .child(
+                    ))
+                    .child(title_bar_control(
+                        "docker-title-hosts-hitbox",
                         Button::new("docker-title-hosts")
                             .ghost()
                             .small()
@@ -931,10 +964,11 @@ impl VerveApp {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 docker_hosts.update(cx, |p, cx| p.show_hosts(cx));
                             })),
-                    ),
+                    )),
             )
             .child(div().flex_1())
-            .child(
+            .child(title_bar_control(
+                "docker-title-reload-hitbox",
                 Button::new("docker-title-reload")
                     .ghost()
                     .small()
@@ -943,8 +977,9 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         docker_reload.update(cx, |p, cx| p.refresh_current(cx));
                     })),
-            )
-            .child(
+            ))
+            .child(title_bar_control(
+                "docker-title-add-host-hitbox",
                 Button::new("docker-title-add-host")
                     .primary()
                     .small()
@@ -953,7 +988,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, window, cx| {
                         docker_add.update(cx, |p, cx| p.open_add_host(window, cx));
                     })),
-            )
+            ))
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }
@@ -1025,7 +1060,8 @@ impl VerveApp {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
+                    .child(title_bar_control(
+                        "k8s-title-pods-hitbox",
                         Button::new("k8s-title-pods")
                             .ghost()
                             .small()
@@ -1041,8 +1077,9 @@ impl VerveApp {
                                     }
                                 });
                             })),
-                    )
-                    .child(
+                    ))
+                    .child(title_bar_control(
+                        "k8s-title-ctx-hitbox",
                         Button::new("k8s-title-ctx")
                             .ghost()
                             .small()
@@ -1051,8 +1088,9 @@ impl VerveApp {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 k8s_ctx.update(cx, |p, cx| p.show_contexts(cx));
                             })),
-                    )
-                    .child(
+                    ))
+                    .child(title_bar_control(
+                        "k8s-title-fwd-hitbox",
                         Button::new("k8s-title-fwd")
                             .ghost()
                             .small()
@@ -1061,10 +1099,11 @@ impl VerveApp {
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 k8s_fwd.update(cx, |p, cx| p.show_forwards(cx));
                             })),
-                    ),
+                    )),
             )
             .child(div().flex_1())
-            .child(
+            .child(title_bar_control(
+                "k8s-title-reload-hitbox",
                 Button::new("k8s-title-reload")
                     .ghost()
                     .small()
@@ -1073,8 +1112,9 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         k8s_reload.update(cx, |p, cx| p.refresh_current(cx));
                     })),
-            )
-            .child(
+            ))
+            .child(title_bar_control(
+                "k8s-title-add-cluster-hitbox",
                 Button::new("k8s-title-add-cluster")
                     .primary()
                     .small()
@@ -1095,7 +1135,7 @@ impl VerveApp {
                             );
                         });
                     })),
-            )
+            ))
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }
@@ -1129,7 +1169,8 @@ impl VerveApp {
             // Far-left rail toggle (shared across views).
             .child(self.render_rail_toggle(cx))
             // Sidebar collapse button — "收起笔记列表" / "展开笔记列表".
-            .child(
+            .child(title_bar_control(
+                "notes-sidebar-toggle-hitbox",
                 Button::new("sidebar-toggle")
                     .ghost()
                     .small()
@@ -1149,7 +1190,7 @@ impl VerveApp {
                             notes.toggle_list_collapsed(cx);
                         });
                     })),
-            )
+            ))
             // Identity block: notebook icon + "笔记" + note-count badge.
             .child(
                 h_flex()
@@ -1193,7 +1234,9 @@ impl VerveApp {
                 let editor = notes.read(cx).editor().clone();
                 let view_mode = editor.read(cx).view_mode();
                 let notes_vm = notes.clone();
-                Button::new("notes-title-view-mode")
+                title_bar_control(
+                    "notes-title-view-mode-hitbox",
+                    Button::new("notes-title-view-mode")
                     .small()
                     .ghost()
                     .selected(view_mode == crate::wysiwyg::editor::ViewMode::Source)
@@ -1205,10 +1248,12 @@ impl VerveApp {
                     })
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = notes_vm.update(cx, |p, cx| p.toggle_view_mode(cx));
-                    }))
+                    })),
+                )
             })
             // Import button.
-            .child(
+            .child(title_bar_control(
+                "notes-title-import-hitbox",
                 Button::new("notes-title-import")
                     .ghost()
                     .small()
@@ -1219,7 +1264,7 @@ impl VerveApp {
                             p.import_markdown_dialog(window, cx);
                         });
                     })),
-            )
+            ))
             // Export popover (Markdown / PDF).
             .child({
                 let export_open = notes_export.read(cx).export_popover_open();
@@ -1329,57 +1374,72 @@ impl VerveApp {
             // Toolbar buttons that trigger actions on the json panel
             .child({
                 let json = self.json.clone();
-                Button::new("json-title-format")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Check)
-                    .label(rust_i18n::t!("json.format_btn").to_string())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = json.update(cx, |panel, cx| panel.format_from_title(cx));
-                    }))
+                title_bar_control(
+                    "json-title-format-hitbox",
+                    Button::new("json-title-format")
+                        .small()
+                        .ghost()
+                        .icon(IconName::Check)
+                        .label(rust_i18n::t!("json.format_btn").to_string())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let _ = json.update(cx, |panel, cx| panel.format_from_title(cx));
+                        })),
+                )
             })
             .child({
                 let json = self.json.clone();
                 let active = json.read(cx).is_compact_active();
-                Button::new("json-title-compact")
-                    .small()
-                    .ghost()
-                    .label(rust_i18n::t!("json.compact_btn").to_string())
-                    .when(active, |b| b.selected(true))
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = json.update(cx, |panel, cx| panel.toggle_compact(cx));
-                    }))
+                title_bar_control(
+                    "json-title-compact-hitbox",
+                    Button::new("json-title-compact")
+                        .small()
+                        .ghost()
+                        .label(rust_i18n::t!("json.compact_btn").to_string())
+                        .when(active, |b| b.selected(true))
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let _ = json.update(cx, |panel, cx| panel.toggle_compact(cx));
+                        })),
+                )
             })
             .child({
                 let json = self.json.clone();
-                Button::new("json-title-expand")
-                    .small()
-                    .ghost()
-                    .label(rust_i18n::t!("json.expand_all").to_string())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = json.update(cx, |panel, cx| panel.expand_all(cx));
-                    }))
+                title_bar_control(
+                    "json-title-expand-hitbox",
+                    Button::new("json-title-expand")
+                        .small()
+                        .ghost()
+                        .label(rust_i18n::t!("json.expand_all").to_string())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let _ = json.update(cx, |panel, cx| panel.expand_all(cx));
+                        })),
+                )
             })
             .child({
                 let json = self.json.clone();
-                Button::new("json-title-collapse")
-                    .small()
-                    .ghost()
-                    .label(rust_i18n::t!("json.collapse_all").to_string())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = json.update(cx, |panel, cx| panel.collapse_all(cx));
-                    }))
+                title_bar_control(
+                    "json-title-collapse-hitbox",
+                    Button::new("json-title-collapse")
+                        .small()
+                        .ghost()
+                        .label(rust_i18n::t!("json.collapse_all").to_string())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let _ = json.update(cx, |panel, cx| panel.collapse_all(cx));
+                        })),
+                )
             })
             .child({
                 let json = self.json.clone();
-                Button::new("json-title-copy")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Copy)
-                    .label(rust_i18n::t!("json.copy_btn").to_string())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let _ = json.update(cx, |panel, cx| panel.copy_result(cx));
-                    }))
+                title_bar_control(
+                    "json-title-copy-hitbox",
+                    Button::new("json-title-copy")
+                        .small()
+                        .ghost()
+                        .icon(IconName::Copy)
+                        .label(rust_i18n::t!("json.copy_btn").to_string())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let _ = json.update(cx, |panel, cx| panel.copy_result(cx));
+                        })),
+                )
             })
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
@@ -1441,7 +1501,8 @@ impl VerveApp {
                     .text_color(theme.muted_foreground)
                     .child(format!("目标：{}", target_label)),
             )
-            .child(
+            .child(title_bar_control(
+                "relocate-title-rescan-hitbox",
                 Button::new("relocate-title-rescan")
                     .ghost()
                     .small()
@@ -1450,7 +1511,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         relocate.update(cx, |p, cx| p.engine.update(cx, |e, cx| e.scan_async(cx)));
                     })),
-            )
+            ))
     }
 
     /// PDF Editor title bar: rail toggle + file icon + title.
@@ -1546,7 +1607,8 @@ impl VerveApp {
             // editor. Same leading position + icon/selected/tooltip pattern as
             // the Notes title bar's sidebar-toggle, so the two views read as
             // one consistent sidebar affordance.
-            .child(
+            .child(title_bar_control(
+                "md-title-outline-hitbox",
                 Button::new("md-title-outline")
                     .ghost()
                     .small()
@@ -1564,7 +1626,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_outline.update(cx, |p, cx| p.toggle_outline(window, cx));
                     })),
-            )
+            ))
             // Icon + filename + dirty marker. The whole block is width-bounded
             // (`min_w_0` + `max_w`) so a very long filename/path can ellipsize
             // instead of growing unbounded and starving the right-side menu off
@@ -1639,7 +1701,8 @@ impl VerveApp {
                 self.render_editor_toolbar(&editor, cx)
             })
             // New
-            .child(
+            .child(title_bar_control(
+                "md-title-new-hitbox",
                 Button::new("md-title-new")
                     .small()
                     .ghost()
@@ -1648,7 +1711,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = md_new.update(cx, |p, cx| p.new_document(cx));
                     })),
-            )
+            ))
             // Open (with recent-files popover)
             .child(
                 Popover::new("md-open-pop")
@@ -1734,7 +1797,8 @@ impl VerveApp {
                     }),
             )
             // Save
-            .child(
+            .child(title_bar_control(
+                "md-title-save-hitbox",
                 Button::new("md-title-save")
                     .small()
                     .ghost()
@@ -1743,9 +1807,10 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_save.update(cx, |p, cx| p.save(window, cx));
                     })),
-            )
+            ))
             // Save As
-            .child(
+            .child(title_bar_control(
+                "md-title-save-as-hitbox",
                 Button::new("md-title-save-as")
                     .small()
                     .ghost()
@@ -1754,12 +1819,13 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let _ = md_save_as.update(cx, |p, cx| p.save_as(window, cx));
                     })),
-            )
+            ))
             // View-mode toggle (Rendered ↔ Source), moved up from the status
             // bar. Single Eye icon + .selected (lit in Source mode) + a tooltip
             // naming the target mode — same affordance pattern as the outline
             // toggle above.
-            .child(
+            .child(title_bar_control(
+                "md-title-view-mode-hitbox",
                 Button::new("md-title-view-mode")
                     .small()
                     .ghost()
@@ -1773,7 +1839,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = md_view_mode.update(cx, |p, cx| p.toggle_view_mode(cx));
                     })),
-            )
+            ))
             // Word count. Reads "N 字" normally, or "sel / total 字" with a
             // selection. Plain muted text label, no interaction.
             .child(
@@ -1916,7 +1982,8 @@ impl VerveApp {
             )
             .child(div().flex_1())
             // Add suite
-            .child(
+            .child(title_bar_control(
+                "autotest-title-add-suite-hitbox",
                 Button::new("autotest-title-add-suite")
                     .ghost()
                     .small()
@@ -1926,9 +1993,10 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = at_add_suite.update(cx, |p, cx| p.add_suite_from_title(cx));
                     })),
-            )
+            ))
             // Add case
-            .child(
+            .child(title_bar_control(
+                "autotest-title-add-case-hitbox",
                 Button::new("autotest-title-add-case")
                     .ghost()
                     .small()
@@ -1938,9 +2006,10 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = at_add_case.update(cx, |p, cx| p.add_case_from_title(cx));
                     })),
-            )
+            ))
             // Run
-            .child(
+            .child(title_bar_control(
+                "autotest-title-run-hitbox",
                 Button::new("autotest-title-run")
                     .primary()
                     .small()
@@ -1958,7 +2027,7 @@ impl VerveApp {
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let _ = at_run.update(cx, |p, cx| p.run_selected_from_title(cx));
                     })),
-            )
+            ))
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }

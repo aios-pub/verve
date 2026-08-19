@@ -17,29 +17,32 @@ actions!(
     ]
 );
 /// Center a window of the requested logical size on the primary display,
-/// clamping the size to the display's visible (work-area) bounds first.
+/// clamping the size to the display's visible (work-area) bounds first and
+/// centering within the work area (not the full screen), so the window
+/// never overlaps the Dock / taskbar on launch.
 ///
 /// Without the clamp, a fixed logical size (e.g. 1400×900) exceeds the
 /// physical screen on high-DPI Windows scales (150% → 2100×1350 physical
 /// pixels on a 1920×1080 panel), so the "centered" window lands partly
 /// off-screen / at the top-left corner and must be dragged into view.
 pub fn centered_window_bounds(width: Pixels, height: Pixels, cx: &App) -> Bounds<Pixels> {
-    let size = match cx.primary_display() {
-        Some(display) => {
-            let visible = display.visible_bounds();
-            // Small margin so the window never touches the screen edges;
-            // never shrink below a usable floor for tiny screens.
-            let margin = px(24.);
-            let floor = gpui::size(px(320.), px(240.));
-            let avail = gpui::size(
-                (visible.size.width - margin).max(floor.width),
-                (visible.size.height - margin).max(floor.height),
-            );
-            gpui::size(width.min(avail.width), height.min(avail.height))
-        }
-        None => gpui::size(width, height),
+    let Some(display) = cx.primary_display() else {
+        return Bounds::centered(None, gpui::size(width, height), cx);
     };
-    Bounds::centered(None, size, cx)
+    let visible = display.visible_bounds();
+    // Small margin so the window never touches the screen edges;
+    // never shrink below a usable floor for tiny screens.
+    let margin = px(24.);
+    let floor = gpui::size(px(320.), px(240.));
+    let avail = gpui::size(
+        (visible.size.width - margin).max(floor.width),
+        (visible.size.height - margin).max(floor.height),
+    );
+    let size = gpui::size(width.min(avail.width), height.min(avail.height));
+    // `Bounds::centered` centers on the full display bounds; when the Dock /
+    // taskbar sits at the bottom, that center lies below the work-area
+    // center and the window's bottom edge slightly overlaps it.
+    Bounds::centered_at(visible.center(), size)
 }
 
 /// Switch to one of the fixed shortcut views (payload indexes

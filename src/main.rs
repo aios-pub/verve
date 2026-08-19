@@ -129,7 +129,7 @@ fn main() {
 
         if is_first_run {
             log::info!("First run detected, showing bootstrap dialog");
-            let bounds = Bounds::centered(None, size(px(560.), px(560.)), cx);
+            let bounds = ui::app::centered_window_bounds(px(560.), px(560.), cx);
             cx.spawn(async move |cx| {
                 cx.open_window(
                     WindowOptions {
@@ -193,7 +193,7 @@ fn launch_main_app(cx: &mut App) {
     ]);
     cx.bind_keys(ui::app::rail_slot_keybindings("ctrl"));
 
-    let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+    let bounds = ui::app::centered_window_bounds(px(1400.), px(900.), cx);
 
     cx.spawn(async move |cx| {
         cx.open_window(

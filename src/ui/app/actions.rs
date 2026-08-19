@@ -119,7 +119,7 @@ impl VerveApp {
                 return;
             }
         }
-        let bounds = gpui::Bounds::centered(None, gpui::size(px(880.), px(640.)), cx);
+        let bounds = super::centered_window_bounds(px(880.), px(640.), cx);
         match cx.open_window(
             gpui::WindowOptions {
                 window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -135,7 +135,27 @@ impl VerveApp {
                 })
             },
         ) {
-            Ok(handle) => self.help_window = Some(handle),
+            Ok(handle) => {
+                // Clear the cached handle when the window is closed, so the
+                // next open doesn't try to activate a destroyed window
+                // (which logs "window not found" + invalid-hwnd errors on
+                // Windows before falling through to the reopen path).
+                let window_id = handle.window_id();
+                let weak = cx.entity().downgrade();
+                // NOTE: do NOT clear `help_close_subscription` inside this
+                // callback — dropping the Subscription while the observer set
+                // is iterating it re-enters retain() and overflows the stack.
+                // The one-shot callback is harmless to keep alive.
+                self.help_close_subscription =
+                    Some(cx.on_window_closed(move |cx, closed_id| {
+                        if closed_id == window_id {
+                            let _ = weak.update(cx, |this, _cx| {
+                                this.help_window = None;
+                            });
+                        }
+                    }));
+                self.help_window = Some(handle);
+            }
             Err(err) => log::error!("failed to open help-center window: {err:#}"),
         }
     }

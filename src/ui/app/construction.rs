@@ -234,6 +234,7 @@ impl VerveApp {
             pdf,
             relocate,
             help_window: None,
+            help_close_subscription: None,
             share_server,
             share_configs,
             share_host,

@@ -392,8 +392,11 @@ fn stage_worktree_tree(repo: &gix::Repository) -> Result<gix::hash::ObjectId> {
         };
         if let Ok(blob_id) = repo.write_blob(&bytes) {
             let mode = gix::object::tree::EntryKind::Blob;
-            let rel_str = rel_path.to_string_lossy();
-            if let Err(e) = editor.upsert(rel_str.as_ref(), mode, blob_id.detach()) {
+            // Tree paths must use '/' separators. On Windows `to_string_lossy`
+            // yields '\', which gix_validate rejects as an invalid filename
+            // when the tree is written (commit then fails on every sync).
+            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+            if let Err(e) = editor.upsert(rel_str.as_str(), mode, blob_id.detach()) {
                 log::warn!("git: upsert {:?} failed: {e}", rel_path);
             }
         }
@@ -444,6 +447,9 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> 
         ".gitignore",
         "hosts.staging",
         ".bootstrap_done",
+        // Tantivy search-index runtime lock — held by the app while running,
+        // so reading it fails (os error 33) and it must never be committed.
+        "tantivy-writer.lock",
     ];
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

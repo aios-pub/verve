@@ -131,11 +131,21 @@ impl GitState {
                     break;
                 }
                 let triggered = weak.update(cx, |this, cx| {
-                    if this.initialized && !this.is_busy() {
+                    // Only auto-sync when the user has actually configured git
+                    // in settings (auto_commit enabled). `initialized` alone is
+                    // not enough — the repo is auto-created on first run, which
+                    // would otherwise sync a repo the user never set up.
+                    if this.initialized && this.auto_commit && !this.is_busy() {
                         log::info!("自动同步定时器触发 → sync_async");
                         this.sync_async(None, cx);
                         true
                     } else {
+                        log::debug!(
+                            "自动同步跳过：initialized={} auto_commit={} busy={}",
+                            this.initialized,
+                            this.auto_commit,
+                            this.is_busy()
+                        );
                         false
                     }
                 });

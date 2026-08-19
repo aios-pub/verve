@@ -1,0 +1,10 @@
+# Windows: the main thread's stack reserve is 1MB by default (the MSVC
+# linker's /STACK default; Linux/macOS give the main thread 8MB). GPUI's
+# element trees recurse deeply during layout/prepaint/paint, and debug
+# builds carry large per-frame locals - panel render functions alone can
+# need tens of KB. stacker::maybe_grow only shields gpui's div machinery,
+# not view renders, so a big render frame deep in the tree hits the guard
+# page and aborts with a stack overflow (0xc000041d). Raise the reserve
+# to 16MB so Windows matches the other platforms' headroom.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:16777216"]

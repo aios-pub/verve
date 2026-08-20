@@ -1264,6 +1264,27 @@ impl RequestPanel {
         rows_sig(&self.params_rows, &mut sig);
         rows_sig(&self.headers_rows, &mut sig);
         rows_sig(&self.cookie_rows, &mut sig);
+        // Project-global rows are merged into the rendered command (see
+        // render_curl), so they must participate in the cache signature too —
+        // otherwise editing a global header would leave a stale preview.
+        let kvs_sig = |kvs: &[KeyValue], sig: &mut String| {
+            for kv in kvs {
+                sig.push_str(if kv.enabled { "1" } else { "0" });
+                sig.push('\u{1}');
+                sig.push_str(&kv.key);
+                sig.push('\u{1}');
+                sig.push_str(&kv.value);
+                sig.push('\u{1}');
+            }
+        };
+        {
+            let st = self.state.read(cx);
+            if let Some(project) = st.active_project() {
+                kvs_sig(&project.global_params, &mut sig);
+                kvs_sig(&project.global_headers, &mut sig);
+                kvs_sig(&project.global_cookies, &mut sig);
+            }
+        }
         sig.push_str(&format!("{:?}", self.body_type));
         sig.push('\u{1}');
         sig.push_str(
@@ -1351,7 +1372,24 @@ impl RequestPanel {
         }
         url = crate::http::normalize_url(&url, method);
 
-        let kv_pairs = |rows: &Vec<KvRow>| -> Vec<(String, String)> {
+        // Project-global params/headers/cookies merge into the request's own
+        // rows BEFORE substitution (mirrors the send path in `send()`), so the
+        // generated command carries them too: globals land first, a same-named
+        // request row overrides, and dynamic values like `{{$random}}` resolve
+        // only after the merge — otherwise the curl preview would silently
+        // drop every global row the real request sends.
+        let (global_params, global_headers, global_cookies) = {
+            let st = self.state.read(cx);
+            match st.active_project() {
+                Some(project) => (
+                    project.global_params.clone(),
+                    project.global_headers.clone(),
+                    project.global_cookies.clone(),
+                ),
+                None => (Vec::new(), Vec::new(), Vec::new()),
+            }
+        };
+        let row_kvs = |rows: &Vec<KvRow>| -> Vec<KeyValue> {
             rows.iter()
                 .filter(|row| row.enabled)
                 .filter_map(|row| {
@@ -1360,13 +1398,16 @@ impl RequestPanel {
                         return None;
                     }
                     let v = row.value.read(cx).value().to_string();
-                    Some((sub(&k), sub(&v)))
+                    Some(KeyValue::new(k, v))
                 })
                 .collect()
         };
-        let params = kv_pairs(&self.params_rows);
-        let headers = kv_pairs(&self.headers_rows);
-        let cookies = kv_pairs(&self.cookie_rows);
+        let sub_kvs = |kvs: &[KeyValue]| -> Vec<(String, String)> {
+            kvs.iter().map(|kv| (sub(&kv.key), sub(&kv.value))).collect()
+        };
+        let params = sub_kvs(&merge_kv(&global_params, &row_kvs(&self.params_rows)));
+        let headers = sub_kvs(&merge_kv(&global_headers, &row_kvs(&self.headers_rows)));
+        let cookies = sub_kvs(&merge_kv(&global_cookies, &row_kvs(&self.cookie_rows)));
 
         let auth = AuthConfig {
             auth_type: self.auth_type,
@@ -1399,7 +1440,7 @@ impl RequestPanel {
                 }
             }
             BodyType::Urlencoded => {
-                let pairs = kv_pairs(&self.body_rows);
+                let pairs = sub_kvs(&row_kvs(&self.body_rows));
                 if pairs.is_empty() {
                     CurlBody::None
                 } else {

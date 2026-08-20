@@ -2039,7 +2039,22 @@ impl ProjectTreePanel {
                     // so the copied command is runnable as-is, matching the
                     // request panel's curl tab.
                     let vars = request_effective_vars(self, &r, cx);
-                    let curl = build_curl(&r, &vars);
+                    // Project-global rows merge in like the real send path, so
+                    // globals (e.g. a requestid header carrying `{{$random}}`)
+                    // appear resolved in the copied command.
+                    let (global_params, global_headers, global_cookies) = {
+                        let st = self.state.read(cx);
+                        match st.active_project() {
+                            Some(project) => (
+                                project.global_params.clone(),
+                                project.global_headers.clone(),
+                                project.global_cookies.clone(),
+                            ),
+                            None => (Vec::new(), Vec::new(), Vec::new()),
+                        }
+                    };
+                    let curl =
+                        build_curl(&r, &vars, &global_params, &global_headers, &global_cookies);
                     self.copy_to_clipboard(curl, cx);
                     self.show_info("复制为 cURL", "已复制到剪贴板。", window, cx);
                 }
@@ -2168,15 +2183,28 @@ fn request_effective_vars(
 /// Build a `curl` command for a request, mirroring the real send path
 /// (`http::client::prepare`): variables are substituted against `vars`, query
 /// params are appended to the URL (never moved into a body), cookies collapse
-/// into a `Cookie` header, and bodies keep their Content-Type.
+/// into a `Cookie` header, and bodies keep their Content-Type. Project-global
+/// params/headers/cookies are merged into the request's own rows first
+/// (a same-named request row overrides), matching `request_panel`'s send
+/// path so the copied command sends what the app sends.
 fn build_curl(
     r: &crate::state::models::ApiRequest,
     vars: &std::collections::BTreeMap<String, String>,
+    global_params: &[crate::state::models::KeyValue],
+    global_headers: &[crate::state::models::KeyValue],
+    global_cookies: &[crate::state::models::KeyValue],
 ) -> String {
     use crate::http::curl::{CurlBody, CurlFormPart, CurlSpec};
-    use crate::state::models::{BodyType, KeyValue};
+    use crate::state::models::{merge_kv, BodyType, KeyValue};
 
     let sub = |s: &str| crate::http::variable::substitute(s, vars);
+
+    // Merge BEFORE substitution (mirrors the send path): globals apply unless
+    // a same-named request row overrides them; dynamic values like
+    // `{{$random}}` then resolve once, on the merged list.
+    let merged_params = merge_kv(global_params, &r.params);
+    let merged_headers = merge_kv(global_headers, &r.headers);
+    let merged_cookies = merge_kv(global_cookies, &r.cookies);
 
     // Path variables substitute into the URL at top priority (mirrors
     // prepare(): they override every other variable source).
@@ -2268,9 +2296,9 @@ fn build_curl(
     crate::http::curl::render(&CurlSpec {
         method: r.method,
         url,
-        params: kv_pairs(&r.params),
-        headers: kv_pairs(&r.headers),
-        cookies: kv_pairs(&r.cookies),
+        params: kv_pairs(&merged_params),
+        headers: kv_pairs(&merged_headers),
+        cookies: kv_pairs(&merged_cookies),
         auth,
         body,
     })
@@ -2400,3 +2428,96 @@ impl Focusable for ProjectTreePanel {
 
 impl EventEmitter<TreeEvent> for ProjectTreePanel {}
 impl EventEmitter<()> for ProjectTreePanel {}
+
+#[cfg(test)]
+mod tests {
+    // No `use super::*` here: it would pull gpui's re-exported `test`
+    // attribute macro into scope and shadow the built-in `#[test]`.
+    use super::build_curl;
+    use crate::state::models::{ApiRequest, KeyValue, RequestMethod};
+
+    fn ping_request() -> ApiRequest {
+        ApiRequest::new("t", RequestMethod::Get, "https://api.io/ping")
+    }
+
+    /// Global headers land in the curl command with `{{$random}}` resolved to
+    /// fresh digits, and a same-named request row overrides the global one —
+    /// mirroring the wire behavior of `request_panel`'s send path.
+    #[test]
+    fn build_curl_merges_global_headers_and_resolves_random() {
+        let mut r = ping_request();
+        r.headers.push(KeyValue::new("X-Own", "1"));
+        // Same name (any case) as the global — the request row must win.
+        r.headers.push(KeyValue::new("request", "own-value"));
+        let globals = vec![KeyValue::new("request", "{{$random}}")];
+
+        let out = build_curl(
+            &r,
+            &std::collections::BTreeMap::new(),
+            &[],
+            &globals,
+            &[],
+        );
+
+        assert!(out.contains("-H 'X-Own: 1'"), "{out}");
+        assert!(out.contains("-H 'request: own-value'"), "{out}");
+        assert!(!out.contains("{{$random}}"), "{out}");
+        assert_eq!(out.matches("-H 'request:").count(), 1, "{out}");
+    }
+
+    /// A global header value of `{{$random}}` alone resolves to 12 digits.
+    #[test]
+    fn build_curl_global_random_header_is_12_digits() {
+        let r = ping_request();
+        let globals = vec![KeyValue::new("request", "{{$random}}")];
+        let out = build_curl(
+            &r,
+            &std::collections::BTreeMap::new(),
+            &[],
+            &globals,
+            &[],
+        );
+
+        let header = out
+            .lines()
+            .find(|l| l.contains("-H 'request: "))
+            .unwrap_or_else(|| panic!("global header missing from curl: {out}"));
+        let value = header
+            .split("-H 'request: ")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .unwrap_or_default();
+        assert!(
+            value.len() == 12 && value.chars().all(|c| c.is_ascii_digit()),
+            "expected 12 random digits, got {value:?} in {out}"
+        );
+    }
+
+    /// Global params join the URL query and global cookies collapse into a
+    /// Cookie header, same as the send path.
+    #[test]
+    fn build_curl_global_params_and_cookies_merge() {
+        let r = ping_request();
+        let gp = vec![KeyValue::new("trace", "1")];
+        let gc = vec![KeyValue::new("sid", "abc")];
+        let out = build_curl(
+            &r,
+            &std::collections::BTreeMap::new(),
+            &gp,
+            &[],
+            &gc,
+        );
+        assert!(out.contains("trace=1"), "{out}");
+        assert!(out.contains("-H 'Cookie: sid=abc'"), "{out}");
+    }
+
+    /// Disabled global rows are dropped instead of half-merged.
+    #[test]
+    fn build_curl_disabled_global_row_is_dropped() {
+        let r = ping_request();
+        let mut kv = KeyValue::new("request", "{{$random}}");
+        kv.enabled = false;
+        let out = build_curl(&r, &std::collections::BTreeMap::new(), &[], &[kv], &[]);
+        assert!(!out.contains("request:"), "{out}");
+    }
+}

@@ -1082,6 +1082,39 @@ impl RequestPanel {
         self.pending_reload = true;
     }
 
+    /// Transform the Raw JSON body in place: pretty-print it, or — with
+    /// `simplify` — reduce every array to its first element (recursively,
+    /// same rule as the JSON 面板's 精简). Invalid or empty JSON is left
+    /// untouched; the editor already surfaces the parse error below itself.
+    /// `set_value` emits Change, which flows through the panel's normal
+    /// commit path, so the result persists to the model automatically.
+    pub fn transform_json_body(
+        &mut self,
+        simplify: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let raw = self.body_editor.read(cx).text().to_string();
+        if raw.trim().is_empty() {
+            return;
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+        if simplify {
+            value = crate::ui::json_panel::simplify(&value);
+        }
+        // Serializing a `Value` never fails; an empty string would only result
+        // from an empty document, which we already ruled out above.
+        let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
+        if pretty.is_empty() {
+            return;
+        }
+        self.body_editor
+            .update(cx, |s, cx| s.set_value(pretty, window, cx));
+        cx.notify();
+    }
+
     /// Render the Raw body as a visual field table (KvTable over
     /// `raw_visual_rows`). Uses persistent InputState entities so typing works
     /// normally — the rows are built once at reload and only re-synced from the

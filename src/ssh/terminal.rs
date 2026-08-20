@@ -344,37 +344,7 @@ impl TerminalView {
     /// the selection endpoint.
     fn selected_text(&self, rows: &[RowData]) -> Option<String> {
         let (a, h) = self.selection_anchor.zip(self.selection_head)?;
-        let (start, end) = if (a.row, a.col) <= (h.row, h.col) {
-            (a, h)
-        } else {
-            (h, a)
-        };
-        if start.row >= rows.len() {
-            return None;
-        }
-        let row_bytes = |r: &RowData, col: usize| -> usize {
-            r.prefix.get(col).copied().unwrap_or(r.text.len())
-        };
-        if start.row == end.row {
-            let r = &rows[start.row];
-            let b0 = row_bytes(r, start.col);
-            let b1 = row_bytes(r, end.col).max(b0);
-            return Some(r.text[b0..b1].to_string());
-        }
-        let mut out = String::new();
-        // The start row tail: from `start.col` to end-of-line.
-        let r0 = &rows[start.row];
-        out.push_str(&r0.text[row_bytes(r0, start.col)..]);
-        for row in (start.row + 1)..end.row.min(rows.len()) {
-            out.push('\n');
-            out.push_str(rows[row].text.trim_end());
-        }
-        if end.row < rows.len() {
-            out.push('\n');
-            let rn = &rows[end.row];
-            out.push_str(&rn.text[..row_bytes(rn, end.col)]);
-        }
-        Some(out)
+        selection_to_string(rows, a, h)
     }
 
     /// Read the raw characters of one **visible** row (0 = top of viewport)
@@ -914,6 +884,10 @@ struct RowData {
     /// bytes, so `prefix[c+1] == prefix[c]` for a spacer. Every value is on a
     /// char boundary, so it is safe to slice `text` with these offsets.
     prefix: Vec<usize>,
+    /// True when the grid line's last cell carries `WRAPLINE` — the terminal
+    /// auto-wrapped this row and the logical line continues on the next visual
+    /// row. Copy joins such rows without an intervening newline.
+    wrapped: bool,
 }
 
 /// Build a solid underline style colored with the run's foreground.
@@ -1077,7 +1051,80 @@ fn build_row(
         "terminal row TextRun lengths must sum to the text byte length"
     );
 
-    RowData { text, runs, prefix }
+    // A wrapped row's WRAPLINE flag sits on the last column's cell (set by
+    // `wrap_input` on the cursor cell right before it moves to the next line),
+    // so checking the final column is enough — no full-row scan needed.
+    let wrapped = num_cols > 0
+        && grid[alacritty_terminal::index::Point::new(
+            grid_line,
+            alacritty_terminal::index::Column(num_cols - 1),
+        )]
+        .flags
+        .contains(Flags::WRAPLINE);
+
+    RowData {
+        text,
+        runs,
+        prefix,
+        wrapped,
+    }
+}
+
+/// Assemble the copy text for a selection spanning the rendered `rows`, from
+/// `a`/`h` (order-agnostic; normalized to top-left → bottom-right).
+///
+/// Column→byte mapping uses each row's `prefix` map (NOT `col_to_byte`) so
+/// wide-char spacer columns — which contribute 0 bytes — are handled
+/// correctly; a raw char index would drift once a CJK/emoji glyph precedes
+/// the selection endpoint.
+///
+/// Copy semantics mirror the terminal's own selection copy
+/// (`alacritty_terminal::Term::bounds_to_string`): every grid row is padded
+/// with spaces to the full column width for rendering, and that padding is
+/// trimmed instead of being copied out as trailing spaces; rows the terminal
+/// visually wrapped (`wrapped`) are joined into one logical line with no
+/// newline, while real line breaks stay newlines.
+fn selection_to_string(rows: &[RowData], a: SelectionPoint, h: SelectionPoint) -> Option<String> {
+    let (start, end) = if (a.row, a.col) <= (h.row, h.col) {
+        (a, h)
+    } else {
+        (h, a)
+    };
+    if start.row >= rows.len() {
+        return None;
+    }
+    let row_bytes = |r: &RowData, col: usize| -> usize {
+        r.prefix.get(col).copied().unwrap_or(r.text.len())
+    };
+    if start.row == end.row {
+        let r = rows.get(start.row)?;
+        let b0 = row_bytes(r, start.col);
+        let b1 = row_bytes(r, end.col).max(b0);
+        return r.text.get(b0..b1).map(str::to_string);
+    }
+    let mut out = String::new();
+    // The start row tail: from `start.col` to the row's end, minus the
+    // right-edge grid padding.
+    let r0 = rows.get(start.row)?;
+    out.push_str(r0.text.get(row_bytes(r0, start.col)..)?.trim_end());
+    // Rows past a viewport resize may no longer exist; copy what's there.
+    let last_row = end.row.min(rows.len().saturating_sub(1));
+    let mut prev = r0;
+    for row_idx in (start.row + 1)..=last_row {
+        let r = rows.get(row_idx)?;
+        // A row whose predecessor was visually wrapped is a continuation
+        // of the same logical line — join it without a newline.
+        if !prev.wrapped {
+            out.push('\n');
+        }
+        if row_idx == end.row {
+            out.push_str(r.text.get(..row_bytes(r, end.col))?);
+        } else {
+            out.push_str(r.text.trim_end());
+        }
+        prev = r;
+    }
+    Some(out)
 }
 
 /// Given base runs covering `text_len` fully, return a new run list in which
@@ -1837,7 +1884,7 @@ mod tests {
     // recursion limit.
     use super::{
         apply_log_highlights, apply_selection, col_to_byte, color_to_hsla, contains_sequence,
-        slice_by_cols,
+        selection_to_string, slice_by_cols, RowData, SelectionPoint,
     };
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, TextRun};
@@ -2161,5 +2208,70 @@ mod tests {
         // Col past the end is clamped to the last cell.
         let chars: Vec<char> = "hi".chars().collect();
         assert_eq!(super::TerminalView::word_bounds(&chars, 99), (0, 2));
+    }
+
+    /// A test RowData with a per-char `prefix` map (one char per column).
+    fn copy_row(text: &str, wrapped: bool) -> RowData {
+        let mut prefix = vec![0usize];
+        let mut byte = 0usize;
+        for ch in text.chars() {
+            byte += ch.len_utf8();
+            prefix.push(byte);
+        }
+        RowData {
+            text: text.to_string(),
+            runs: Vec::new(),
+            prefix,
+            wrapped,
+        }
+    }
+
+    fn sel_point(row: usize, col: usize) -> SelectionPoint {
+        SelectionPoint { row, col }
+    }
+
+    /// Regression: a long command the terminal visually wrapped across rows
+    /// must copy back as ONE logical line (no inserted newlines) with the
+    /// row-end padding spaces stripped — not "part1   \npart2".
+    #[test]
+    fn copy_joins_wrapped_rows_without_newline_or_padding() {
+        // "echo hello w" wrapped onto row 1 ("orld"), which ends the line;
+        // trailing spaces are right-edge grid padding.
+        let rows = [
+            copy_row("echo hello w     ", true),
+            copy_row("orld continuation ", false),
+            copy_row("next line     ", false),
+        ];
+        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(2, 9)).unwrap();
+        assert_eq!(out, "echo hello world continuation\nnext line");
+    }
+
+    /// Regression: the START row's tail used to keep its full-width padding,
+    /// so a copied multi-line selection gained stray trailing spaces.
+    #[test]
+    fn copy_trims_padding_on_start_row_tail() {
+        let rows = [copy_row("first   ", false), copy_row("second", false)];
+        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(1, 6)).unwrap();
+        assert_eq!(out, "first\nsecond");
+    }
+
+    /// A single-row selection is exactly the columns the user picked — inner
+    /// spaces are kept, nothing is trimmed.
+    #[test]
+    fn copy_single_row_keeps_user_range_verbatim() {
+        let rows = [copy_row("abc def", false)];
+        let out = selection_to_string(&rows, sel_point(0, 2), sel_point(0, 5)).unwrap();
+        assert_eq!(out, "c d");
+    }
+
+    /// Selection endpoints past the end of the row list (viewport shrank
+    /// after a resize) copy what exists instead of panicking.
+    #[test]
+    fn copy_with_end_row_beyond_viewport_is_clamped() {
+        let rows = [copy_row("first", false), copy_row("second", false)];
+        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(5, 3)).unwrap();
+        assert_eq!(out, "first\nsecond");
+        // Selection starting entirely below the viewport → nothing to copy.
+        assert_eq!(selection_to_string(&rows, sel_point(9, 0), sel_point(9, 2)), None);
     }
 }

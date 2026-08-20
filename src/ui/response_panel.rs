@@ -16,6 +16,10 @@ use crate::state::{AppEvent, AppState};
 pub struct ResponsePanel {
     pub state: Entity<AppState>,
     pub body_view: Entity<InputState>,
+    /// Selectable/copyable text of the 实际请求 tab (the request that was
+    /// actually sent + the equivalent curl). Reconciled from the model during
+    /// render; see [`ResponsePanel::reconcile_actual_request`].
+    pub actual_view: Entity<InputState>,
     /// Pretty or raw body rendering.
     pub pretty: bool,
     /// Active response sub-tab.
@@ -107,11 +111,17 @@ impl ResponsePanel {
                 .code_editor("json")
                 .placeholder("响应体将在发送后显示。")
         });
+        let actual_view = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("text")
+                .placeholder("发送请求后，此处显示实际发送的请求（变量已替换）。")
+        });
         let sub = cx.subscribe(&state, Self::on_state_event);
         let focus_handle = cx.focus_handle();
         Self {
             state,
             body_view,
+            actual_view,
             pretty: true,
             active_tab: RespTab::Realtime,
             pending_refresh: false,
@@ -160,6 +170,23 @@ impl ResponsePanel {
             }
         }
         cx.notify();
+    }
+
+    /// Sync the 实际请求 editor with the model. The value is only rewritten
+    /// when it actually changed, so an existing selection/cursor inside the
+    /// tab survives re-renders.
+    fn reconcile_actual_request(
+        &mut self,
+        active_request: &Option<crate::state::models::ApiRequest>,
+        response: &Option<crate::state::models::Response>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = actual_request_text(active_request, response).unwrap_or_default();
+        if self.actual_view.read(cx).value().as_ref() != text {
+            self.actual_view
+                .update(cx, |s, cx| s.set_value(&text, window, cx));
+        }
     }
 
     /// Snapshot the active request's saved examples: success `(body, saved_at)`
@@ -647,7 +674,40 @@ impl Render for ResponsePanel {
                             .text_sm()
                             .child(size),
                     )
+                    // Wall-clock time the response was received (YYYY-MM-DD
+                    // HH:mm); absent for responses persisted before the field
+                    // existed and while a request is still in flight.
+                    .when_some(
+                        response
+                            .as_ref()
+                            .and_then(|r| r.received_at.clone())
+                            .filter(|t| !t.is_empty()),
+                        |bar, at| {
+                            bar.child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .text_sm()
+                                    .child(at),
+                            )
+                        },
+                    )
                     .child(div().flex_1())
+                    .when(self.active_tab == RespTab::ActualRequest, |bar| {
+                        bar.child(
+                            Button::new("copy-actual-request")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Copy)
+                                .label("复制")
+                                .tooltip("复制实际请求到剪贴板")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let text = this.actual_view.read(cx).value().to_string();
+                                    if !text.is_empty() {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                    }
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("pretty-toggle")
                             .ghost()
@@ -720,8 +780,22 @@ impl Render for ResponsePanel {
                             self.render_example_tab(&theme, cx).into_any_element()
                         }
                         RespTab::ActualRequest => {
-                            render_actual_request(&active_request, &response, &theme)
+                            self.reconcile_actual_request(&active_request, &response, window, cx);
+                            if actual_request_text(&active_request, &response).is_some() {
+                                Input::new(&self.actual_view)
+                                    .h_full()
+                                    .bordered(false)
+                                    .appearance(false)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_size(theme.mono_font_size)
+                                    .into_any_element()
+                            } else {
+                                empty_state(
+                                    "暂无请求信息。发送请求后，此处显示实际发送的请求（变量已替换）。",
+                                    &theme,
+                                )
                                 .into_any_element()
+                            }
                         }
                         RespTab::Console => render_console(&response, &theme).into_any_element(),
                     })
@@ -824,29 +898,24 @@ fn render_cookies(
     v_flex().w_full().gap_1().children(rows).into_any_element()
 }
 
-/// Render the actual-request tab. Prefers the post-`prepare()` snapshot
-/// stored on the response (variables substituted, query params appended,
-/// base_url joined) so the user sees exactly what went over the wire, plus
-/// an equivalent curl command. Falls back to approximating from the stored
-/// request model for entries captured before the snapshot existed.
-fn render_actual_request(
+/// Text shown in the 实际请求 tab: the post-`prepare()` truth recorded in the
+/// response (variables substituted, query params appended, base_url joined —
+/// request line + headers + body, then the equivalent curl), or — before the
+/// first send — an approximation from the authored model with variables
+/// unresolved. Returns `None` when there is no request to describe.
+fn actual_request_text(
     active_request: &Option<crate::state::models::ApiRequest>,
     response: &Option<crate::state::models::Response>,
-    theme: &gpui_component::Theme,
-) -> AnyElement {
+) -> Option<String> {
     if let Some(text) = response.as_ref().and_then(|r| r.actual_request.as_deref()) {
         let mut full = text.to_string();
         if let Some(curl) = response.as_ref().and_then(|r| r.actual_curl.as_deref()) {
             full.push_str("\n\n── 等效 cURL ──\n");
             full.push_str(curl);
         }
-        return code_block(&full, theme);
+        return Some(full);
     }
-    // Fallback: approximate from the authored model (no substitution).
-    let req = match active_request {
-        Some(r) => r,
-        None => return empty_state("暂无请求信息。发送请求后，此处显示实际发送的请求（变量已替换）。", theme),
-    };
+    let req = active_request.as_ref()?;
     let mut text = String::from("// 发送后将在此显示实际发送的请求；以下为请求定义（变量未替换）\n");
     text.push_str(&format!("{} {} {}\n", req.protocol, req.method, req.url));
     if !req.headers.is_empty() {
@@ -865,7 +934,7 @@ fn render_actual_request(
         text.push_str("\n[Body]\n");
         text.push_str(&req.body.raw);
     }
-    code_block(&text, theme)
+    Some(text)
 }
 
 /// Render the console tab: script logs embedded in the response body footer

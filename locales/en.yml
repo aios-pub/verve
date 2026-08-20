@@ -27,6 +27,8 @@ json:
   copy_success: Copied to clipboard
   copy_value_success: Value copied
   parsing: Parsing JSON…
+  delete_tip: Delete this property
+  deleted: Property deleted; input synced
 
 pdf:
   title: PDF Editor

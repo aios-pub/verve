@@ -130,7 +130,39 @@ impl RequestPanel {
                                                         this.body_visual_mode = true;
                                                         cx.notify();
                                                     })),
-                                            ),
+                                            )
+                                            // Built-in JSON actions for the code editor
+                                            // (the visual table has no raw text to format).
+                                            .when(!visual, |bar| {
+                                                bar.child(
+                                                    Button::new("body-json-format")
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .label("格式化")
+                                                        .tooltip("美化 JSON 缩进")
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.transform_json_body(
+                                                                    false, window, cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                )
+                                                .child(
+                                                    Button::new("body-json-simplify")
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .label("简化")
+                                                        .tooltip("每个数组仅保留首项（递归）")
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.transform_json_body(
+                                                                    true, window, cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                )
+                                            }),
                                     )
                                 })
                                 .child(if visual {

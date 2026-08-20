@@ -18,7 +18,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::{ActiveTheme, Sizable as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, IconName, Sizable as _, button::{Button, ButtonVariants as _}, h_flex,
+    v_flex,
+};
 
 /// Threshold above which a non-root container is rendered collapsed by default,
 /// so opening a 100k-element array never eagerly flattens the whole thing.
@@ -112,6 +115,11 @@ pub struct JsonPanel {
     expanded: HashSet<NodePath>,
     /// Debounce timer for input-driven formatting; reassigning cancels the prior task.
     format_timer: Option<Task<()>>,
+    /// True while WE write the left input ourselves (property deletion syncs
+    /// the trimmed JSON back). Suppresses the Change-triggered re-format —
+    /// the panel state is already consistent, and re-formatting would reset
+    /// the expansion state for no reason.
+    syncing_input: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -138,6 +146,12 @@ impl JsonPanel {
                 this.cancel_format_timer();
                 this.do_format(&raw, false, cx);
             } else if matches!(ev, InputEvent::Change) {
+                // Our own write-back (see `delete_path`) — the parsed value and
+                // rows are already in sync; skip the re-format.
+                if this.syncing_input {
+                    this.syncing_input = false;
+                    return;
+                }
                 let raw = input_clone.read(cx).value().to_string();
                 this.schedule_format(raw, cx);
             }
@@ -156,6 +170,7 @@ impl JsonPanel {
             list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             expanded: HashSet::new(),
             format_timer: None,
+            syncing_input: false,
             _subs: vec![input_sub],
         }
     }
@@ -228,6 +243,60 @@ impl JsonPanel {
     pub fn copy_value(&mut self, raw: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(raw));
         self.notice = Some(rust_i18n::t!("json.copy_value_success").to_string());
+        cx.notify();
+    }
+
+    /// Delete the property at `path` from the parsed document: mutate `value`,
+    /// repair the expansion set (drop the deleted subtree, shift later
+    /// siblings), rebuild the rows, and mirror the trimmed JSON back into the
+    /// left input so a later edit/blur can't resurrect deleted keys. Only
+    /// called outside compact mode, where row paths map 1:1 onto `value`
+    /// (`simplify` truncates arrays, which would shift indices).
+    pub fn delete_path(&mut self, path: &[u32], window: &mut Window, cx: &mut Context<Self>) {
+        if path.is_empty() {
+            return; // the root itself is not deletable
+        }
+        let Some(value) = self.value.as_mut() else {
+            return;
+        };
+        if !remove_at(value, path) {
+            return;
+        }
+
+        // Repair the expansion set for the new tree shape: paths inside the
+        // deleted subtree vanish; siblings after the removed index shift left.
+        let parent_len = path.len() - 1;
+        let removed_idx = path[parent_len];
+        let parent = &path[..parent_len];
+        self.expanded
+            .retain(|p| !(p.len() >= path.len() && p[..path.len()] == *path));
+        self.expanded = self
+            .expanded
+            .iter()
+            .map(|p| {
+                if p.len() > parent_len && p[..parent_len] == *parent && p[parent_len] > removed_idx
+                {
+                    let mut q = p.clone();
+                    q[parent_len] -= 1;
+                    q
+                } else {
+                    p.clone()
+                }
+            })
+            .collect();
+
+        self.rebuild_rows();
+        // Keep the copy-result cache in sync and mirror the trimmed document
+        // into the left input (serialization of a Value never fails).
+        let new_json = match self.value.as_ref() {
+            Some(v) => serde_json::to_string_pretty(v).unwrap_or_default(),
+            None => String::new(),
+        };
+        self.formatted_json = Some(new_json.clone());
+        self.syncing_input = true;
+        self.input
+            .update(cx, |s, cx| s.set_value(new_json, window, cx));
+        self.notice = Some(rust_i18n::t!("json.deleted").to_string());
         cx.notify();
     }
 
@@ -575,8 +644,9 @@ fn collect_all_paths(value: &serde_json::Value, path: &mut Vec<u32>, out: &mut H
 /// Recursively simplify a JSON value: every array keeps only its first element.
 /// Objects are walked key-by-key; primitives are returned as-is. Empty arrays stay empty.
 ///
-/// The result remains valid JSON, so it is safe to expose via copy.
-fn simplify(value: &serde_json::Value) -> serde_json::Value {
+/// The result remains valid JSON, so it is safe to expose via copy. Also used
+/// by the request panel's built-in body "简化" action.
+pub(crate) fn simplify(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
@@ -594,6 +664,54 @@ fn simplify(value: &serde_json::Value) -> serde_json::Value {
         }
         // Primitive: clone unchanged
         _ => value.clone(),
+    }
+}
+
+/// Remove the node at `path` (child-index path from the root, as carried by
+/// [`FlatRow::path`]) from `value`. Returns `false` when the path no longer
+/// resolves (stale row) or targets the root. Objects keep their remaining
+/// key order (`shift_remove`); arrays splice by index.
+fn remove_at(value: &mut serde_json::Value, path: &[u32]) -> bool {
+    let Some((&idx, rest)) = path.split_first() else {
+        return false;
+    };
+    let idx = idx as usize;
+    if rest.is_empty() {
+        match value {
+            serde_json::Value::Object(map) => {
+                // Keys are cloned up-front: `nth` borrows the map immutably,
+                // while removal needs it mutably.
+                let Some(key) = map.keys().nth(idx).cloned() else {
+                    return false;
+                };
+                map.shift_remove(&key);
+                true
+            }
+            serde_json::Value::Array(arr) => {
+                if idx < arr.len() {
+                    arr.remove(idx);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    } else {
+        let child = match value {
+            serde_json::Value::Object(map) => {
+                let Some(key) = map.keys().nth(idx).cloned() else {
+                    return false;
+                };
+                map.get_mut(&key)
+            }
+            serde_json::Value::Array(arr) => arr.get_mut(idx),
+            _ => None,
+        };
+        match child {
+            Some(c) => remove_at(c, rest),
+            None => false,
+        }
     }
 }
 
@@ -633,6 +751,9 @@ impl Render for JsonPanel {
         let muted_fg = theme.muted_foreground;
         let success = theme.success;
         let info = theme.info;
+        // Deletion is only meaningful when row paths map 1:1 onto the parsed
+        // value — compact mode's truncated arrays would shift indices.
+        let can_delete = !self.compact;
         // Captured into the (per-frame) list render closure so visible-row clicks can
         // toggle expansion on this panel via its weak handle.
         let weak = cx.weak_entity();
@@ -696,6 +817,7 @@ impl Render for JsonPanel {
                                 muted_fg,
                                 success,
                                 info,
+                                can_delete,
                                 weak.clone(),
                             )
                         })
@@ -762,6 +884,7 @@ fn render_row(
     muted_fg: Hsla,
     success: Hsla,
     info: Hsla,
+    can_delete: bool,
     weak: WeakEntity<JsonPanel>,
 ) -> AnyElement {
     let indent_width = 18.;
@@ -778,6 +901,11 @@ fn render_row(
         .font_family(mono_font.clone())
         .text_sm();
 
+    // The delete affordance sits at the row's right edge. Hidden for the root
+    // (the document itself) and whenever row paths don't map 1:1 onto the
+    // parsed value (compact mode truncates arrays, shifting indices).
+    let deletable = can_delete && !row.path.is_empty();
+
     match &row.kind {
         RowKind::Object {
             key,
@@ -790,14 +918,6 @@ fn render_row(
                 format!("{}{{...{}}}", key, count)
             };
             base.h(px(row_h))
-                .child(row_open(
-                    *expanded,
-                    chevron_size,
-                    muted_fg,
-                    fg,
-                    label,
-                    mono_font,
-                ))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -805,6 +925,23 @@ fn render_row(
                         let _ = weak.update(cx, |panel, cx| panel.toggle_path(&path, cx));
                     }
                 })
+                .child(
+                    h_flex()
+                        .items_center()
+                        .h_full()
+                        .w_full()
+                        .child(row_open(
+                            *expanded,
+                            chevron_size,
+                            muted_fg,
+                            fg,
+                            label,
+                            mono_font,
+                        ))
+                        .when(deletable, |flex| {
+                            flex.child(delete_button(ix, row, weak.clone()))
+                        }),
+                )
                 .into_any_element()
         }
         RowKind::Array {
@@ -818,14 +955,6 @@ fn render_row(
                 format!("{}[...{}]", key, count)
             };
             base.h(px(row_h))
-                .child(row_open(
-                    *expanded,
-                    chevron_size,
-                    muted_fg,
-                    fg,
-                    label,
-                    mono_font,
-                ))
                 .on_click({
                     let path = row.path.clone();
                     let weak = weak.clone();
@@ -833,6 +962,23 @@ fn render_row(
                         let _ = weak.update(cx, |panel, cx| panel.toggle_path(&path, cx));
                     }
                 })
+                .child(
+                    h_flex()
+                        .items_center()
+                        .h_full()
+                        .w_full()
+                        .child(row_open(
+                            *expanded,
+                            chevron_size,
+                            muted_fg,
+                            fg,
+                            label,
+                            mono_font,
+                        ))
+                        .when(deletable, |flex| {
+                            flex.child(delete_button(ix, row, weak.clone()))
+                        }),
+                )
                 .into_any_element()
         }
         RowKind::Primitive {
@@ -898,7 +1044,10 @@ fn render_row(
                                         panel.copy_value(raw_owned.clone(), cx)
                                     });
                                 }),
-                        ),
+                        )
+                        .when(deletable, |flex| {
+                            flex.child(delete_button(ix, row, weak.clone()))
+                        }),
                 )
                 .into_any_element()
         }
@@ -927,6 +1076,7 @@ fn render_row(
 }
 
 /// Build the leading chevron + label flex for an object/array open row.
+/// Flexes to fill the row so a trailing delete button can sit at the edge.
 fn row_open(
     expanded: bool,
     chevron_size: f32,
@@ -939,7 +1089,8 @@ fn row_open(
         .gap_0()
         .items_center()
         .h_full()
-        .w_full()
+        .flex_1()
+        .min_w_0()
         .child(
             div()
                 .w(px(chevron_size))
@@ -952,14 +1103,37 @@ fn row_open(
                 .text_xs()
                 .child(if expanded { "▼" } else { "▶" }),
         )
-        .child(div().text_color(fg).child(label))
+        .child(
+            div()
+                .min_w_0()
+                .text_color(fg)
+                .child(label),
+        )
+}
+
+/// The per-row delete button. Clicking removes `row.path`'s node from the
+/// document (see [`JsonPanel::delete_path`]). `stop_propagation` keeps the
+/// parent row's expand/collapse on_click from also firing.
+fn delete_button(ix: usize, row: &FlatRow, weak: WeakEntity<JsonPanel>) -> Button {
+    Button::new(("json-del", ix))
+        .ghost()
+        .xsmall()
+        .icon(IconName::Delete)
+        .tooltip(rust_i18n::t!("json.delete_tip").to_string())
+        .on_click({
+            let path = row.path.clone();
+            move |_ev, window, cx| {
+                cx.stop_propagation();
+                let _ = weak.update(cx, |panel, cx| panel.delete_path(&path, window, cx));
+            }
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        COLLAPSE_THRESHOLD, FlatRow, RowKind, collect_all_paths, flatten, seed_default_expanded,
-        simplify,
+        COLLAPSE_THRESHOLD, FlatRow, RowKind, collect_all_paths, flatten, remove_at,
+        seed_default_expanded, simplify,
     };
     use serde_json::json;
     use std::collections::HashSet;
@@ -1092,6 +1266,34 @@ mod tests {
         let labels = flat_all(&json!({"a": [], "b": {}}));
         // "a" is not the last child, so its empty array's ']' keeps a trailing comma.
         assert_eq!(labels, vec!["{", "\"a\": [", "],", "\"b\": {", "}", "}"]);
+    }
+
+    #[test]
+    fn remove_at_object_property_keeps_remaining_order() {
+        let mut v = json!({"a": 1, "b": 2, "c": 3});
+        assert!(remove_at(&mut v, &[1])); // "b"
+        assert_eq!(v, json!({"a": 1, "c": 3}));
+    }
+
+    #[test]
+    fn remove_at_nested_path_and_array_splice() {
+        let mut v = json!({"list": [10, 20, 30], "keep": true});
+        assert!(remove_at(&mut v, &[0, 1])); // "list"[1] → 20
+        assert_eq!(v, json!({"list": [10, 30], "keep": true}));
+        // The whole nested container can go too.
+        assert!(remove_at(&mut v, &[0]));
+        assert_eq!(v, json!({"keep": true}));
+    }
+
+    #[test]
+    fn remove_at_rejects_root_and_stale_paths() {
+        let mut v = json!({"a": 1});
+        assert!(!remove_at(&mut v, &[])); // root is not deletable
+        assert!(!remove_at(&mut v, &[7])); // stale object index
+        let mut arr = json!([1]);
+        assert!(!remove_at(&mut arr, &[3])); // stale array index
+        assert!(!remove_at(&mut arr, &[0, 0])); // primitive has no children
+        assert_eq!(arr, json!([1])); // unchanged
     }
 
     #[test]

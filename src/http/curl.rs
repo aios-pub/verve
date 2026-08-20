@@ -122,8 +122,11 @@ pub fn render(spec: &CurlSpec) -> String {
         _ => {}
     }
 
-    // --- Body. `--data-raw` (not `-d`) so a body starting with `@` is sent
-    //     literally instead of being read as a file. ---
+    // --- Body. `-d` (not `--data-raw`) so the command works on old curl
+    //     versions that predate `--data-raw` (added in 7.43). Trade-off
+    //     accepted: `-d` reads a leading `@` as a filename and strips CR/LF
+    //     — harmless for the JSON bodies this app emits (newlines are
+    //     insignificant whitespace). ---
     match &spec.body {
         CurlBody::None => {}
         CurlBody::Raw { text, content_type } => {
@@ -133,7 +136,7 @@ pub fn render(spec: &CurlSpec) -> String {
                     shell_quote(&format!("Content-Type: {content_type}"))
                 ));
             }
-            parts.push(format!("--data-raw {}", shell_quote(text)));
+            parts.push(format!("-d {}", shell_quote(text)));
         }
         // Empty pair/form lists render nothing (guards against trailing
         // empty kv rows producing `-d ''`).
@@ -144,7 +147,7 @@ pub fn render(spec: &CurlSpec) -> String {
                     shell_quote("Content-Type: application/x-www-form-urlencoded")
                 ));
             }
-            parts.push(format!("--data-raw {}", shell_quote(&encode_form_pairs(pairs))));
+            parts.push(format!("-d {}", shell_quote(&encode_form_pairs(pairs))));
         }
         CurlBody::Form(items) if !items.is_empty() => {
             for item in items {
@@ -248,9 +251,9 @@ mod tests {
             content_type: "application/json".into(),
         };
         let out = render(&s);
-        // Without -X GET, curl would turn a --data-raw request into POST.
+        // Without -X GET, curl would turn a -d request into POST.
         assert!(out.contains("-X GET"), "{out}");
-        assert!(out.contains("--data-raw '{\"a\":1}'"), "{out}");
+        assert!(out.contains("-d '{\"a\":1}'"), "{out}");
         assert!(out.contains("Content-Type: application/json"), "{out}");
     }
 
@@ -289,11 +292,25 @@ mod tests {
         let mut s = spec(RequestMethod::Get, "https://api.io/x");
         s.body = CurlBody::Urlencoded(Vec::new());
         let out = render(&s);
-        assert!(!out.contains("--data-raw"), "{out}");
+        assert!(!out.contains("-d"), "no -d without a body: {out}");
         assert!(
             !out.contains("x-www-form-urlencoded"),
             "no CT without a body: {out}"
         );
+    }
+
+    /// Old curl versions predate `--data-raw` (added in 7.43) — bodies must be
+    /// emitted with the long-supported `-d`.
+    #[test]
+    fn body_uses_portable_dash_d_flag() {
+        let mut s = spec(RequestMethod::Post, "https://api.io/x");
+        s.body = CurlBody::Raw {
+            text: "{\"a\":1}".into(),
+            content_type: "application/json".into(),
+        };
+        let out = render(&s);
+        assert!(out.contains("\n  -d '{\"a\":1}'"), "{out}");
+        assert!(!out.contains("--data-raw"), "{out}");
     }
 
     #[test]
@@ -304,7 +321,7 @@ mod tests {
             content_type: "text/plain".into(),
         };
         let out = render(&s);
-        assert!(out.contains("--data-raw 'it'\\''s'"), "{out}");
+        assert!(out.contains("-d 'it'\\''s'"), "{out}");
     }
 
     #[test]

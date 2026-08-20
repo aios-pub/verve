@@ -721,6 +721,20 @@ pub struct Response {
     /// The same actually-sent request as an executable curl command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual_curl: Option<String>,
+    /// Local wall-clock time this response was received, formatted
+    /// `YYYY-MM-DD HH:mm` (see [`Response::now_stamp`]). Shown in the response
+    /// panel status bar; responses persisted before this field existed show
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<String>,
+}
+
+impl Response {
+    /// Current local time as `YYYY-MM-DD HH:mm`, the format shown for
+    /// `received_at` in the response panel status bar.
+    pub fn now_stamp() -> String {
+        chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+    }
 }
 
 /// A saved response example, stored on the request for the "响应示例" tab.

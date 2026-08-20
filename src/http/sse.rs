@@ -193,6 +193,7 @@ pub fn stream(
             streaming: false,
             actual_request: None,
             actual_curl: None,
+            received_at: Some(Response::now_stamp()),
         })
     }
     .boxed()

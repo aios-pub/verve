@@ -559,6 +559,7 @@ pub async fn execute(
                 streaming: false,
                 actual_request: None,
                 actual_curl: None,
+                received_at: Some(Response::now_stamp()),
             };
         }
     };
@@ -606,6 +607,7 @@ pub async fn execute(
         streaming: false,
         actual_request: None,
         actual_curl: None,
+        received_at: Some(Response::now_stamp()),
     }
 }
 
@@ -647,7 +649,7 @@ mod tests {
         assert!(out.contains("-H 'Authorization: Bearer tok'"), "{out}");
         // Content-Type already present → not injected twice.
         assert_eq!(out.matches("Content-Type").count(), 1, "{out}");
-        assert!(out.contains("--data-raw '{\"a\":1}'"), "{out}");
+        assert!(out.contains("-d '{\"a\":1}'"), "{out}");
     }
 
     #[test]
@@ -655,7 +657,7 @@ mod tests {
         let mut p = prepared();
         p.body = Vec::new();
         let out = p.to_curl();
-        assert!(!out.contains("--data-raw"), "{out}");
+        assert!(!out.contains("-d"), "{out}");
         let text = p.request_text();
         assert!(!text.contains("[Body]"), "{text}");
     }

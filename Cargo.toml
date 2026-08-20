@@ -126,7 +126,9 @@ qrcode = "0.14"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: JSON 面板按索引删除对象属性时需要 Map 保序（shift_remove）。
+# 该特性此前由依赖传递启用，这里显式声明以免依赖变化后悄悄丢失。
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 smol = "2"
 uuid = { version = "1", features = ["v4", "v7"] }

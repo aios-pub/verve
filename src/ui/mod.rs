@@ -1,5 +1,8 @@
 //! UI layer: panels, the reusable kv table, and the workspace shell.
 
+pub mod ai_markdown;
+pub mod ai_panel;
+pub mod ai_provider_dialog;
 pub mod app;
 pub mod autotest_panel;
 pub mod bootstrap_dialog;

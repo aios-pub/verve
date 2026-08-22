@@ -5,7 +5,7 @@
 use super::SideView;
 use super::{
     CloseFile, NewFile, OpenHelpCenter, OpenMarkdownFile, OpenMarkdownFileNewTab, SaveWorkspace,
-    SelectRailSlot, VerveApp,
+    SelectRailSlot, ToggleAiPanel, VerveApp,
 };
 use gpui::{img, *};
 use gpui_component::ActiveTheme as _;
@@ -104,6 +104,26 @@ impl VerveApp {
         cx: &mut Context<Self>,
     ) {
         self.open_help_center(cx);
+    }
+
+    /// cmd/ctrl-j — toggle the floating AI assistant panel from anywhere.
+    /// Minimized state restores instead of closing.
+    pub(super) fn on_toggle_ai_panel(
+        &mut self,
+        _: &ToggleAiPanel,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ai.update(cx, |p, cx| {
+            if !p.open {
+                p.open(cx);
+            } else if p.minimized {
+                p.minimized = false;
+                cx.notify();
+            } else {
+                p.close(cx);
+            }
+        });
     }
 
     /// Open the help-center window, or activate the already-open one. A

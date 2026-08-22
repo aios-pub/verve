@@ -94,6 +94,43 @@ fn workspace_path(dir: &Path) -> PathBuf {
     dir.join("workspace.json")
 }
 
+/// Absolute path of the workspace file (None if the data dir is unavailable).
+pub fn workspace_file() -> Option<PathBuf> {
+    data_dir().ok().map(|d| workspace_path(&d))
+}
+
+/// Copy `workspace.json` → `workspace.json.bak` before an AI-driven change.
+/// Returns the backup path, or None when there is nothing to back up yet.
+pub fn backup_workspace_file() -> Option<PathBuf> {
+    let src = workspace_file()?;
+    if !src.exists() {
+        return None;
+    }
+    let dst = src.with_extension("json.bak");
+    std::fs::copy(&src, &dst).ok().map(|_| dst)
+}
+
+/// Parse-check the persisted workspace file (JSON round-trip guard).
+pub fn validate_workspace_file() -> Result<(), String> {
+    let path = workspace_file().ok_or("数据目录不可用")?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
+    serde_json::from_str::<WorkspaceData>(&text)
+        .map_err(|e| format!("workspace.json 解析失败: {e}"))
+        .map(|_| ())
+}
+
+/// Restore `workspace.json` from the `.bak` backup.
+pub fn restore_workspace_backup() -> Result<(), String> {
+    let path = workspace_file().ok_or("数据目录不可用")?;
+    let bak = path.with_extension("json.bak");
+    if !bak.exists() {
+        return Err("备份不存在".into());
+    }
+    std::fs::copy(&bak, &path)
+        .map_err(|e| format!("恢复失败: {e}"))
+        .map(|_| ())
+}
+
 /// Load the workspace from disk, or return the demo workspace on first run /
 /// when the file is missing or unreadable.
 pub fn load_or_default() -> WorkspaceData {
@@ -200,7 +237,7 @@ pub fn set_active_workspace(id: &str) {
 
 /// The `.gitignore` content excluding cross-branch / non-data / machine-local files from git.
 /// layout.json is now tracked (shared settings); layout.local.json contains machine-specific panel sizes.
-const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\nssh_vault.bin\ndevice.key\n.verve-askpass.sh\nexports/\nhosts.staging\nnotes.index/\nmedia/\n.bootstrap_done\n";
+const GITIGNORE: &str = "workspaces.json\nlayout.local.json\nshares.json\nssh_hosts.json\ndocker_hosts.json\ndocker_active.json\nkube_config.yaml\nkube_clusters.json\nssh_vault.bin\ndevice.key\n.verve-askpass.sh\nexports/\nhosts.staging\nnotes.index/\nmedia/\nai_providers.json\n.bootstrap_done\n";
 
 /// Ensure `~/.verve/.gitignore` exists with the right exclusions. Called once
 /// when the git repo is initialised so cross-branch files don't leak into
@@ -222,7 +259,8 @@ pub fn ensure_gitignore() {
                 || !existing.contains("ssh_hosts.json")
                 || !existing.contains("docker_hosts.json")
                 || !existing.contains("kube_config.yaml")
-                || !existing.contains("notes.index/");
+                || !existing.contains("notes.index/")
+                || !existing.contains("ai_providers.json");
             // The media-config ignore line must match the current git_sync state.
             let media_mismatch =
                 media_config_local_only != existing.contains("media_storage.toml");
@@ -370,6 +408,38 @@ pub struct PanelLayout {
     /// 2 = save failure examples (自动保存到失败示例).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autosave_examples: Option<u8>,
+    /// Floating AI panel geometry [x, y, w, h] in px.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_float: Option<[f32; 4]>,
+    /// Whether the floating AI panel is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_float_open: Option<bool>,
+}
+
+/// Default floating AI panel geometry (right-bottom-ish default position).
+pub const AI_FLOAT_DEFAULT: ([f32; 4], bool) = ([880.0, 140.0, 430.0, 560.0], false);
+
+/// Load the floating AI panel geometry + open flag.
+pub fn load_ai_float() -> ([f32; 4], bool) {
+    match load_layout() {
+        Some(l) => (l.ai_float.unwrap_or(AI_FLOAT_DEFAULT.0), l.ai_float_open.unwrap_or(AI_FLOAT_DEFAULT.1)),
+        None => AI_FLOAT_DEFAULT,
+    }
+}
+
+/// Persist the floating AI panel geometry + open flag.
+pub fn save_ai_float(geom: [f32; 4], open: bool) {
+    if let Some(mut layout) = load_layout() {
+        layout.ai_float = Some(geom);
+        layout.ai_float_open = Some(open);
+        let _ = save_layout(&layout);
+    }
+}
+
+/// Persist only the open flag.
+pub fn save_ai_float_open(open: bool) {
+    let (geom, _) = load_ai_float();
+    save_ai_float(geom, open);
 }
 
 /// After-send autosave mode for response examples.

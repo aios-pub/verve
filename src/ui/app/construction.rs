@@ -7,6 +7,7 @@ use crate::git::GitState;
 use crate::share::models::ShareScope;
 use crate::share::server::{self, ShareServer};
 use crate::state::{AppEvent, AppState};
+use crate::ui::ai_panel::{AiPanel, AiPanelGlobal};
 use crate::ui::autotest_panel::AutoTestPanel;
 use crate::ui::console_panel::{ConsoleEvent, ConsolePanel};
 use crate::ui::docker_panel::DockerPanel;
@@ -42,6 +43,9 @@ impl VerveApp {
         let response = cx.new(|cx| ResponsePanel::new(state.clone(), window, cx));
         let console = cx.new(|cx| ConsolePanel::new(state.clone(), cx));
         let mock_console = cx.new(|cx| MockConsolePanel::new(state.clone(), cx));
+        let ai = cx.new(|cx| AiPanel::new(state.clone(), window, cx));
+        let ai_global = AiPanelGlobal(ai.downgrade());
+        cx.set_global(ai_global);
 
         // Environment switcher.
         let env_names: Vec<String> = state
@@ -218,6 +222,7 @@ impl VerveApp {
             response,
             console,
             mock_console,
+            ai,
             git,
             project_manage,
             share,

@@ -33,6 +33,8 @@ pub enum SettingsKind {
     Environments,
     /// The general settings page (home view, etc.).
     General,
+    /// The AI providers / assistant-behaviour page.
+    Ai,
 }
 
 /// A selectable section in the settings window's secondary nav.
@@ -52,6 +54,8 @@ pub enum SettingsSection {
     About,
     /// Media storage (local + S3) for note images and videos.
     Media,
+    /// AI providers (OpenAI-compatible) and assistant behaviour.
+    Ai,
 }
 
 impl SettingsSection {
@@ -64,6 +68,7 @@ impl SettingsSection {
             SettingsSection::Shortcuts => rust_i18n::t!("settings.shortcuts").to_string(),
             SettingsSection::About => rust_i18n::t!("settings.about").to_string(),
             SettingsSection::Media => rust_i18n::t!("settings.media.title").to_string(),
+            SettingsSection::Ai => rust_i18n::t!("settings.ai.title").to_string(),
         }
     }
 }
@@ -123,9 +128,19 @@ pub struct SettingsWindow {
     media_inputs: MediaInputs,
     /// Last S3 connectivity-test result (Idle / Testing / Ok / Err).
     media_test: MediaTestState,
+    /// AI global: max agent loop iterations (1-100).
+    ai_iterations_input: Entity<InputState>,
+    /// AI global: max 429 rate-limit retries (0-100, stepped backoff).
+    ai_retries_input: Entity<InputState>,
+    /// AI global: default agent mode dropdown.
+    ai_mode_select: Entity<SelectState<Vec<String>>>,
+    /// "Add provider" preset dropdown.
+    ai_preset_select: Entity<SelectState<Vec<String>>>,
     _subs: Vec<gpui::Subscription>,
 }
 
+/// Stable `InputState`/`SelectState` entities for one AI provider card.
+/// Persisted on change via `SettingsWindow::on_ai_provider_input_change`.
 /// State of the S3 "Test connection" button.
 #[derive(Clone, Debug, Default)]
 enum MediaTestState {
@@ -163,6 +178,7 @@ impl SettingsWindow {
         let active_section = match kind {
             SettingsKind::Environments => SettingsSection::Environments,
             SettingsKind::General => SettingsSection::General,
+            SettingsKind::Ai => SettingsSection::Ai,
         };
         let home_view = persistence::load_layout()
             .and_then(|l| l.home_view.as_deref().map(SideView::parse))
@@ -266,6 +282,49 @@ impl SettingsWindow {
         .map(|inp| cx.subscribe(inp, Self::on_media_input_change))
         .collect();
 
+        // AI settings inputs — global fields + provider cards reconciled
+        // against ai_providers.json.
+        let ai_cfg = crate::ai::config::load_ai_settings();
+        let ai_iterations_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(ai_cfg.clamped_iterations().to_string())
+        });
+        let ai_retries_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(ai_cfg.clamped_rate_retries().to_string())
+        });
+        let ai_mode_options = vec![
+            rust_i18n::t!("settings.ai.mode_plan").to_string(),
+            rust_i18n::t!("settings.ai.mode_full").to_string(),
+        ];
+        let ai_mode_idx = match ai_cfg.agent_mode {
+            crate::ai::config::AgentMode::FullAccess => 1,
+            crate::ai::config::AgentMode::Plan => 0,
+        };
+        let ai_mode_select = cx.new(|cx| {
+            SelectState::new(
+                ai_mode_options,
+                Some(gpui_component::IndexPath::new(ai_mode_idx)),
+                window,
+                cx,
+            )
+        });
+        let ai_preset_options = crate::ai::config::presets()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>();
+        let ai_preset_select = cx.new(|cx| {
+            SelectState::new(
+                ai_preset_options,
+                Some(gpui_component::IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let sub_ai_iters = cx.subscribe(&ai_iterations_input, Self::on_ai_global_input_change);
+        let sub_ai_retries = cx.subscribe(&ai_retries_input, Self::on_ai_global_input_change);
+        let sub_ai_mode = cx.subscribe(&ai_mode_select, Self::on_ai_mode_change);
+
         let cur_locale = rust_i18n::locale().to_string();
         let lang_options: Vec<String> = LANGUAGES
             .iter()
@@ -326,12 +385,19 @@ impl SettingsWindow {
             remote_address_input,
             media_inputs,
             media_test: MediaTestState::Idle,
+            ai_iterations_input,
+            ai_retries_input,
+            ai_mode_select,
+            ai_preset_select,
             editing_shortcut: None,
             pending_keystroke: None,
             shortcut_draft: crate::state::persistence::load_shortcuts(),
             _subs: {
                 let mut v = vec![sub_home, sub_sync, sub_lang, sub_addr, sub_autosave];
                 v.extend(media_subs);
+                v.push(sub_ai_iters);
+                v.push(sub_ai_retries);
+                v.push(sub_ai_mode);
                 v
             },
         }
@@ -511,6 +577,266 @@ impl SettingsWindow {
         if changed {
             let _ = crate::media::config::save_media_config(&cfg);
         }
+    }
+
+    // -- AI section ---------------------------------------------------------
+
+    /// Load → mutate → save `ai_providers.json` in one step.
+    fn update_ai_settings(cx: &mut Context<Self>, f: impl FnOnce(&mut crate::ai::config::AiSettings)) {
+        let mut s = crate::ai::config::load_ai_settings();
+        f(&mut s);
+        if let Err(e) = crate::ai::config::save_ai_settings(&s) {
+            log::error!("save ai settings: {e}");
+        }
+        cx.notify();
+    }
+
+    /// Create the input entities for one provider card.
+    fn on_ai_global_input_change(
+        &mut self,
+        src: Entity<InputState>,
+        ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(ev, InputEvent::Change | InputEvent::Blur) {
+            return;
+        }
+        let val = src.read(cx).value().trim().to_string();
+        if src == self.ai_iterations_input {
+            let n = val.parse::<usize>().unwrap_or(50);
+            Self::update_ai_settings(cx, |s| {
+                s.max_agent_iterations = n.clamp(1, 100);
+            });
+        } else if src == self.ai_retries_input {
+            let n = val.parse::<usize>().unwrap_or(20);
+            Self::update_ai_settings(cx, |s| {
+                s.max_rate_limit_retries = n.clamp(0, 100);
+            });
+        }
+    }
+
+    /// Persist the default agent-mode dropdown.
+    fn on_ai_mode_change(
+        &mut self,
+        src: Entity<SelectState<Vec<String>>>,
+        _ev: &SelectEvent<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(idx) = src.read(cx).selected_index(cx) else {
+            return;
+        };
+        let mode = match idx.row {
+            1 => crate::ai::config::AgentMode::FullAccess,
+            _ => crate::ai::config::AgentMode::Plan,
+        };
+        Self::update_ai_settings(cx, |s| s.agent_mode = mode);
+    }
+
+    /// Persist one provider-card text field. Dispatches by entity identity.
+    fn add_ai_provider(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let preset_idx = self
+            .ai_preset_select
+            .read(cx)
+            .selected_index(cx)
+            .map(|i| i.row)
+            .unwrap_or(0);
+        let Some(preset) = crate::ai::config::presets().get(preset_idx) else {
+            return;
+        };
+        let provider = crate::ai::config::AiProviderConfig::from_preset(preset);
+        let id = provider.id.clone();
+        let is_first = crate::ai::config::load_ai_settings()
+            .providers
+            .is_empty();
+        Self::update_ai_settings(cx, |s| {
+            s.providers.push(provider);
+            if is_first || s.active_provider_id.is_none() {
+                s.active_provider_id = Some(id.clone());
+            }
+        });
+        // Jump straight into the edit dialog so the key/model get filled.
+        let settings = crate::ai::config::load_ai_settings();
+        if let Some(p) = settings.providers.iter().find(|p| p.id == id) {
+            crate::ui::ai_provider_dialog::AiProviderDialog::open(
+                Some(p),
+                settings.active_provider_id.as_deref(),
+                cx,
+            );
+        }
+    }
+
+    /// Delete a provider (and its vault key). Keeps another provider active.
+    fn set_ai_active_provider(&mut self, id: &str, cx: &mut Context<Self>) {
+        Self::update_ai_settings(cx, |s| {
+            s.active_provider_id = Some(id.to_string());
+        });
+    }
+
+    /// Toggle a provider bool flag (enabled / vision / tools).
+    fn render_ai_section(
+        &mut self,
+        _window: &mut Window,
+        theme: &gpui_component::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let muted = theme.muted_foreground;
+        let settings = crate::ai::config::load_ai_settings();
+        let active_id = settings.active_provider_id.clone();
+
+        let section = v_flex()
+            .size_full()
+            .id("settings-ai-scroll")
+            .overflow_y_scroll()
+            .p_6()
+            .gap_6()
+            // ---- Global behaviour card ----
+            .child(media_card(
+                rust_i18n::t!("settings.ai.card_global").to_string(),
+                rust_i18n::t!("settings.ai.card_global_desc").to_string(),
+                muted,
+                v_flex()
+                    .gap_3()
+                    .child(media_field(&self.ai_iterations_input, "最大循环次数（1-100）", muted))
+                    .child(media_field(
+                        &self.ai_retries_input,
+                        "429 限流最大重试次数（每 10s 重试一次，0-100）",
+                        muted,
+                    ))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .w(px(340.))
+                            .child(div().text_sm().text_color(muted).child("默认执行模式"))
+                            .child(
+                                div().w(px(340.)).child(
+                                    Select::new(&self.ai_mode_select).small().appearance(true),
+                                ),
+                            ),
+                    )
+                    .into_any_element(),
+            ))
+            // ---- Providers list card ----
+            .child(media_card(
+                rust_i18n::t!("settings.ai.card_providers").to_string(),
+                rust_i18n::t!("settings.ai.card_providers_desc").to_string(),
+                muted,
+                v_flex()
+                    .gap_2()
+                    // Add-from-preset row.
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .w(px(420.))
+                            .child(
+                                div().flex_1().child(
+                                    Select::new(&self.ai_preset_select).small().appearance(true),
+                                ),
+                            )
+                            .child(
+                                Button::new("ai-add-provider")
+                                    .primary()
+                                    .small()
+                                    .label(rust_i18n::t!("settings.ai.add").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.add_ai_provider(window, cx);
+                                    })),
+                            ),
+                    )
+                    .children(if settings.providers.is_empty() {
+                        vec![div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(rust_i18n::t!("settings.ai.empty").to_string())
+                            .into_any_element()]
+                    } else {
+                        Vec::new()
+                    })
+                    // Compact provider rows: click to edit in a dialog.
+                    .children(settings.providers.iter().map(|p| {
+                        let id = p.id.clone();
+                        let is_active = active_id.as_deref() == Some(p.id.as_str());
+                        let theme_c = theme.clone();
+                        let name_model = format!("{} · {}", p.name, p.model);
+                        let (dot_color, dim) = if p.enabled {
+                            (theme.accent, 1.0)
+                        } else {
+                            (theme.muted_foreground, 0.55)
+                        };
+                        h_flex()
+                            .id(format!("ai-provider-row-{}", p.id))
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .opacity(dim)
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(theme_c.muted))
+                            .gap_2()
+                            .items_center()
+                            .child(div().size(px(8.)).rounded_full().bg(dot_color))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .child(name_model),
+                            )
+                            .child(if p.api_key_set {
+                                div().text_xs().text_color(muted).child("🔑")
+                            } else {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.danger)
+                                    .child("未设密钥")
+                            })
+                            .child(if is_active {
+                                div()
+                                    .text_xs()
+                                    .px_1p5()
+                                    .py_0p5()
+                                    .rounded(px(4.))
+                                    .bg(theme.accent.opacity(0.15))
+                                    .child("✓ 默认")
+                            } else {
+                                div().text_xs().text_color(muted).child("　")
+                            })
+                            .when(!is_active, |row| {
+                                row.child(
+                                    div()
+                                        .id(format!("ai-row-default-{}", p.id))
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .cursor_pointer()
+                                        .child("设为默认")
+                                        .on_click({
+                                            let id = id.clone();
+                                            move |_, _, cx: &mut App| {
+                                                cx.stop_propagation();
+                                                let mut s =
+                                                    crate::ai::config::load_ai_settings();
+                                                s.active_provider_id = Some(id.clone());
+                                                let _ = crate::ai::config::save_ai_settings(&s);
+                                            }
+                                        }),
+                                )
+                            })
+                            .on_click(move |_, _window, cx: &mut App| {
+                                let settings = crate::ai::config::load_ai_settings();
+                                let provider =
+                                    settings.providers.iter().find(|p| p.id == id).cloned();
+                                crate::ui::ai_provider_dialog::AiProviderDialog::open(
+                                    provider.as_ref(),
+                                    settings.active_provider_id.as_deref(),
+                                    cx,
+                                );
+                            })
+                            .into_any_element()
+                    }))
+                    .into_any_element(),
+            ));
+        section
     }
 
     /// Trigger a manual update check from the settings page.
@@ -810,7 +1136,7 @@ impl SettingsWindow {
                     .child(self.media_root_picker(theme, cx))
                     .child(media_toggle(
                         "media-git-sync",
-                        &rust_i18n::t!("settings.media.git_sync").to_string(),
+                        rust_i18n::t!("settings.media.git_sync").as_ref(),
                         cfg.global.git_sync,
                         theme,
                         |c| c.global.git_sync = !c.global.git_sync,
@@ -832,12 +1158,12 @@ impl SettingsWindow {
                     ))
                     .child(media_field(
                         &m.image_prefix,
-                        &rust_i18n::t!("settings.media.field_img_prefix").to_string(),
+                        rust_i18n::t!("settings.media.field_img_prefix").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.image_max_mb,
-                        &rust_i18n::t!("settings.media.field_img_max").to_string(),
+                        rust_i18n::t!("settings.media.field_img_max").as_ref(),
                         muted,
                     ))
                     .into_any_element(),
@@ -857,17 +1183,17 @@ impl SettingsWindow {
                     ))
                     .child(media_field(
                         &m.video_prefix,
-                        &rust_i18n::t!("settings.media.field_vid_prefix").to_string(),
+                        rust_i18n::t!("settings.media.field_vid_prefix").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.video_threshold_mb,
-                        &rust_i18n::t!("settings.media.field_vid_threshold").to_string(),
+                        rust_i18n::t!("settings.media.field_vid_threshold").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.video_part_mb,
-                        &rust_i18n::t!("settings.media.field_vid_part").to_string(),
+                        rust_i18n::t!("settings.media.field_vid_part").as_ref(),
                         muted,
                     ))
                     .into_any_element(),
@@ -881,39 +1207,39 @@ impl SettingsWindow {
                     .gap_3()
                     .child(media_field(
                         &m.s3_endpoint,
-                        &rust_i18n::t!("settings.media.field_endpoint").to_string(),
+                        rust_i18n::t!("settings.media.field_endpoint").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.s3_bucket,
-                        &rust_i18n::t!("settings.media.field_bucket").to_string(),
+                        rust_i18n::t!("settings.media.field_bucket").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.s3_region,
-                        &rust_i18n::t!("settings.media.field_region").to_string(),
+                        rust_i18n::t!("settings.media.field_region").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.s3_access_key,
-                        &rust_i18n::t!("settings.media.field_ak").to_string(),
+                        rust_i18n::t!("settings.media.field_ak").as_ref(),
                         muted,
                     ))
                     .child(media_field(
                         &m.s3_secret_key,
-                        &rust_i18n::t!("settings.media.field_sk").to_string(),
+                        rust_i18n::t!("settings.media.field_sk").as_ref(),
                         muted,
                     ))
                     .child(media_toggle(
                         "media-s3-ssl",
-                        &rust_i18n::t!("settings.media.use_ssl").to_string(),
+                        rust_i18n::t!("settings.media.use_ssl").as_ref(),
                         cfg.s3.use_ssl,
                         theme,
                         |c| c.s3.use_ssl = !c.s3.use_ssl,
                     ))
                     .child(media_toggle(
                         "media-s3-pathstyle",
-                        &rust_i18n::t!("settings.media.path_style").to_string(),
+                        rust_i18n::t!("settings.media.path_style").as_ref(),
                         cfg.s3.path_style,
                         theme,
                         |c| c.s3.path_style = !c.s3.path_style,
@@ -1054,7 +1380,6 @@ impl SettingsWindow {
     }
 }
 
-/// A settings card: semibold title, muted description, and a control area.
 fn media_card(title: String, desc: String, muted: gpui::Hsla, controls: AnyElement) -> AnyElement {
     v_flex()
         .gap_2()
@@ -1079,7 +1404,48 @@ fn media_field(state: &Entity<InputState>, label: &str, muted: gpui::Hsla) -> An
         .into_any_element()
 }
 
-/// A boolean toggle that load-flip-saves a `media_storage.toml` field on click.
+/// A boolean toggle chip that runs a caller-provided click handler.
+fn ai_toggle(
+    id: &str,
+    label: &str,
+    on: bool,
+    theme: &gpui_component::Theme,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let accent = theme.accent;
+    let border = theme.border;
+    let fg = theme.foreground;
+    let mf = theme.muted_foreground;
+    let hover_bg = theme.muted;
+    div()
+        .id(id.to_string())
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .gap_2()
+        .when(on, move |d| d.border_color(accent).bg(accent.opacity(0.1)))
+        .when(!on, move |d| d.border_color(border).hover(move |s| s.bg(hover_bg)))
+        .child(
+            div()
+                .text_sm()
+                .text_color(if on { fg } else { mf })
+                .child(label.to_string()),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .text_sm()
+                .text_color(if on { fg } else { mf })
+                .child(if on { "✓" } else { "—" }),
+        )
+        .on_click(move |ev, window, cx| on_click(ev, window, cx))
+        .into_any_element()
+}
+
 fn media_toggle(
     id: &str,
     label: &str,
@@ -1527,6 +1893,31 @@ impl Render for SettingsWindow {
                                     .child(SettingsSection::Media.label().to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.active_section = SettingsSection::Media;
+                                        cx.notify();
+                                    }))
+                            })
+                            // AI nav item.
+                            .child({
+                                let is_active = active == SettingsSection::Ai;
+                                let fg = theme.foreground;
+                                let accent = theme.accent;
+                                let mf = muted;
+                                div()
+                                    .id("settings-nav-ai")
+                                    .px_2()
+                                    .py_1p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .when(is_active, |d| {
+                                        d.bg(accent.opacity(0.5)).text_color(fg)
+                                    })
+                                    .when(!is_active, |d| {
+                                        d.text_color(mf).hover(|s| s.bg(accent.opacity(0.2)))
+                                    })
+                                    .child(SettingsSection::Ai.label().to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.active_section = SettingsSection::Ai;
                                         cx.notify();
                                     }))
                             }),
@@ -2056,6 +2447,10 @@ impl Render for SettingsWindow {
                                 }
                                 SettingsSection::Media => {
                                     self.render_media_section(&theme, cx)
+                                        .into_any_element()
+                                }
+                                SettingsSection::Ai => {
+                                    self.render_ai_section(window, &theme, cx)
                                         .into_any_element()
                                 }
                             }),

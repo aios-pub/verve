@@ -1438,14 +1438,16 @@ fn picker_card(
         })
 }
 
-/// An import-source card. Clicking shows a "coming soon" note and closes the
-/// dialog (import flows are wired separately via the top toolbar).
+/// An import-source card. Clicking runs `on_open` (typically opening the AI
+/// assistant) and closes the dialog. Cards without a flow pass a logging
+/// closure.
 fn import_card(
     id: &'static str,
     icon_bg: gpui::Hsla,
     icon_label: &'static str,
     title: &'static str,
     full_width: bool,
+    on_open: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
         .id("import-card-".to_string() + id)
@@ -1462,9 +1464,25 @@ fn import_card(
         .child(proto_icon(icon_bg, icon_label))
         .child(div().text_size(px(12.)).child(title.to_string()))
         .on_click(move |_, window, cx: &mut App| {
-            log::info!("导入功能「{title}」开发中");
             window.close_dialog(cx);
+            on_open(window, cx);
         })
+}
+
+/// Open the AI assistant in extractor mode, prefilled with a target-folder
+/// hint when the picker was opened inside a folder.
+fn open_ai_extractor(state: Entity<AppState>, folder_id: Option<String>) -> impl Fn(&mut Window, &mut App) + 'static {
+    move |_window: &mut Window, cx: &mut App| {
+        let prefill = match folder_id.as_deref() {
+            Some(fid) => state
+                .read(cx)
+                .active_project()
+                .and_then(|p| p.find_folder(fid))
+                .map(|(_, f)| format!("（目标目录：{}）\n\n", f.name)),
+            None => None,
+        };
+        crate::ui::ai_panel::open_ai_panel(cx, Some("extractor"), prefill);
+    }
 }
 
 /// Build the new-request picker body (新建 + 导入 sections).
@@ -1628,6 +1646,7 @@ fn new_request_picker(
                         "AI",
                         "AI 智能提取 API 文档",
                         false,
+                        open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
                     import_card(
@@ -1636,6 +1655,7 @@ fn new_request_picker(
                         "{}",
                         "cURL 导入",
                         false,
+                        open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
                 ))
@@ -1646,6 +1666,7 @@ fn new_request_picker(
                         "PST",
                         "粘贴接口/文本",
                         false,
+                        open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
                     import_card(
@@ -1654,6 +1675,7 @@ fn new_request_picker(
                         "IJ",
                         "IDEA 上传",
                         false,
+                        |_, _| log::info!("导入功能「IDEA 上传」开发中"),
                     )
                     .into_any_element(),
                 ))
@@ -1664,6 +1686,7 @@ fn new_request_picker(
                         "↓",
                         "其他文件导入",
                         true,
+                        |_, _| log::info!("导入功能「其他文件导入」开发中"),
                     )
                     .into_any_element(),
                 ),

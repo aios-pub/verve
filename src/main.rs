@@ -26,7 +26,17 @@ fn main() {
         };
     }
     let _ = env_logger::Builder::from_default_env()
-        .format_timestamp_secs()
+        .format(|buf, record| {
+            use std::io::Write as _;
+            writeln!(
+                buf,
+                "{} [{}] [{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
         // Silence tantivy's chatty info logs (e.g. "Preparing commit" on every
         // index write). Notes indexing runs on a background thread and is not
         // something the user needs to see at info level — surface only warnings.
@@ -191,6 +201,8 @@ fn launch_main_app(cx: &mut App) {
         // Help center (same action on F1 for the Windows convention).
         KeyBinding::new("cmd-/", ui::app::OpenHelpCenter, None),
         KeyBinding::new("f1", ui::app::OpenHelpCenter, None),
+        // AI assistant floating panel.
+        KeyBinding::new("cmd-j", ui::app::ToggleAiPanel, None),
     ]);
     cx.bind_keys(ui::app::rail_slot_keybindings("cmd"));
     #[cfg(not(target_os = "macos"))]
@@ -204,6 +216,7 @@ fn launch_main_app(cx: &mut App) {
         KeyBinding::new("ctrl-shift-o", ui::app::OpenMarkdownFileNewTab, None),
         KeyBinding::new("ctrl-/", ui::app::OpenHelpCenter, None),
         KeyBinding::new("f1", ui::app::OpenHelpCenter, None),
+        KeyBinding::new("ctrl-j", ui::app::ToggleAiPanel, None),
     ]);
     cx.bind_keys(ui::app::rail_slot_keybindings("ctrl"));
 

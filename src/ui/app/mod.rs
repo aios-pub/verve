@@ -13,7 +13,8 @@ actions!(
         OpenMarkdownFileNewTab,
         NewFile,
         CloseFile,
-        OpenHelpCenter
+        OpenHelpCenter,
+        ToggleAiPanel
     ]
 );
 /// Center a window of the requested logical size on the primary display,
@@ -172,6 +173,8 @@ pub struct VerveApp {
     pub console: Entity<ConsolePanel>,
     /// Mock service console panel.
     pub mock_console: Entity<MockConsolePanel>,
+    /// Floating AI assistant panel (rendered as an overlay when open).
+    pub ai: Entity<crate::ui::ai_panel::AiPanel>,
     /// Git version-control state (gix/gitoxide-backed).
     pub git: Entity<GitState>,
     /// Project-management sidebar panel (Git status / history / branches).
@@ -835,6 +838,7 @@ impl Render for VerveApp {
             .on_action(cx.listener(Self::on_close_file))
             .on_action(cx.listener(Self::on_select_rail_slot))
             .on_action(cx.listener(Self::on_open_help_center))
+            .on_action(cx.listener(Self::on_toggle_ai_panel))
             // Esc in the Markdown/Notes views releases the block editor's
             // shortcut lock: while a block is focused, ⌘1..⌘5 keep their
             // editor meaning (heading levels). Refocusing the app root drops
@@ -925,6 +929,8 @@ impl Render for VerveApp {
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
+            // Floating AI assistant panel (renders nothing when closed).
+            .child(self.ai.clone())
             // Editor toolbar dropdown overlay (rendered at root so the title
             // bar's height doesn't clip the panel). Only the active editor's
             // toolbar can have an open dropdown.

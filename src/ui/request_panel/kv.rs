@@ -156,6 +156,15 @@ impl RequestPanel {
         let selected_request = self.state.read(cx).selected_request.clone();
         let view_for_open = cx.entity();
 
+        // Reverse doc links (requirement docs pointing at this folder).
+        let folder_docs: Vec<(String, String)> = self
+            .state
+            .read(cx)
+            .active_project()
+            .map(|p| p.docs_linking_to(&folder_id))
+            .unwrap_or_default();
+        let folder_doc_count = folder_docs.len();
+
         v_flex()
             .size_full()
             .min_h_0()
@@ -183,7 +192,36 @@ impl RequestPanel {
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child("目录"),
-                            ),
+                            )
+                            // Requirement-doc reverse links: click to open.
+                            .when(folder_doc_count > 0, |bar| {
+                                bar.child(
+                                    h_flex().gap_1().children(folder_docs.into_iter().map(
+                                        |(doc_id, doc_name)| {
+                                            div()
+                                                .id(format!("folder-doc-link-{doc_id}"))
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded(px(4.))
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .text_xs()
+                                                .max_w(px(160.))
+                                                .truncate()
+                                                .cursor_pointer()
+                                                .hover(|d| d.border_color(theme.accent))
+                                                .child(format!("📄 {doc_name}"))
+                                                .on_click(move |_, _, cx: &mut App| {
+                                                    let state =
+                                                        crate::state::AppState::global(cx).clone();
+                                                    state.update(cx, |s, cx| {
+                                                        s.open_or_focus_tab(&doc_id, cx);
+                                                    });
+                                                })
+                                        },
+                                    )),
+                                )
+                            }),
                     )
                     .child(
                         h_flex()

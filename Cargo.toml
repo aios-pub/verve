@@ -269,6 +269,7 @@ s3 = { version = "0.1.36", default-features = false, features = ["async", "rustl
 sparkid = "2.2.1"
 tantivy = "0.26"
 tantivy-jieba = "0.20"
+anydoc = "0.2.3"
 
 [features]
 default = ["wysiwyg-render", "code-highlight-core", "code-highlight-official", "code-highlight-config"]

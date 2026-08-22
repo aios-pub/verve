@@ -45,6 +45,63 @@ pub fn event_to_string(ev: &SseEvent) -> String {
     parts.join("  │  ")
 }
 
+/// Incremental SSE wire-format parser.
+///
+/// Feed it raw body bytes as they arrive; it buffers partial lines and
+/// returns every complete event (blank-line delimited) completed by that
+/// chunk. Shared by the SSE request panel and the AI chat client so both
+/// speak exactly the same `event:`/`data:`/`id:` dialect.
+#[derive(Debug, Default)]
+pub struct SseParser {
+    pending_event: SseEvent,
+    buf: Vec<u8>,
+}
+
+impl SseParser {
+    pub fn new() -> Self {
+        Self {
+            pending_event: SseEvent::default(),
+            buf: Vec::with_capacity(8192),
+        }
+    }
+
+    /// Feed raw body bytes; returns events completed by this chunk.
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
+        self.buf.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
+            let line_bytes = self.buf.drain(..=pos).collect::<Vec<_>>();
+            let mut line = String::from_utf8_lossy(&line_bytes).to_string();
+            // Strip trailing \r\n / \n.
+            if line.ends_with('\n') {
+                line.pop();
+            }
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            if line.is_empty() {
+                // Blank line → dispatch the accumulated event.
+                if !self.pending_event.is_empty() {
+                    out.push(std::mem::take(&mut self.pending_event));
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("event:") {
+                self.pending_event.event = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                if !self.pending_event.data.is_empty() {
+                    self.pending_event.data.push('\n');
+                }
+                self.pending_event.data.push_str(rest.trim_start_matches(' '));
+            } else if let Some(rest) = line.strip_prefix("id:") {
+                self.pending_event.id = Some(rest.trim().to_string());
+            }
+            // Comments (lines starting with ':') are ignored.
+        }
+        out
+    }
+}
+
 /// Open an SSE stream. Accumulates parsed events into `acc` (a shared buffer)
 /// so the caller can poll it for live UI updates; the loop exits when the
 /// stream closes, errors, or the `stop` flag is set.
@@ -124,9 +181,8 @@ pub fn stream(
 
         // Stream the body, parsing SSE lines incrementally.
         let mut body = resp.into_body();
-        let mut buf: Vec<u8> = Vec::with_capacity(8192);
         let mut chunk = [0u8; 4096];
-        let mut pending_event = SseEvent::default();
+        let mut parser = SseParser::new();
         let mut acc = String::new();
 
         loop {
@@ -138,46 +194,16 @@ pub fn stream(
             if n == 0 {
                 break;
             }
-            buf.extend_from_slice(&chunk[..n]);
-            // Process complete lines.
-            while let Some(pos) = buf.iter().position(|b| *b == b'\n') {
-                let line_bytes = buf.drain(..=pos).collect::<Vec<_>>();
-                let mut line = String::from_utf8_lossy(&line_bytes).to_string();
-                // Strip trailing \r\n / \n.
-                if line.ends_with('\n') {
-                    line.pop();
+            for ev in parser.feed(&chunk[..n]) {
+                let rendered = event_to_string(&ev);
+                if !acc.is_empty() {
+                    acc.push('\n');
                 }
-                if line.ends_with('\r') {
-                    line.pop();
+                acc.push_str(&rendered);
+                // Mirror into the shared buffer for live polling.
+                if let Ok(mut shared) = acc_shared.lock() {
+                    *shared = acc.clone();
                 }
-                if line.is_empty() {
-                    // Blank line → dispatch the accumulated event.
-                    if !pending_event.is_empty() {
-                        let ev = std::mem::take(&mut pending_event);
-                        let rendered = event_to_string(&ev);
-                        if !acc.is_empty() {
-                            acc.push('\n');
-                        }
-                        acc.push_str(&rendered);
-                        // Mirror into the shared buffer for live polling.
-                        if let Ok(mut shared) = acc_shared.lock() {
-                            *shared = acc.clone();
-                        }
-                        let _ = ev;
-                    }
-                    continue;
-                }
-                if let Some(rest) = line.strip_prefix("event:") {
-                    pending_event.event = rest.trim().to_string();
-                } else if let Some(rest) = line.strip_prefix("data:") {
-                    if !pending_event.data.is_empty() {
-                        pending_event.data.push('\n');
-                    }
-                    pending_event.data.push_str(rest.trim_start_matches(' '));
-                } else if let Some(rest) = line.strip_prefix("id:") {
-                    pending_event.id = Some(rest.trim().to_string());
-                }
-                // Comments (lines starting with ':') are ignored.
             }
         }
 
@@ -201,7 +227,7 @@ pub fn stream(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{SseEvent, SseParser, event_to_string};
 
     #[test]
     fn parses_data_and_event_lines() {
@@ -223,6 +249,46 @@ mod tests {
     #[test]
     fn empty_event_is_empty() {
         assert!(SseEvent::default().is_empty());
+    }
+
+    #[test]
+    fn parser_handles_chunk_splits_and_crlf() {
+        let mut p = SseParser::new();
+        // "data: a\r\n\r\n" split across feeds at arbitrary byte offsets.
+        let bytes = b"data: a\r\n\r\ndata: b\n\n";
+        let mut all = Vec::new();
+        for b in bytes.iter() {
+            all.extend(p.feed(&[*b]));
+        }
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].data, "a");
+        assert_eq!(all[1].data, "b");
+    }
+
+    #[test]
+    fn parser_joins_multi_data_lines_and_ignores_comments() {
+        let mut p = SseParser::new();
+        let events = p.feed(b": keepalive\ndata: l1\ndata: l2\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "l1\nl2");
+    }
+
+    #[test]
+    fn parser_keeps_partial_line_between_feeds() {
+        let mut p = SseParser::new();
+        assert!(p.feed(b"dat").is_empty());
+        let events = p.feed(b"a: x\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "x");
+    }
+
+    #[test]
+    fn parser_captures_event_and_id_fields() {
+        let mut p = SseParser::new();
+        let events = p.feed(b"event: add\ndata: 1\nid: 7\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "add");
+        assert_eq!(events[0].id.as_deref(), Some("7"));
     }
 }
 

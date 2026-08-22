@@ -148,6 +148,21 @@ settings:
   general: 通用设置
   environments: 环境管理
   about: 关于
+  ai:
+    title: AI 智能体
+    card_global: 智能体行为
+    card_global_desc: 循环上限、429 重试与默认执行模式等全局选项。
+    card_providers: 供应商（OpenAI 兼容）
+    card_providers_desc: 密钥加密存储于本地保险库；价格由你手动填写，不设置则只统计 token 不计算费用。
+    mode_plan: 计划模式（写操作需确认）
+    mode_full: 完全访问（直接执行）
+    add: 添加
+    empty: 尚未配置供应商，请从上方预设添加。
+    test: 测试连接
+    testing: 测试中…
+    delete: 删除
+    set_default: 设为默认
+    is_default: ✓ 默认
   media:
     title: 媒体存储
     card_global: 本地存储

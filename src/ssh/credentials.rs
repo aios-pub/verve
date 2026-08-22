@@ -69,12 +69,29 @@ fn zeroize_key(mut key: [u8; KEY_LEN]) {
     key.zeroize();
 }
 
+/// Read-modify-write source for mutations: always decrypt from DISK, never
+/// the process cache. Concurrent app instances (e.g. an old build and a new
+/// one) share `~/.verve/ssh_vault.bin`; writing back a stale cached copy of
+/// the whole vault would wipe keys stored by the other process in between.
+fn vault_map_for_write() -> SecretMap {
+    let key = match vault::load_or_create_device_key() {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("vault device key: {e}");
+            return SecretMap::new();
+        }
+    };
+    let map = vault::load_vault(&key).unwrap_or_else(|e| {
+        log::error!("vault read for write: {e}");
+        SecretMap::new()
+    });
+    zeroize_key(key);
+    map
+}
+
 /// Store a secret for `host_id` / `kind`. Overwrites any existing value.
 pub fn store_secret(host_id: &str, kind: &str, secret: &str) -> Result<(), String> {
-    let mut map = match vault_map() {
-        Ok(arc) => (*arc).clone(),
-        Err(_) => SecretMap::new(),
-    };
+    let mut map = vault_map_for_write();
     map.insert(keyring_key(host_id, kind), secret.to_string());
     save_and_cache(map)
 }
@@ -87,10 +104,7 @@ pub fn load_secret(host_id: &str, kind: &str) -> Option<String> {
 
 /// Delete a secret for `host_id` / `kind`. Silently succeeds if not found.
 pub fn delete_secret(host_id: &str, kind: &str) -> Result<(), String> {
-    let mut map = match vault_map() {
-        Ok(arc) => (*arc).clone(),
-        Err(_) => return Ok(()),
-    };
+    let mut map = vault_map_for_write();
     map.remove(&keyring_key(host_id, kind));
     save_and_cache(map)
 }

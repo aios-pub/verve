@@ -12,20 +12,15 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// How a given media kind (image or video) is stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageMethod {
     /// Store on the local filesystem only.
+    #[default]
     Local,
     /// Upload to S3. On upload failure the media falls back to local storage so
     /// no file is lost (see `upload` module).
     S3,
-}
-
-impl Default for StorageMethod {
-    fn default() -> Self {
-        StorageMethod::Local
-    }
 }
 
 impl StorageMethod {

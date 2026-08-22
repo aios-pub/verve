@@ -148,6 +148,21 @@ settings:
   general: General
   environments: Environments
   about: About
+  ai:
+    title: AI Assistant
+    card_global: Assistant behaviour
+    card_global_desc: Loop limit, 429 retries, default execution mode and other global options.
+    card_providers: Providers (OpenAI-compatible)
+    card_providers_desc: Keys are stored in the encrypted local vault; prices are entered by you — unset means token counts only, no cost.
+    mode_plan: Plan mode (writes need approval)
+    mode_full: Full access (execute directly)
+    add: Add
+    empty: No providers yet — add one from the presets above.
+    test: Test connection
+    testing: Testing…
+    delete: Delete
+    set_default: Set default
+    is_default: ✓ Default
   media:
     title: Media Storage
     card_global: Local Storage

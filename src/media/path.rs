@@ -74,14 +74,11 @@ pub fn detect_image_extension(bytes: &[u8]) -> Option<&'static str> {
 /// Detect a video format from raw bytes and return its standard lowercase
 /// extension (e.g. `"mp4"`). Returns `None` for unknown / non-video bytes.
 pub fn detect_video_extension(bytes: &[u8]) -> Option<&'static str> {
-    for ext in &[
+    [
         "mp4", "mov", "webm", "mkv", "avi", "m4v", "wmv", "flv",
-    ] {
-        if infer::is(bytes, ext) {
-            return Some(ext);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|&ext| infer::is(bytes, ext))
 }
 
 /// Whether a filename extension (without leading dot) is a supported image kind.

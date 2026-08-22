@@ -857,6 +857,11 @@ pub struct ApiRequest {
     /// - `Some(Some(url))`  : use exactly this url (may contain `{{var}}` placeholders).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url_override: Option<Option<String>>,
+    /// For Markdown (requirement-doc) nodes only: ids of the requests and/or
+    /// folders this document links to. Reverse lookup via
+    /// [`Project::docs_linking_to`]. All ids are executor-generated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doc_links: Vec<String>,
 }
 
 impl ApiRequest {
@@ -889,6 +894,7 @@ impl ApiRequest {
             status: String::new(),
             tags: Vec::new(),
             base_url_override: None,
+            doc_links: Vec::new(),
         }
     }
 }
@@ -1608,6 +1614,41 @@ impl Project {
             collect_subtree(folder, &mut out);
         }
         out
+    }
+
+    /// Remove a request or folder node anywhere in the tree (cascade for
+    /// folders). Returns true when something was removed.
+    pub fn remove_node(&mut self, id: &str) -> bool {
+        fn remove_in_folders(folders: &mut [Folder], id: &str) -> bool {
+            let mut removed = false;
+            for folder in folders.iter_mut() {
+                let before = folder.requests.len();
+                folder.requests.retain(|r| r.id != id);
+                removed |= folder.requests.len() != before;
+                let before_subs = folder.folders.len();
+                folder.folders.retain(|f| f.id != id);
+                removed |= folder.folders.len() != before_subs;
+                removed |= remove_in_folders(&mut folder.folders, id);
+            }
+            removed
+        }
+        let before = self.requests.len();
+        self.requests.retain(|r| r.id != id);
+        let mut removed = self.requests.len() != before;
+        let before_folders = self.folders.len();
+        self.folders.retain(|f| f.id != id);
+        removed |= self.folders.len() != before_folders;
+        removed |= remove_in_folders(&mut self.folders, id);
+        removed
+    }
+
+    /// Markdown docs linking to `node_id`: (doc id, doc name).
+    pub fn docs_linking_to(&self, node_id: &str) -> Vec<(String, String)> {
+        self.iter_all_requests()
+            .into_iter()
+            .filter(|(_, r)| r.protocol == Protocol::Markdown && r.doc_links.iter().any(|l| l == node_id))
+            .map(|(_, r)| (r.id.clone(), r.name.clone()))
+            .collect()
     }
 }
 

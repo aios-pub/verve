@@ -734,7 +734,7 @@ let answer = 42;
             + 4           // 输出报告
             + 4           // 列一 列二
             + 3           // 数据 data
-            + 0           // ![截图](…) dropped
+                          // （![截图](…) 图片不计入）
             + 4           // let answer = 42;
             + 4;          // 详见 链接
         assert_eq!(count_words(doc), expected);

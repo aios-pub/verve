@@ -159,6 +159,16 @@ pub struct RequestPanel {
     /// Set when selection changed and the active request must be reloaded; the
     /// reload needs a Window, so it runs at the top of render.
     pub pending_reload: bool,
+    // --- Markdown requirement-doc editor state (per doc node id).
+    /// Embedded wysiwyg editor for the active Markdown node's description.
+    pub doc_editor: Option<Entity<crate::wysiwyg::editor::Editor>>,
+    /// Which request id `doc_editor` was built from (rebuild on switch).
+    pub doc_editor_request_id: Option<String>,
+    /// Keep-alive arena for replaced editors (dropping a focused editor
+    /// corrupts GPUI repaints on macOS; see notes_panel::reload_editor).
+    pub doc_prev_editors: Vec<Entity<crate::wysiwyg::editor::Editor>>,
+    /// Debounced description write-back timer.
+    pub doc_save: Option<gpui::Task<()>>,
     // --- folder detail view state (rebuilt when the selected folder changes)
     pub folder_id: Option<String>,
     pub folder_name: Entity<InputState>,
@@ -408,6 +418,10 @@ impl RequestPanel {
             pending_kv_add: false,
             pending_file_pick: None,
             pending_reload: false,
+            doc_editor: None,
+            doc_editor_request_id: None,
+            doc_prev_editors: Vec::new(),
+            doc_save: None,
             folder_id: None,
             folder_name,
             folder_desc,
@@ -1506,6 +1520,268 @@ pub(super) fn truncate_history_body(body: &str) -> (Option<String>, bool) {
     (Some(s), true)
 }
 
+
+// ---- Markdown requirement-doc view --------------------------------------
+
+impl RequestPanel {
+    /// Serialize the doc editor into the owning request's `description`.
+    pub fn flush_doc_editor(&mut self, cx: &mut Context<Self>) {
+        self.doc_save = None;
+        let Some(editor) = self.doc_editor.clone() else { return };
+        let Some(id) = self.doc_editor_request_id.clone() else { return };
+        let content = editor.read(cx).markdown(cx);
+        self.state.update(cx, |s, cx| {
+            if let Some(p) = s.active_project_mut()
+                && let Some((_, r)) = p.find_request_mut(&id)
+            {
+                if r.description != content {
+                    r.description = content;
+                    s.dirty = true;
+                    s.schedule_save(cx);
+                }
+            }
+        });
+    }
+
+    /// (Re)build the embedded wysiwyg editor for the active Markdown node.
+    fn ensure_doc_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.request_id.clone() else { return };
+        if self.doc_editor_request_id.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        // Flush the outgoing doc before switching (its id is still tracked).
+        if self.doc_editor_request_id.is_some() {
+            let prev_id = self.doc_editor_request_id.clone();
+            let editor = self.doc_editor.clone();
+            if let (Some(prev_id), Some(editor)) = (prev_id, editor) {
+                let content = editor.read(cx).markdown(cx);
+                self.state.update(cx, |s, cx| {
+                    if let Some(p) = s.active_project_mut()
+                        && let Some((_, r)) = p.find_request_mut(&prev_id)
+                        && r.description != content
+                    {
+                        r.description = content;
+                        s.dirty = true;
+                        s.schedule_save(cx);
+                    }
+                });
+            }
+        }
+        let description = self
+            .state
+            .read(cx)
+            .active_project()
+            .and_then(|p| p.find_request(&id))
+            .map(|(_, r)| r.description.clone())
+            .unwrap_or_default();
+        // Keep the outgoing editor alive (macOS IME repaint quirk).
+        if let Some(old) = self.doc_editor.take() {
+            self.doc_prev_editors.push(old);
+            if self.doc_prev_editors.len() > 3 {
+                let excess = self.doc_prev_editors.len() - 3;
+                self.doc_prev_editors.drain(0..excess);
+            }
+        }
+        let content = description.to_string();
+        let editor = cx.new(|cx| {
+            crate::wysiwyg::editor::Editor::from_markdown(cx, content, None).embedded()
+        });
+        let doc_sub = cx.observe(&editor, |this, _editor, cx| {
+            // Debounced write-back: serialize + schedule_save.
+            this.doc_save = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(600))
+                    .await;
+                let _ = this.update(cx, |this, cx| this.flush_doc_editor(cx));
+            }));
+        });
+        self._subs.push(doc_sub);
+        self.doc_editor = Some(editor);
+        self.doc_editor_request_id = Some(id);
+    }
+
+    /// Remove one link from the active doc node.
+    fn remove_doc_link(&mut self, link_id: &str, cx: &mut Context<Self>) {
+        let Some(id) = self.request_id.clone() else { return };
+        self.state.update(cx, |s, cx| {
+            if let Some(p) = s.active_project_mut()
+                && let Some((_, r)) = p.find_request_mut(&id)
+            {
+                r.doc_links.retain(|l| l != link_id);
+                s.dirty = true;
+                s.schedule_save(cx);
+            }
+        });
+        cx.notify();
+    }
+
+    /// The full-panel view for Markdown nodes: name bar + link chips +
+    /// wysiwyg editor.
+    fn render_markdown_doc(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        self.ensure_doc_editor(cx);
+        let id = self.request_id.clone().unwrap_or_default();
+        // Resolve link chips: (target id, label, is_folder).
+        let links: Vec<(String, String, bool)> = self
+            .state
+            .read(cx)
+            .active_project()
+            .map(|p| {
+                p.find_request(&id)
+                    .map(|(_, r)| {
+                        r.doc_links
+                            .iter()
+                            .filter_map(|l| {
+                                if let Some((_, fr)) = p.find_request(l) {
+                                    Some((l.clone(), fr.name.clone(), false))
+                                } else if let Some((_, ff)) = p.find_folder(l) {
+                                    Some((l.clone(), ff.name.clone(), true))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let link_count = links.len();
+
+        let mut card = v_flex()
+            .size_full()
+            .min_h_0()
+            // Name bar.
+            .child(
+                h_flex()
+                    .px_3()
+                    .h(px(28.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(110.))
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .bg(theme.accent.opacity(0.5))
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("需求文档"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&self.name).small().appearance(false)),
+                    )
+                    .child(
+                        Button::new("doc-ai-generate")
+                            .primary()
+                            .xsmall()
+                            .label("AI 由此生成接口")
+                            .tooltip("让 AI 基于此需求文档设计并创建接口（自动建立双向关联）")
+                            .on_click({
+                                let id = id.clone();
+                                cx.listener(move |this, _, _, cx| {
+                                    this.flush_doc_editor(cx);
+                                    let (name, _) = this
+                                        .state
+                                        .read(cx)
+                                        .active_project()
+                                        .and_then(|p| p.find_request(&id))
+                                        .map(|(_, r)| (r.name.clone(), ()))
+                                        .unwrap_or_default();
+                                    let prefill = format!(
+                                        "（请基于需求文档「{name}」设计接口；用 get_doc 读取 id 为 {id} 的文档内容，再提交变更计划并建立文档关联）\n\n"
+                                    );
+                                    cx.defer(|cx| {
+                                        crate::ui::ai_panel::open_ai_panel(
+                                            cx,
+                                            Some("api-designer"),
+                                            Some(prefill),
+                                        );
+                                    });
+                                })
+                            }),
+                    ),
+            )
+            // Link chips.
+            .when(link_count > 0, |card| {
+                card.child(
+                    h_flex()
+                        .px_3()
+                        .py_1()
+                        .gap_1()
+                        .flex_wrap()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("关联接口:"),
+                        )
+                        .children(links.into_iter().map(|(link_id, label, is_folder)| {
+                            h_flex()
+                                .id(format!("doc-link-{link_id}"))
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(theme.border)
+                                .gap_1()
+                                .text_xs()
+                                .cursor_pointer()
+                                .hover(|d| d.border_color(theme.accent))
+                                .child(div().max_w(px(160.)).truncate().child(format!(
+                                    "{}{label}",
+                                    if is_folder { "📁 " } else { "" }
+                                )))
+                                .child(
+                                    div()
+                                        .id(format!("doc-link-x-{link_id}"))
+                                        .text_color(theme.muted_foreground)
+                                        .child("✕")
+                                        .on_click({
+                                            let link_id = link_id.clone();
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.remove_doc_link(&link_id, cx);
+                                            })
+                                        }),
+                                )
+                                .on_click({
+                                    let link_id = link_id.clone();
+                                    move |_, _, cx: &mut App| {
+                                        let state = AppState::global(cx).clone();
+                                        state.update(cx, |s, cx| {
+                                            if is_folder {
+                                                s.selected_folder = Some(link_id.clone());
+                                                s.selected_request = None;
+                                                s.active_tab_id = None;
+                                                cx.emit(crate::state::AppEvent::SelectionChanged);
+                                            } else {
+                                                s.open_or_focus_tab(&link_id, cx);
+                                            }
+                                        });
+                                    }
+                                })
+                        })),
+                )
+            });
+        // Editor fills the rest.
+        if let Some(editor) = self.doc_editor.clone() {
+            card = card.child(div().flex_1().min_h_0().overflow_hidden().child(editor));
+        }
+        card.into_any_element()
+    }
+}
+
 impl Render for RequestPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.pending_reload {
@@ -1641,7 +1917,6 @@ impl Render for RequestPanel {
                                             };
                                             let id_focus = id.clone();
                                             let id_close = id.clone();
-                                            let panel_entity = panel_entity.clone();
                                             h_flex()
                                                 .id(("req-tab", i))
                                                 .flex_shrink_0()
@@ -1686,22 +1961,16 @@ impl Render for RequestPanel {
                                                         .label("×")
                                                         .text_size(px(14.))
                                                         .on_click(cx.listener(
-                                                            move |_, _, _, cx| {
-                                                                let id_close_clone =
-                                                                    id_close.clone();
-                                                                let _ = panel_entity.update(
-                                                                    cx,
-                                                                    move |this, cx| {
-                                                                        this.state.update(cx,
-                                                                            |s, cx| {
-                                                                                s.close_tab(
-                                                                                    &id_close_clone,
-                                                                                    cx,
-                                                                                );
-                                                                            });
-                                                                        cx.notify();
-                                                                    },
-                                                                );
+                                                            move |this, _, _, cx| {
+                                                                // `cx.listener` already leases
+                                                                // RequestPanel — use `this`
+                                                                // directly instead of
+                                                                // entity.update (double lease
+                                                                // panics).
+                                                                this.state.update(cx, |s, cx| {
+                                                                    s.close_tab(&id_close, cx);
+                                                                });
+                                                                cx.notify();
                                                             },
                                                         )),
                                                 )
@@ -1870,7 +2139,10 @@ impl Render for RequestPanel {
                         .child("Select or create a request to begin."),
                 )
             })
-            .when(has_request, |this| {
+            .when(has_request && self.protocol == Protocol::Markdown, |this| {
+                this.child(self.render_markdown_doc(window, cx))
+            })
+            .when(has_request && self.protocol != Protocol::Markdown, |this| {
                 // The active method/protocol drive the chip + Send button color.
                 let method = self
                     .method_select
@@ -1891,6 +2163,19 @@ impl Render for RequestPanel {
                     .map(|r| r.streaming)
                     .unwrap_or(false);
 
+                // Reverse doc links (requirement docs pointing at this request).
+                let req_docs: Vec<(String, String)> = {
+                    let st = self.state.read(cx);
+                    st.active_project()
+                        .and_then(|p| {
+                            self.request_id
+                                .as_deref()
+                                .and_then(|id| p.find_request(id))
+                                .map(|(_, r)| p.docs_linking_to(&r.id))
+                        })
+                        .unwrap_or_default()
+                };
+                let doc_count = req_docs.len();
                 this.child(
                     // 接口名 (request name) bar — fills the panel full width,
                     // flush against the top edge (no outer margins).
@@ -1922,6 +2207,34 @@ impl Render for RequestPanel {
                                 .flex_1()
                                 .child(Input::new(&self.name).small().appearance(false)),
                         )
+                        // Requirement-doc reverse links: click to open the doc.
+                        .when(doc_count > 0, |bar| {
+                            bar.child(
+                                h_flex()
+                                    .gap_1()
+                                    .children(req_docs.into_iter().map(|(doc_id, doc_name)| {
+                                        div()
+                                            .id(format!("req-doc-link-{doc_id}"))
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded(px(4.))
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .text_xs()
+                                            .max_w(px(160.))
+                                            .truncate()
+                                            .cursor_pointer()
+                                            .hover(|d| d.border_color(theme.accent))
+                                            .child(format!("📄 {doc_name}"))
+                                            .on_click(move |_, _, cx: &mut App| {
+                                                let state = AppState::global(cx).clone();
+                                                state.update(cx, |s, cx| {
+                                                    s.open_or_focus_tab(&doc_id, cx);
+                                                });
+                                            })
+                                    })),
+                            )
+                        })
                         .child(
                             Button::new("locate")
                                 .ghost()

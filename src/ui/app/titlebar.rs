@@ -605,6 +605,26 @@ impl VerveApp {
                         this.import_collection(cx);
                     })),
             ))
+            // AI assistant floating-panel toggle.
+            .child(title_bar_control(
+                "ai-toggle-hitbox",
+                Button::new("ai-toggle")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Bot)
+                    .selected(self.ai.read(cx).open)
+                    .tooltip("AI 智能体")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.ai.update(cx, |p, cx| {
+                            if p.minimized {
+                                p.minimized = false;
+                                cx.notify();
+                            } else {
+                                p.toggle(cx);
+                            }
+                        });
+                    })),
+            ))
             .child(self.render_export_picker(cx))
             // Update check button: shows a spinner while checking, a download
             // icon when an update is available, or a refresh icon otherwise.

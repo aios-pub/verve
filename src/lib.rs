@@ -13,6 +13,7 @@ pub struct PendingMarkdownFiles(pub std::sync::Arc<std::sync::Mutex<Vec<std::pat
 
 impl gpui::Global for PendingMarkdownFiles {}
 
+pub mod ai;
 pub mod assets;
 pub mod autotest;
 pub mod docker;

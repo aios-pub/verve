@@ -195,6 +195,20 @@ pub struct RequestPanel {
     /// Entity ids currently subscribed in `kv_focus_subs`; used to skip
     /// rebuilding when the set of rows is unchanged.
     kv_focus_ids: HashSet<gpui::EntityId>,
+    /// Subscriptions to params_rows key/value inputs' Change events so edits
+    /// re-render and the URL bar recomposes (only while the Query tab is
+    /// shown).
+    kv_query_sync_subs: Vec<gpui::Subscription>,
+    /// Entity ids currently subscribed in `kv_query_sync_subs`.
+    kv_query_sync_ids: HashSet<gpui::EntityId>,
+    /// Query suffix (`"?a=1&b=2"`) currently injected into the URL input as a
+    /// live preview of the params table; `None` when the input shows the raw
+    /// path. Tracked so the preview can be stripped again before the value is
+    /// persisted to the model or rendered into a curl command.
+    url_query_preview: Option<String>,
+    /// Whether the current Query-tab activation already folded a query string
+    /// found in the URL into the params rows (runs once per activation).
+    query_tab_ingested: bool,
     /// Curl-tab preview cache: (input signature, rendered command). Dynamic
     /// variables (`{{$random}}`, `{{$uuid}}` …) regenerate on every
     /// substitution, so without a cache the preview churns on each re-render.
@@ -437,6 +451,10 @@ impl RequestPanel {
             _subs: Vec::new(),
             kv_focus_subs: Vec::new(),
             kv_focus_ids: HashSet::new(),
+            kv_query_sync_subs: Vec::new(),
+            kv_query_sync_ids: HashSet::new(),
+            url_query_preview: None,
+            query_tab_ingested: false,
             curl_preview_cache: None,
             focus_handle: cx.focus_handle(),
             tab_overflow_focus: cx.focus_handle(),
@@ -620,6 +638,148 @@ impl RequestPanel {
         cx.notify();
     }
 
+    /// Keep the URL bar composed with the Query tab's live params. While the
+    /// Query tab is active the URL input shows `path?query` (a display-only
+    /// preview — the model always stores the query-free path); on any other
+    /// tab the preview is stripped back off. Also (re)subscribes to the
+    /// params rows' key/value inputs so edits re-render. Called from `render`,
+    /// which owns the `&mut Window` needed by `set_value` (never touch the
+    /// window from event closures — re-entrant window updates panic).
+    fn reconcile_kv_query_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab != ReqTab::Query {
+            if self.url_query_preview.is_some() {
+                let base = self.url_base_value(cx);
+                self.url_query_preview = None;
+                if self.url.read(cx).value().as_ref() != base.as_str() {
+                    self.url.update(cx, |s, cx| s.set_value(base, window, cx));
+                }
+            }
+            self.query_tab_ingested = false;
+            self.kv_query_sync_subs.clear();
+            self.kv_query_sync_ids.clear();
+            return;
+        }
+        if !self.query_tab_ingested {
+            self.query_tab_ingested = true;
+            self.ingest_url_query_into_params(window, cx);
+        }
+        let ents: Vec<Entity<InputState>> = self
+            .params_rows
+            .iter()
+            .flat_map(|r| [r.key.clone(), r.value.clone()])
+            .collect();
+        let new_ids: HashSet<gpui::EntityId> = ents.iter().map(|e| e.entity_id()).collect();
+        if new_ids != self.kv_query_sync_ids {
+            self.kv_query_sync_subs = ents
+                .into_iter()
+                .map(|e| cx.subscribe(&e, Self::on_kv_query_change))
+                .collect();
+            self.kv_query_sync_ids = new_ids;
+        }
+        // Idempotent: skips `set_value` when the input already shows exactly
+        // the composed URL, so typing in the URL bar never loses the cursor.
+        self.update_url_with_query(window, cx);
+    }
+
+    /// Any edit in the params table just re-renders; `reconcile_kv_query_sync`
+    /// recomposes the URL bar from the fresh rows on the next frame.
+    fn on_kv_query_change(
+        &mut self,
+        _src: Entity<InputState>,
+        _ev: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        cx.notify();
+    }
+
+    /// The URL input's query-free value: the displayed text minus the tracked
+    /// preview suffix. While the preview is live the Query tab owns the query
+    /// string, so an edit past the preview cuts at the first `?`.
+    fn url_base_value(&self, cx: &App) -> String {
+        let value = self.url.read(cx).value().to_string();
+        match &self.url_query_preview {
+            Some(suffix) => value
+                .strip_suffix(suffix.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| value.split('?').next().unwrap_or(&value).to_string()),
+            None => value,
+        }
+    }
+
+    /// On entering the Query tab, fold a query string already present in the
+    /// URL (`path?a=1`) into the params table so nothing the user stored is
+    /// dropped and the table becomes the single source of the query. Existing
+    /// keys are kept; the URL input is reset to the query-free path.
+    fn ingest_url_query_into_params(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.url.read(cx).value().to_string();
+        let Some((path, query)) = value.split_once('?') else {
+            return;
+        };
+        self.url
+            .update(cx, |s, cx| s.set_value(path, window, cx));
+        if query.is_empty() {
+            return;
+        }
+        let existing: HashSet<String> = self
+            .params_rows
+            .iter()
+            .map(|r| r.key.read(cx).value().trim().to_string())
+            .collect();
+        let mut added: Vec<KeyValue> = Vec::new();
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            let (k, v) = (k.trim().to_string(), v.to_string());
+            if k.is_empty() || existing.contains(&k) {
+                continue;
+            }
+            added.push(KeyValue {
+                enabled: true,
+                key: k,
+                value: v,
+                ..KeyValue::default()
+            });
+        }
+        if added.is_empty() {
+            return;
+        }
+        let mut pairs = kv_table::pairs_from_rows(&self.params_rows, cx);
+        pairs.extend(added);
+        self.params_rows = kv_table::rows_from_pairs(&pairs, self.state.clone(), window, cx);
+        cx.notify();
+    }
+
+    /// Compose the URL bar from the current params rows: `base?k=v&…`,
+    /// percent-encoded exactly like the send path (`url::form_urlencoded`).
+    /// Enabled rows with a non-empty key participate, mirroring
+    /// `http::prepare`; with none enabled the plain path is restored.
+    fn update_url_with_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let base = self.url_base_value(cx);
+        let pairs: Vec<(String, String)> = self
+            .params_rows
+            .iter()
+            .filter(|r| r.enabled)
+            .map(|r| {
+                (
+                    r.key.read(cx).value().trim().to_string(),
+                    r.value.read(cx).value().to_string(),
+                )
+            })
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        let desired = if pairs.is_empty() {
+            self.url_query_preview = None;
+            base
+        } else {
+            let encoded = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(pairs)
+                .finish();
+            self.url_query_preview = Some(format!("?{encoded}"));
+            format!("{base}?{encoded}")
+        };
+        if self.url.read(cx).value().as_ref() != desired.as_str() {
+            self.url.update(cx, |s, cx| s.set_value(desired, window, cx));
+        }
+    }
+
     /// Handle `Cmd+W` (`CloseFile`) while the tab-overflow popover is open.
     ///
     /// The popover renders inside a deferred overlay and takes focus when it
@@ -746,6 +906,10 @@ impl RequestPanel {
                 };
                 self.req_base_url
                     .update(cx, |s, cx| s.set_value(base_display, window, cx));
+                // A reload replaces the URL from the model, so any live query
+                // preview is stale; the next reconcile recomposes if needed.
+                self.url_query_preview = None;
+                self.query_tab_ingested = false;
                 self.url
                     .update(cx, |s, cx| s.set_value(path_display, window, cx));
                 self.name
@@ -902,6 +1066,8 @@ impl RequestPanel {
                 }
             }
             None => {
+                self.url_query_preview = None;
+                self.query_tab_ingested = false;
                 self.url
                     .update(cx, |s, cx| s.set_value(String::new(), window, cx));
                 self.name
@@ -1004,7 +1170,7 @@ impl RequestPanel {
             Some(id) => id,
             None => return,
         };
-        let url = self.url.read(cx).value().to_string();
+        let url = self.url_base_value(cx);
         let name = self.name.read(cx).value().to_string();
         let protocol = self.protocol;
         let method = self
@@ -1272,7 +1438,7 @@ impl RequestPanel {
                 .unwrap_or_default(),
         );
         sig.push('\u{1}');
-        sig.push_str(&self.url.read(cx).value());
+        sig.push_str(&self.url_base_value(cx));
         sig.push('\u{1}');
         rows_sig(&self.path_rows, &mut sig);
         rows_sig(&self.params_rows, &mut sig);
@@ -1373,7 +1539,7 @@ impl RequestPanel {
         }
 
         // URL: substitute → join base_url for relative paths → normalize scheme.
-        let url_raw = self.url.read(cx).value().to_string();
+        let url_raw = self.url_base_value(cx);
         let mut url = crate::http::variable::substitute(&url_raw, &url_vars);
         if !url.contains("://") {
             if let Some(base) = url_vars.get("__folder_base_url__") {
@@ -1791,6 +1957,7 @@ impl Render for RequestPanel {
         self.reconcile_pending_add(window, cx);
         self.reconcile_folder_kv(window, cx);
         self.reconcile_kv_focus_subs(cx);
+        self.reconcile_kv_query_sync(window, cx);
         let theme = cx.theme().clone();
         let has_request = self.request_id.is_some();
         let has_folder = self.folder_id.is_some();

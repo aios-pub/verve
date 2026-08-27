@@ -226,7 +226,9 @@ fn launch_main_app(cx: &mut App) {
         titlebar: Some(gpui::TitlebarOptions {
             title: Some("Verve".into()),
             appears_transparent: true,
-            traffic_light_position: Some(point(px(14.), px(16.))),
+            // Traffic lights are 12pt tall; y=(40-12)/2 centers them in the
+            // app's 40px self-drawn title bar.
+            traffic_light_position: Some(point(px(14.), px(14.))),
         }),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(960.), px(600.))),

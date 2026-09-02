@@ -8,7 +8,7 @@
 //! 3. The actor sends results back through another mpsc channel.
 //! 4. A GPUI `cx.spawn` loop drains the result channel and updates the entity.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -49,6 +49,17 @@ pub enum SftpCmd {
         remote: String,
         id: String,
     },
+    /// Check whether a remote path exists (upload name-conflict pre-check).
+    Stat {
+        path: String,
+    },
+    /// Recursively upload a local directory into the remote directory
+    /// `remote` (created if missing).
+    UploadDir {
+        local: PathBuf,
+        remote: String,
+        id: String,
+    },
     Download {
         remote: String,
         local: PathBuf,
@@ -66,6 +77,31 @@ pub struct TransferState {
     uploading: bool,
     done: bool,
     error: Option<String>,
+    /// Non-fatal warning shown with the completion line (e.g. skipped
+    /// entries in a directory upload).
+    note: Option<String>,
+}
+
+/// One selected item waiting for its remote-existence check (and possibly an
+/// overwrite decision) before the actual upload command is sent.
+#[derive(Clone)]
+pub struct QueuedUpload {
+    local: PathBuf,
+    /// Remote target path; also used as the transfer id.
+    remote: String,
+    name: String,
+    is_dir: bool,
+    /// None = stat pending; Some(false) = no conflict (uploads right away);
+    /// Some(true) = name conflict, waits in the overwrite dialog.
+    exists: Option<bool>,
+}
+
+/// A batch of uploads going through the remote-existence check. Once every
+/// stat has come back it holds only the conflicting items (non-conflicting
+/// ones were dispatched immediately).
+#[derive(Clone, Default)]
+pub struct ConflictBatch {
+    uploads: Vec<QueuedUpload>,
 }
 
 /// The GPUI entity that renders the SFTP file browser.
@@ -79,6 +115,8 @@ pub struct SftpBrowser {
     pub transfers: Vec<TransferState>,
     /// Uploads queued before the actor was ready.
     pub pending_uploads: Vec<PathBuf>,
+    /// Uploads waiting for the remote-existence check / overwrite decision.
+    pub conflict_batch: Option<ConflictBatch>,
     /// Actor command sender (set when the actor is spawned via start_actor).
     pub cmd_tx: Option<mpsc::UnboundedSender<SftpCmd>>,
 }
@@ -96,6 +134,7 @@ impl SftpBrowser {
             selected_index: None,
             transfers: Vec::new(),
             pending_uploads: Vec::new(),
+            conflict_batch: None,
             cmd_tx: None,
         }
     }
@@ -149,6 +188,7 @@ impl SftpBrowser {
                         uploading,
                         done: false,
                         error: None,
+                        note: None,
                     });
                 }
                 TransferProgress::Progress {
@@ -161,19 +201,54 @@ impl SftpBrowser {
                         t.total = total;
                     }
                 }
-                TransferProgress::Completed { id } => {
+                TransferProgress::Completed { id, note } => {
                     if let Some(t) = self.transfers.iter_mut().find(|t| t.id == id) {
                         t.done = true;
+                        t.note = note;
                     }
                     self.refresh(cx);
                 }
                 TransferProgress::Error { id, message } => {
                     if let Some(t) = self.transfers.iter_mut().find(|t| t.id == id) {
                         t.error = Some(message);
+                    } else {
+                        // The failure happened before `Started` (e.g. an
+                        // unreadable local path) — synthesize a failed entry
+                        // so the error is visible in the transfer bar instead
+                        // of being silently dropped.
+                        let filename = Path::new(&id)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(&id)
+                            .to_string();
+                        self.transfers.push(TransferState {
+                            id,
+                            filename,
+                            total: 0,
+                            transferred: 0,
+                            // The side (up/down) isn't known for a pre-start
+                            // failure; the arrow may be off but the error is
+                            // what matters.
+                            uploading: true,
+                            done: true,
+                            error: Some(message),
+                            note: None,
+                        });
                     }
                 }
             },
+            SftpEvent::StatResult {
+                path,
+                exists,
+                is_dir,
+            } => {
+                self.resolve_stat(path, exists, is_dir);
+            }
             SftpEvent::Error { message } => {
+                self.loading = false;
+                self.error = Some(message);
+            }
+            SftpEvent::Fatal { message } => {
                 self.loading = false;
                 self.error = Some(message);
             }
@@ -197,14 +272,22 @@ impl SftpBrowser {
         let path = self.current_path.clone();
         self.loading = true;
         self.error = None;
-        let _ = self.send_cmd(SftpCmd::ListDir { path });
+        if !self.send_cmd(SftpCmd::ListDir { path }) {
+            // The actor is gone (SFTP failed to open / runtime died). Fail
+            // visibly instead of spinning on "加载中…" forever.
+            self.loading = false;
+            self.error = Some("SFTP 会话已断开，请重新连接后再试。".into());
+        }
     }
 
     /// Navigate to an absolute path.
     pub fn cd(&mut self, path: String, _cx: &mut Context<Self>) {
         self.loading = true;
         self.error = None;
-        let _ = self.send_cmd(SftpCmd::ListDir { path });
+        if !self.send_cmd(SftpCmd::ListDir { path }) {
+            self.loading = false;
+            self.error = Some("SFTP 会话已断开，请重新连接后再试。".into());
+        }
     }
 
     /// Navigate into a child entry.
@@ -236,26 +319,107 @@ impl SftpBrowser {
         self.refresh(cx);
     }
 
-    /// Enqueue a single upload.
-    pub fn enqueue_upload(&mut self, local: PathBuf, _cx: &mut Context<Self>) {
-        let filename = local
+    /// Stage one selected upload: compute its remote target and stat the
+    /// remote side first. The actual Upload/UploadDir command is only sent
+    /// once existence is known (see `resolve_stat`), so name conflicts can
+    /// get an overwrite/skip prompt instead of silently truncating.
+    pub fn enqueue_upload(&mut self, local: PathBuf) {
+        let name = local
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file")
             .to_string();
-        let remote = format!("{}/{}", self.current_path.trim_end_matches('/'), filename);
-        let id = remote.clone();
+        let remote = format!("{}/{}", self.current_path.trim_end_matches('/'), name);
         if self.cmd_tx.is_none() {
             self.pending_uploads.push(local);
-        } else {
-            let _ = self.send_cmd(SftpCmd::Upload { local, remote, id });
+            return;
+        }
+        let is_dir = local.is_dir();
+        let batch = self.conflict_batch.get_or_insert_with(ConflictBatch::default);
+        batch.uploads.push(QueuedUpload {
+            local,
+            remote: remote.clone(),
+            name,
+            is_dir,
+            exists: None,
+        });
+        if !self.send_cmd(SftpCmd::Stat { path: remote }) {
+            // Actor died between the cmd_tx check and now.
+            self.conflict_batch = None;
+            self.loading = false;
+            self.error = Some("SFTP 会话已断开，请重新连接后再试。".into());
         }
     }
 
     /// Enqueue multiple uploads.
-    pub fn enqueue_uploads(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    pub fn enqueue_uploads(&mut self, paths: Vec<PathBuf>, _cx: &mut Context<Self>) {
         for p in paths {
-            self.enqueue_upload(p, cx);
+            self.enqueue_upload(p);
+        }
+    }
+
+    /// Send the actual upload command for a checked item.
+    fn dispatch_upload(&mut self, u: QueuedUpload) {
+        let cmd = if u.is_dir {
+            SftpCmd::UploadDir {
+                local: u.local,
+                remote: u.remote.clone(),
+                id: u.remote,
+            }
+        } else {
+            SftpCmd::Upload {
+                local: u.local,
+                remote: u.remote.clone(),
+                id: u.remote,
+            }
+        };
+        let _ = self.send_cmd(cmd);
+    }
+
+    /// Consume a Stat reply. Once every item in the batch has been checked,
+    /// non-conflicting uploads are dispatched immediately and conflicting
+    /// ones stay in the batch for the overwrite dialog.
+    fn resolve_stat(&mut self, path: String, exists: bool, _is_dir: bool) {
+        let Some(batch) = &mut self.conflict_batch else {
+            return;
+        };
+        let Some(u) = batch.uploads.iter_mut().find(|u| u.remote == path) else {
+            return;
+        };
+        u.exists = Some(exists);
+        if batch.uploads.iter().any(|u| u.exists.is_none()) {
+            return; // still waiting for other stats
+        }
+        // Checks complete: take the batch, upload everything that is free,
+        // and keep only conflicts for the dialog (None → nothing conflicts).
+        let batch = match self.conflict_batch.take() {
+            Some(b) => b,
+            None => return,
+        };
+        let mut conflicts = ConflictBatch::default();
+        for u in batch.uploads {
+            if u.exists == Some(true) {
+                conflicts.uploads.push(u);
+            } else {
+                self.dispatch_upload(u);
+            }
+        }
+        if conflicts.uploads.is_empty() {
+            self.conflict_batch = None;
+        } else {
+            self.conflict_batch = Some(conflicts);
+        }
+    }
+
+    /// Apply the user's overwrite decision: `overwrite` = upload the
+    /// conflicting items too; otherwise they are skipped (dropped).
+    fn resolve_conflicts(&mut self, overwrite: bool, _cx: &mut Context<Self>) {
+        if let Some(batch) = self.conflict_batch.take() {
+            if overwrite {
+                for u in batch.uploads {
+                    self.dispatch_upload(u);
+                }
+            }
         }
     }
 
@@ -266,6 +430,26 @@ impl SftpBrowser {
             directories: false,
             multiple: true,
             prompt: Some("选择要上传的文件".into()),
+        });
+        let entity = cx.entity();
+        cx.spawn(async move |_this, cx| {
+            if let Ok(Ok(Some(paths))) = prompt.await {
+                let paths: Vec<PathBuf> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+                let _ = entity.update(cx, move |this, cx| {
+                    this.enqueue_uploads(paths, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Show native directory dialog and upload chosen folders recursively.
+    pub fn pick_and_upload_dir(&mut self, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: true,
+            prompt: Some("选择要上传的文件夹".into()),
         });
         let entity = cx.entity();
         cx.spawn(async move |_this, cx| {
@@ -453,6 +637,7 @@ impl Render for SftpBrowser {
         v_flex()
             .size_full()
             .min_h_0()
+            .relative()
             .overflow_hidden()
             .bg(bg)
             .text_color(fg)
@@ -494,6 +679,16 @@ impl Render for SftpBrowser {
                             .tooltip("上传文件…")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.pick_and_upload(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("sftp-upload-dir")
+                            .ghost()
+                            .xsmall()
+                            .label("📁 上传文件夹")
+                            .tooltip("上传整个文件夹（含子目录）")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.pick_and_upload_dir(cx);
                             })),
                     )
                     .child(
@@ -731,7 +926,7 @@ impl Render for SftpBrowser {
             .child({
                 let visible: Vec<&TransferState> = transfers
                     .iter()
-                    .filter(|t| !t.done || t.error.is_some())
+                    .filter(|t| !t.done || t.error.is_some() || t.note.is_some())
                     .take(3)
                     .collect();
                 v_flex().when(!visible.is_empty(), |c| {
@@ -749,7 +944,12 @@ impl Render for SftpBrowser {
                             let label = if let Some(err) = &t.error {
                                 format!("{} {} 错误: {}", arrow, t.filename, err)
                             } else if t.done {
-                                format!("{} {} 完成", arrow, t.filename)
+                                match &t.note {
+                                    Some(note) => {
+                                        format!("{} {} 完成，{}", arrow, t.filename, note)
+                                    }
+                                    None => format!("{} {} 完成", arrow, t.filename),
+                                }
                             } else {
                                 format!(
                                     "{} {}  {} / {}",
@@ -782,6 +982,82 @@ impl Render for SftpBrowser {
                         }))
                 })
             })
+            // Overwrite/skip dialog for uploads whose remote target already
+            // exists. A self-drawn overlay (like markdown_panel's) because it
+            // is opened from `handle_event`, which has no `&mut Window`.
+            .when_some(
+                self.conflict_batch
+                    .clone()
+                    .filter(|b| !b.uploads.is_empty()),
+                |col, batch| {
+                    let count = batch.uploads.len();
+                    let preview: Vec<String> = batch
+                        .uploads
+                        .iter()
+                        .take(8)
+                        .map(|u| u.name.clone())
+                        .collect();
+                    let list_text = if count > 8 {
+                        format!("{} 等，共 {} 项", preview.join("、"), count)
+                    } else {
+                        preview.join("、")
+                    };
+                    col.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .bg(theme.background.opacity(0.5))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                v_flex()
+                                    .bg(theme.background)
+                                    .border_1()
+                                    .border_color(border)
+                                    .rounded_md()
+                                    .p_4()
+                                    .gap_3()
+                                    .w(px(420.))
+                                    .child(div().text_size(px(13.)).child("以下名称已存在于远端："))
+                                    .child(div().text_sm().text_color(muted).child(list_text))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(muted)
+                                            .child(
+                                                "「覆盖」替换远端同名文件/合并文件夹；「跳过」保留远端现状，仅上传其余项。",
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .justify_end()
+                                            .child(
+                                                Button::new("sftp-conflict-skip")
+                                                    .ghost()
+                                                    .small()
+                                                    .label("跳过")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.resolve_conflicts(false, cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("sftp-conflict-overwrite")
+                                                    .primary()
+                                                    .small()
+                                                    .label("覆盖")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.resolve_conflicts(true, cx);
+                                                    })),
+                                            ),
+                                    ),
+                            ),
+                    )
+                },
+            )
     }
 }
 
@@ -812,7 +1088,7 @@ fn spawn_sftp_actor(
                 Ok(rt) => rt,
                 Err(e) => {
                     log::error!("SFTP actor tokio runtime init failed: {e}");
-                    let _ = event_tx.send(SftpEvent::Error {
+                    let _ = event_tx.send(SftpEvent::Fatal {
                         message: format!("Tokio runtime 初始化失败: {e}"),
                     });
                     return;
@@ -825,7 +1101,7 @@ fn spawn_sftp_actor(
                 let sftp = match conn.open_sftp().await {
                     Ok(s) => s,
                     Err(e) => {
-                        let _ = event_tx.send(SftpEvent::Error {
+                        let _ = event_tx.send(SftpEvent::Fatal {
                             message: format!("无法打开 SFTP: {e}"),
                         });
                         return;
@@ -843,7 +1119,7 @@ fn spawn_sftp_actor(
                 let initial_entries = match sftp.list_dir(&home).await {
                     Ok(entries) => entries,
                     Err(e) => {
-                        let _ = event_tx.send(SftpEvent::Error {
+                        let _ = event_tx.send(SftpEvent::Fatal {
                             message: format!("读取主目录失败: {e}"),
                         });
                         return;
@@ -899,43 +1175,67 @@ fn spawn_sftp_actor(
                             };
                             let _ = event_tx.send(ev);
                         }
+                        SftpCmd::Stat { path } => {
+                            let ev = match sftp.stat(&path).await {
+                                Ok(entry) => SftpEvent::StatResult {
+                                    path,
+                                    exists: true,
+                                    is_dir: entry.is_dir,
+                                },
+                                // Not-found (and any other stat error) reads
+                                // as "free to upload"; the upload itself will
+                                // surface real errors.
+                                Err(_) => SftpEvent::StatResult {
+                                    path,
+                                    exists: false,
+                                    is_dir: false,
+                                },
+                            };
+                            let _ = event_tx.send(ev);
+                        }
                         SftpCmd::Upload { local, remote, id } => {
                             let (ptx, mut prx) = mpsc::unbounded_channel::<TransferProgress>();
                             let fwd = event_tx.clone();
-                            let id_fwd = id.clone();
                             tokio::spawn(async move {
                                 while let Some(tp) = prx.recv().await {
                                     let _ = fwd.send(SftpEvent::Transfer(tp));
                                 }
                             });
-                            let res = sftp.upload_file(&local, &remote, ptx).await;
-                            let ev = match res {
-                                Ok(()) => SftpEvent::Transfer(TransferProgress::Completed { id }),
-                                Err(e) => SftpEvent::Transfer(TransferProgress::Error {
-                                    id: id_fwd,
-                                    message: e,
-                                }),
-                            };
-                            let _ = event_tx.send(ev);
+                            // The transfer emits Completed itself on success;
+                            // reporting it here too caused duplicate refreshes.
+                            if let Err(e) = sftp.upload_file(&local, &remote, ptx).await {
+                                let _ = event_tx.send(SftpEvent::Transfer(
+                                    TransferProgress::Error { id, message: e },
+                                ));
+                            }
+                        }
+                        SftpCmd::UploadDir { local, remote, id } => {
+                            let (ptx, mut prx) = mpsc::unbounded_channel::<TransferProgress>();
+                            let fwd = event_tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(tp) = prx.recv().await {
+                                    let _ = fwd.send(SftpEvent::Transfer(tp));
+                                }
+                            });
+                            if let Err(e) = sftp.upload_dir(&local, &remote, ptx).await {
+                                let _ = event_tx.send(SftpEvent::Transfer(
+                                    TransferProgress::Error { id, message: e },
+                                ));
+                            }
                         }
                         SftpCmd::Download { remote, local, id } => {
                             let (ptx, mut prx) = mpsc::unbounded_channel::<TransferProgress>();
                             let fwd = event_tx.clone();
-                            let id_fwd = id.clone();
                             tokio::spawn(async move {
                                 while let Some(tp) = prx.recv().await {
                                     let _ = fwd.send(SftpEvent::Transfer(tp));
                                 }
                             });
-                            let res = sftp.download_file(&remote, &local, ptx).await;
-                            let ev = match res {
-                                Ok(()) => SftpEvent::Transfer(TransferProgress::Completed { id }),
-                                Err(e) => SftpEvent::Transfer(TransferProgress::Error {
-                                    id: id_fwd,
-                                    message: e,
-                                }),
-                            };
-                            let _ = event_tx.send(ev);
+                            if let Err(e) = sftp.download_file(&remote, &local, ptx).await {
+                                let _ = event_tx.send(SftpEvent::Transfer(
+                                    TransferProgress::Error { id, message: e },
+                                ));
+                            }
                         }
                     }
                 }
@@ -965,7 +1265,21 @@ pub enum SftpEvent {
         removed_path: String,
     },
     Transfer(TransferProgress),
+    /// Reply to `SftpCmd::Stat`. A failed stat is reported as "not exists":
+    /// the subsequent upload itself will surface any real error.
+    StatResult {
+        path: String,
+        exists: bool,
+        is_dir: bool,
+    },
+    /// A single operation failed (list/mkdir/rename/remove/…). The actor
+    /// keeps running; only this operation is lost.
     Error {
+        message: String,
+    },
+    /// Unrecoverable failure (SFTP could not be opened, runtime init died).
+    /// The actor thread exits right after sending this; the pump must stop.
+    Fatal {
         message: String,
     },
 }
@@ -993,26 +1307,30 @@ pub fn bind_sftp_browser(
     cx.spawn(async move |_this, cx| {
         while let Some(ev) = event_rx.recv().await {
             let is_ready = matches!(ev, SftpEvent::Ready { .. });
-            let is_fatal_err = matches!(ev, SftpEvent::Error { .. });
+            // Only Fatal ends the pump. Regular `Error` events are per-
+            // operation failures (list/rename/remove/…); killing the loop on
+            // them used to silence every later transfer event for the whole
+            // session (no progress, no completion refresh, no errors).
+            let is_fatal = matches!(ev, SftpEvent::Fatal { .. });
             let _ = entity.update(cx, |b, cx| {
-                // On Ready, bind the cmd_tx so subsequent uploads/refresh go
-                // through immediately, and drain any pending uploads.
                 if is_ready {
+                    // handle_event sets current_path = home; it must run
+                    // BEFORE draining pending uploads, or their remote paths
+                    // are built from the literal "~" placeholder.
+                    b.handle_event(ev, cx);
                     if let Some(tx) = cmd_tx_for_browser.take() {
                         b.cmd_tx = Some(tx);
-                        let pending = std::mem::take(&mut b.pending_uploads);
-                        for local in pending {
-                            b.enqueue_upload(local, cx);
-                        }
                     }
                     b.loading = false;
+                    let pending = std::mem::take(&mut b.pending_uploads);
+                    for local in pending {
+                        b.enqueue_upload(local);
+                    }
+                } else {
+                    b.handle_event(ev, cx);
                 }
-                if is_fatal_err {
-                    b.loading = false;
-                }
-                b.handle_event(ev, cx);
             });
-            if is_fatal_err {
+            if is_fatal {
                 break;
             }
         }

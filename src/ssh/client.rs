@@ -337,9 +337,14 @@ impl SshConnection {
             .await
             .map_err(|e| SshError::from_russh(e, "打开会话", ""))?;
 
-        let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into());
+        // Always request xterm-256color: our emulator is xterm-compatible, so
+        // that is the correct terminfo for the remote side. Passing the local
+        // $TERM through breaks remote vim/less when the app is launched from a
+        // shell whose TERM the server has no terminfo entry for (kitty,
+        // alacritty, …) — vim then fails with E558 and loses cursor keys.
+        let term = "xterm-256color";
         channel
-            .request_pty(false, &term, cols, rows, 0, 0, &[])
+            .request_pty(false, term, cols, rows, 0, 0, &[])
             .await
             .map_err(|e| SshError::from_russh(e, "请求 PTY", ""))?;
         channel

@@ -292,6 +292,11 @@ pub struct SshPanel {
     /// When true, show the host picker overlay (for starting new connections
     /// without closing existing sessions).
     pub show_host_picker: bool,
+    /// When true (and sessions exist), the content area shows the full host
+    /// card grid instead of the active session — the "host list" pseudo-tab.
+    /// Sessions stay alive in the background; clicking any session tab flips
+    /// this back to false.
+    pub show_host_grid: bool,
     /// When Some(message), show a small status toast in the Forwards view
     /// (e.g. "已启动: 127.0.0.1:8080 → ..."). Cleared after a few seconds by
     /// the render loop when stale.
@@ -326,6 +331,7 @@ impl SshPanel {
             tab_context_menu: None,
             panel_bounds: std::sync::Arc::new(std::sync::Mutex::new(gpui::Bounds::default())),
             show_host_picker: false,
+            show_host_grid: false,
             fwd_status: None,
             fwd_inputs: None,
             focus_handle,
@@ -435,6 +441,14 @@ impl SshPanel {
         let _fg = theme.foreground;
         let accent = theme.accent;
         let danger = theme.danger;
+        // Hosts that currently have at least one Connected session — used to
+        // badge cards with a live-status dot while browsing the host grid.
+        let connected_hosts: std::collections::HashSet<String> = self
+            .sessions
+            .iter()
+            .filter(|s| matches!(s.status, SessionStatus::Connected))
+            .map(|s| s.host_id.clone())
+            .collect();
 
         if self.hosts.is_empty() {
             return v_flex()
@@ -528,6 +542,7 @@ impl SshPanel {
                 let host_id_del = host.id.clone();
                 let host_id_dup = host.id.clone();
                 let jump_name = host.bastion_id.as_ref().map(|jid| host_name_of(jid));
+                let is_connected = connected_hosts.contains(&host.id);
 
                 // Card: 200px wide, auto height.
                 v_flex()
@@ -540,7 +555,7 @@ impl SshPanel {
                     .border_color(border)
                     .bg(theme_c.background)
                     .hover(|d| d.border_color(accent))
-                    // Top row: icon + name.
+                    // Top row: icon + name (+ live dot when connected).
                     .child(
                         h_flex()
                             .gap_2()
@@ -553,7 +568,17 @@ impl SshPanel {
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(host.name.clone()),
-                            ),
+                            )
+                            .when(is_connected, |row| {
+                                row.child(
+                                    div()
+                                        .w(px(8.))
+                                        .h(px(8.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(gpui::hsla(0.33, 0.6, 0.4, 1.0)),
+                                )
+                            }),
                     )
                     // Address.
                     .child(
@@ -1479,6 +1504,8 @@ impl SshPanel {
             local: None,
         });
         self.active_tab = self.sessions.len() - 1;
+        // Connecting from the host-list pseudo-tab lands on the new session.
+        self.show_host_grid = false;
         cx.notify();
     }
 
@@ -1598,6 +1625,8 @@ impl SshPanel {
             }
         }
         self.active_tab = self.sessions.len() - 1;
+        // Connecting from the host-list pseudo-tab lands on the new session.
+        self.show_host_grid = false;
         cx.notify();
     }
 
@@ -1630,8 +1659,20 @@ impl SshPanel {
         // the spawn loop can only stash the prompt here.
         self.ensure_mfa_input(window, cx);
 
-        // Resolve the content element based on view mode.
-        let content: AnyElement = if active_view == SessionView::Sftp {
+        // Resolve the content element based on view mode. When the host-list
+        // pseudo-tab is active, show the full host card grid instead of the
+        // active session; sessions keep running in the background.
+        let show_grid = self.show_host_grid;
+        let content: AnyElement = if show_grid {
+            div()
+                .flex_1()
+                .min_h_0()
+                .id("ssh-host-grid-scroll")
+                .overflow_y_scroll()
+                .p_4()
+                .child(self.render_card_grid(cx, theme.clone()))
+                .into_any_element()
+        } else if active_view == SessionView::Sftp {
             self.sessions
                 .get(active)
                 .and_then(|s| s.sftp_browser.clone())
@@ -1717,6 +1758,28 @@ impl SshPanel {
                     .border_b_1()
                     .border_color(border)
                     .bg(theme.muted)
+                    // Fixed "host list" pseudo-tab — switches the content area
+                    // to the full host card grid without touching sessions.
+                    .child(
+                        h_flex()
+                            .id("ssh-hosts-tab")
+                            .px_3()
+                            .h(px(28.))
+                            .items_center()
+                            .gap_1()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .when(show_grid, |d| d.bg(accent.opacity(0.5)).text_color(fg))
+                            .when(!show_grid, |d| {
+                                d.text_color(muted).hover(|s| s.bg(theme.muted))
+                            })
+                            .child(Icon::new(IconName::LayoutDashboard).size_3())
+                            .child(div().text_sm().child("主机"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_host_grid = true;
+                                cx.notify();
+                            })),
+                    )
                     .children(self.sessions.iter().enumerate().map(|(i, s)| {
                         let is_active = i == active;
                         let host_name = s.host_name.clone();
@@ -1747,6 +1810,9 @@ impl SshPanel {
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active_tab = i;
+                                // Leaving the host-list pseudo-tab: show this
+                                // session's terminal again.
+                                this.show_host_grid = false;
                                 cx.notify();
                             }))
                             // Right-click → open the tab context menu (anchored
@@ -1776,91 +1842,102 @@ impl SshPanel {
                             })),
                     )
                     .child(div().flex_1())
-                    // View toggle: Terminal / Files
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .pr_2()
-                            .child(
-                                Button::new("ssh-view-terminal")
-                                    .ghost()
-                                    .xsmall()
-                                    .label("终端")
-                                    .when(active_view == SessionView::Terminal, |b| b.primary())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
-                                            s.view = SessionView::Terminal;
-                                        }
-                                        cx.notify();
-                                    }))
-                            )
-                            // Files/Forwards need the SSH transport — hidden
-                            // for local-terminal tabs.
-                            .when(!active_is_local, |row| {
-                                row
+                    // View toggle: Terminal / Files — session-specific, so
+                    // hidden while the host-list pseudo-tab is shown.
+                    .when(!show_grid, |bar| {
+                        bar.child(
+                            h_flex()
+                                .gap_1()
+                                .pr_2()
+                                .child(
+                                    Button::new("ssh-view-terminal")
+                                        .ghost()
+                                        .xsmall()
+                                        .label("终端")
+                                        .when(active_view == SessionView::Terminal, |b| b.primary())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(s) = this.sessions.get_mut(this.active_tab)
+                                            {
+                                                s.view = SessionView::Terminal;
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                                // Files/Forwards need the SSH transport — hidden
+                                // for local-terminal tabs.
+                                .when(!active_is_local, |row| {
+                                    row.child({
+                                        let can_open = active_has_conn;
+                                        Button::new("ssh-view-files")
+                                            .ghost()
+                                            .xsmall()
+                                            .label("文件")
+                                            .when(active_view == SessionView::Sftp, |b| b.primary())
+                                            .tooltip(if can_open {
+                                                "文件浏览器（SFTP）"
+                                            } else {
+                                                "等待连接建立…"
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if !can_open {
+                                                    return;
+                                                }
+                                                if let Some(s) =
+                                                    this.sessions.get_mut(this.active_tab)
+                                                {
+                                                    s.view = SessionView::Sftp;
+                                                }
+                                                cx.notify();
+                                            }))
+                                    })
                                     .child({
-                                let can_open = active_has_conn;
-                                Button::new("ssh-view-files")
-                                    .ghost()
-                                    .xsmall()
-                                    .label("文件")
-                                    .when(active_view == SessionView::Sftp, |b| b.primary())
-                                    .tooltip(if can_open {
-                                        "文件浏览器（SFTP）"
-                                    } else {
-                                        "等待连接建立…"
+                                        let can_open = active_has_conn;
+                                        let active_count = self
+                                            .sessions
+                                            .get(active)
+                                            .map(|s| s.active_forwards.len())
+                                            .unwrap_or(0);
+                                        let label = if active_count > 0 {
+                                            format!("转发 ({active_count})")
+                                        } else {
+                                            "端口转发".into()
+                                        };
+                                        Button::new("ssh-view-forwards")
+                                            .ghost()
+                                            .xsmall()
+                                            .label(label)
+                                            .when(active_view == SessionView::Forwards, |b| {
+                                                b.primary()
+                                            })
+                                            .tooltip(if can_open {
+                                                "本地端口转发：将远端服务映射到本地端口"
+                                            } else {
+                                                "等待连接建立…"
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if !can_open {
+                                                    return;
+                                                }
+                                                if let Some(s) =
+                                                    this.sessions.get_mut(this.active_tab)
+                                                {
+                                                    s.view = SessionView::Forwards;
+                                                }
+                                                cx.notify();
+                                            }))
                                     })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if !can_open {
-                                            return;
-                                        }
-                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
-                                            s.view = SessionView::Sftp;
-                                        }
-                                        cx.notify();
-                                    }))
-                            })
-                            .child({
-                                let can_open = active_has_conn;
-                                let active_count = self
-                                    .sessions
-                                    .get(active)
-                                    .map(|s| s.active_forwards.len())
-                                    .unwrap_or(0);
-                                let label = if active_count > 0 {
-                                    format!("转发 ({active_count})")
-                                } else {
-                                    "端口转发".into()
-                                };
-                                Button::new("ssh-view-forwards")
-                                    .ghost()
-                                    .xsmall()
-                                    .label(label)
-                                    .when(active_view == SessionView::Forwards, |b| b.primary())
-                                    .tooltip(if can_open {
-                                        "本地端口转发：将远端服务映射到本地端口"
-                                    } else {
-                                        "等待连接建立…"
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if !can_open {
-                                            return;
-                                        }
-                                        if let Some(s) = this.sessions.get_mut(this.active_tab) {
-                                            s.view = SessionView::Forwards;
-                                        }
-                                        cx.notify();
-                                    }))
-                                    })
-                            }),
-                    ),
+                                }),
+                        )
+                    }),
             )
             // MFA / OTP prompt bar — shown when the active session is awaiting
-            // a keyboard-interactive verification code.
-            .when_some(
-                self.render_mfa_bar(active, &theme, cx),
-                |col, bar| col.child(bar),
-            )
+            // a keyboard-interactive verification code. Hidden while the
+            // host-list pseudo-tab is shown (it belongs to the session).
+            .when(!show_grid, |col| {
+                col.when_some(self.render_mfa_bar(active, &theme, cx), |col, bar| {
+                    col.child(bar)
+                })
+            })
             // Content area.
             .child(
                 div()
@@ -1872,10 +1949,12 @@ impl SshPanel {
             )
             // ZMODEM progress bar: visible during an active transfer, and
             // briefly after success/error. Cancelled transfers don't show.
+            // Hidden while the host-list pseudo-tab is shown.
             .when(
-                active_zm_state.active
-                    || (active_zm_state.done && !active_zm_state.cancelled)
-                    || active_zm_state.error.is_some(),
+                !show_grid
+                    && (active_zm_state.active
+                        || (active_zm_state.done && !active_zm_state.cancelled)
+                        || active_zm_state.error.is_some()),
                 |c| {
                     let zm = &active_zm_state;
                     let pct = if zm.total == 0 {
@@ -1929,38 +2008,41 @@ impl SshPanel {
                     )
                 },
             )
-            // Status bar.
-            .child(
-                h_flex()
-                    .h(px(24.))
-                    .px_3()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(border)
-                    .bg(theme.muted)
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(match &active_status {
-                                SessionStatus::Connected => gpui::hsla(0.33, 0.6, 0.4, 1.0),
-                                SessionStatus::Connecting => accent,
-                                SessionStatus::Reconnecting(_) => accent,
-                                SessionStatus::Error(_) => theme.danger,
-                                SessionStatus::Closed => muted,
-                            })
-                            .child(match &active_status {
-                                SessionStatus::Connected => "● 已连接".to_string(),
-                                SessionStatus::Connecting => "○ 连接中…".to_string(),
-                                SessionStatus::Reconnecting(n) => {
-                                    format!("⟳ 重连中（第 {} 次）", n)
-                                }
-                                SessionStatus::Error(e) => format!("✕ {e}"),
-                                SessionStatus::Closed => "○ 已断开".to_string(),
-                            }),
-                    )
-                    .child(div().flex_1()),
-            )
+            // Status bar — session-specific, hidden while the host-list
+            // pseudo-tab is shown.
+            .when(!show_grid, |col| {
+                col.child(
+                    h_flex()
+                        .h(px(24.))
+                        .px_3()
+                        .items_center()
+                        .border_t_1()
+                        .border_color(border)
+                        .bg(theme.muted)
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(match &active_status {
+                                    SessionStatus::Connected => gpui::hsla(0.33, 0.6, 0.4, 1.0),
+                                    SessionStatus::Connecting => accent,
+                                    SessionStatus::Reconnecting(_) => accent,
+                                    SessionStatus::Error(_) => theme.danger,
+                                    SessionStatus::Closed => muted,
+                                })
+                                .child(match &active_status {
+                                    SessionStatus::Connected => "● 已连接".to_string(),
+                                    SessionStatus::Connecting => "○ 连接中…".to_string(),
+                                    SessionStatus::Reconnecting(n) => {
+                                        format!("⟳ 重连中（第 {} 次）", n)
+                                    }
+                                    SessionStatus::Error(e) => format!("✕ {e}"),
+                                    SessionStatus::Closed => "○ 已断开".to_string(),
+                                }),
+                        )
+                        .child(div().flex_1()),
+                )
+            })
             // Tab right-click context menu — MUST be the last child so it paints
             // on top of the content/status bars (later siblings paint later in
             // GPUI's flex layout).
@@ -2694,6 +2776,9 @@ impl SshPanel {
             }
             if self.sessions.is_empty() {
                 self.active_tab = 0;
+                // Back to the plain host-grid page (render falls through to
+                // the empty-state grid once no tabs remain).
+                self.show_host_grid = false;
             }
         }
         cx.notify();

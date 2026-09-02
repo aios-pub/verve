@@ -49,8 +49,12 @@ pub enum TransferProgress {
         transferred: u64,
         total: u64,
     },
-    /// Transfer completed successfully.
-    Completed { id: String },
+    /// Transfer completed successfully. `note` carries non-fatal warnings
+    /// (e.g. entries skipped during a directory upload) for the UI to show.
+    Completed {
+        id: String,
+        note: Option<String>,
+    },
     /// Transfer failed with an error.
     Error { id: String, message: String },
 }
@@ -310,7 +314,10 @@ impl SftpSessionWrapper {
             .map_err(|e| format!("刷新本地文件失败: {e}"))?;
         drop(local);
 
-        let _ = progress_tx.send(TransferProgress::Completed { id });
+        let _ = progress_tx.send(TransferProgress::Completed {
+            id,
+            note: None,
+        });
         Ok(())
     }
 
@@ -328,14 +335,10 @@ impl SftpSessionWrapper {
             .unwrap_or(remote_path)
             .to_string();
 
-        let mut local = tokio::fs::File::open(local_path)
+        let total = tokio::fs::metadata(local_path)
             .await
-            .map_err(|e| format!("打开本地文件失败: {e}"))?;
-        let local_meta = local
-            .metadata()
-            .await
-            .map_err(|e| format!("读取本地文件元信息失败: {e}"))?;
-        let total = local_meta.len();
+            .map_err(|e| format!("读取本地文件元信息失败: {e}"))?
+            .len();
 
         let _ = progress_tx.send(TransferProgress::Started {
             id: id.clone(),
@@ -343,6 +346,127 @@ impl SftpSessionWrapper {
             total,
             uploading: true,
         });
+
+        self.stream_upload(local_path, remote_path, |transferred, total| {
+            let _ = progress_tx.send(TransferProgress::Progress {
+                id: id.clone(),
+                transferred,
+                total,
+            });
+        })
+        .await?;
+
+        let _ = progress_tx.send(TransferProgress::Completed {
+            id,
+            note: None,
+        });
+        Ok(())
+    }
+
+    /// Recursively upload a local directory to `remote_dir`, which is created
+    /// if missing (existing files inside are overwritten). The whole tree is
+    /// reported as a single transfer: `total` is the sum of all file sizes
+    /// and each chunk updates the aggregate `transferred` count.
+    pub async fn upload_dir(
+        &self,
+        local_dir: &Path,
+        remote_dir: &str,
+        progress_tx: mpsc::UnboundedSender<TransferProgress>,
+    ) -> Result<(), String> {
+        let id = remote_dir.to_string();
+        let dirname = local_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("folder")
+            .to_string();
+
+        // Started goes out before the local walk: if the walk fails (e.g. an
+        // unreadable path) the error still attaches to a visible transfer
+        // row instead of being silently dropped by the UI. The real total
+        // arrives with the first Progress event.
+        let _ = progress_tx.send(TransferProgress::Started {
+            id: id.clone(),
+            filename: format!("{dirname}/"),
+            total: 0,
+            uploading: true,
+        });
+
+        let (dirs, files, skipped) = collect_local_tree(local_dir)?;
+        let total: u64 = files.iter().map(|f| f.size).sum();
+
+        // Create the destination folder itself plus every subdirectory,
+        // parents before children (that's how collect_local_tree sorts them).
+        self.ensure_remote_dir(remote_dir).await?;
+        for rel in &dirs {
+            if rel.is_empty() {
+                continue; // the root, handled above
+            }
+            let target = Self::join_path(remote_dir, rel);
+            self.ensure_remote_dir(&target).await?;
+        }
+
+        let mut done: u64 = 0;
+        for f in &files {
+            let target = Self::join_path(remote_dir, &f.rel);
+            let tx = progress_tx.clone();
+            let id = id.clone();
+            self.stream_upload(&f.local, &target, move |transferred, _| {
+                let _ = tx.send(TransferProgress::Progress {
+                    id: id.clone(),
+                    transferred: done + transferred,
+                    total,
+                });
+            })
+            .await?;
+            done += f.size;
+        }
+
+        let note = if skipped.is_empty() {
+            None
+        } else {
+            let preview: Vec<String> = skipped.iter().take(3).cloned().collect();
+            Some(format!(
+                "跳过 {} 项（无权限/链接/特殊文件）：{}{}",
+                skipped.len(),
+                preview.join("、"),
+                if skipped.len() > 3 { " …" } else { "" }
+            ))
+        };
+        let _ = progress_tx.send(TransferProgress::Completed { id, note });
+        Ok(())
+    }
+
+    /// Create `path` on the remote, tolerating an already-existing directory
+    /// (plain mkdir fails then, which would abort re-uploads into an
+    /// existing folder). Any other failure is returned.
+    async fn ensure_remote_dir(&self, path: &str) -> Result<(), String> {
+        if let Err(e) = self.mkdir(path).await {
+            match self.stat(path).await {
+                Ok(entry) if entry.is_dir => {}
+                _ => return Err(format!("创建目录 {path} 失败: {e}")),
+            }
+        }
+        Ok(())
+    }
+
+    /// Core of `upload_file`/`upload_dir`: stream `local_path` to a newly
+    /// created/truncated `remote_path` in 64 KiB chunks, invoking
+    /// `on_progress(transferred, total)` after every chunk. Returns the file
+    /// size in bytes.
+    async fn stream_upload(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        mut on_progress: impl FnMut(u64, u64),
+    ) -> Result<u64, String> {
+        let mut local = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|e| format!("打开本地文件失败: {e}"))?;
+        let total = local
+            .metadata()
+            .await
+            .map_err(|e| format!("读取本地文件元信息失败: {e}"))?
+            .len();
 
         let mut remote = self
             .sftp
@@ -368,20 +492,14 @@ impl SftpSessionWrapper {
                 .await
                 .map_err(|e| format!("写入远程文件失败: {e}"))?;
             transferred += n as u64;
-            let _ = progress_tx.send(TransferProgress::Progress {
-                id: id.clone(),
-                transferred,
-                total,
-            });
+            on_progress(transferred, total);
         }
         remote
             .flush()
             .await
             .map_err(|e| format!("刷新远程文件失败: {e}"))?;
         drop(remote);
-
-        let _ = progress_tx.send(TransferProgress::Completed { id });
-        Ok(())
+        Ok(total)
     }
 
     /// Join a base directory with a child component using "/" as separator.
@@ -390,6 +508,87 @@ impl SftpSessionWrapper {
         let base = base.trim_end_matches('/');
         format!("{}/{}", base, child)
     }
+}
+
+/// A regular file discovered inside a local directory tree.
+struct LocalFileEntry {
+    /// Absolute local path.
+    local: PathBuf,
+    /// Path relative to the walk root, always '/'-separated so it can be
+    /// appended to a remote path directly.
+    rel: String,
+    size: u64,
+}
+
+/// Walk `root` and collect its subdirectories (relative paths, root itself
+/// included as the empty string) and all regular files. The third element
+/// lists everything that was NOT uploaded (relative paths): unreadable
+/// entries, directory symlinks, broken links and other node types (fifos,
+/// sockets, devices) so the UI can report them instead of silently dropping
+/// content.
+///
+/// Directory symlinks are never followed (walkdir default), so cycles are
+/// impossible. Symlinks to files are followed and uploaded as regular files.
+///
+/// The dir/file lists are sorted so that parents come before children, which
+/// keeps remote `mkdir` calls in `upload_dir` valid in a single pass.
+fn collect_local_tree(
+    root: &Path,
+) -> Result<(Vec<String>, Vec<LocalFileEntry>, Vec<String>), String> {
+    let rel_of = |p: &Path| -> String {
+        p.strip_prefix(root)
+            .unwrap_or(p)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    let mut dirs: Vec<String> = vec![String::new()];
+    let mut files: Vec<LocalFileEntry> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        // One unreadable entry must not abort the whole upload; record it as
+        // skipped and keep going.
+        let entry = match entry {
+            Ok(e) => e,
+            Err(err) => {
+                skipped.push(match err.path() {
+                    Some(p) => rel_of(p),
+                    None => err.to_string(),
+                });
+                continue;
+            }
+        };
+        if entry.depth() == 0 {
+            continue; // the root itself
+        }
+        let rel = rel_of(entry.path());
+        let file_type = entry.file_type();
+        if file_type.is_dir() {
+            dirs.push(rel);
+        } else if file_type.is_file() {
+            files.push(LocalFileEntry {
+                local: entry.path().to_path_buf(),
+                rel,
+                size: entry.metadata().map(|m| m.len()).unwrap_or(0),
+            });
+        } else {
+            // Symlinks and special nodes. metadata() follows symlinks: file
+            // symlinks upload as regular files; directory symlinks, broken
+            // links and fifos/sockets/devices are skipped and reported.
+            match std::fs::metadata(entry.path()) {
+                Ok(meta) if meta.is_file() => files.push(LocalFileEntry {
+                    local: entry.path().to_path_buf(),
+                    rel,
+                    size: meta.len(),
+                }),
+                _ => skipped.push(rel),
+            }
+        }
+    }
+    dirs.sort();
+    files.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok((dirs, files, skipped))
 }
 
 /// Return a human-readable size string: "1.2 KB", "3.4 MB", etc.
@@ -481,5 +680,119 @@ mod tests {
             SftpSessionWrapper::join_path("/home/user/", "foo"),
             "/home/user/foo"
         );
+    }
+
+    /// Minimal temp dir that does not pull in the `tempfile` crate.
+    fn temp_root(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "verve_sftp_{tag}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn collect_tree_lists_dirs_files_and_sizes() {
+        let root = temp_root("walk");
+        std::fs::create_dir_all(root.join("sub/deep")).expect("mkdir");
+        std::fs::create_dir_all(root.join("empty_dir")).expect("mkdir");
+        std::fs::write(root.join("a.txt"), b"abc").expect("write");
+        std::fs::write(root.join("sub/b.txt"), b"12345").expect("write");
+        // Empty file, plus a Chinese filename to exercise multibyte paths.
+        std::fs::write(root.join("sub/deep/c.txt"), b"").expect("write");
+        std::fs::create_dir_all(root.join("中文目录")).expect("mkdir");
+        std::fs::write(root.join("中文目录/文件.txt"), b"hi").expect("write");
+
+        let (dirs, files, skipped) = collect_local_tree(&root).expect("walk");
+        assert_eq!(
+            dirs,
+            vec![
+                String::new(),
+                "empty_dir".to_string(),
+                "sub".to_string(),
+                "sub/deep".to_string(),
+                "中文目录".to_string(),
+            ]
+        );
+        let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(
+            rels,
+            vec!["a.txt", "sub/b.txt", "sub/deep/c.txt", "中文目录/文件.txt"]
+        );
+        assert_eq!(files.iter().map(|f| f.size).sum::<u64>(), 3 + 5 + 0 + 2);
+        // Local paths stay absolute and point at real files.
+        assert!(files.iter().all(|f| f.local.is_absolute()));
+        assert!(files.iter().all(|f| f.local.is_file()));
+        assert!(skipped.is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_tree_on_empty_dir_yields_root_only() {
+        let root = temp_root("walk_empty");
+        let (dirs, files, skipped) = collect_local_tree(&root).expect("walk");
+        assert_eq!(dirs, vec![String::new()]);
+        assert!(files.is_empty());
+        assert!(skipped.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_tree_reports_dir_symlinks_as_skipped() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("walk_symlink");
+        std::fs::create_dir_all(root.join("real")).expect("mkdir");
+        std::fs::write(root.join("real/f.txt"), b"x").expect("write");
+        symlink(root.join("real"), root.join("dirlink")).expect("symlink");
+        // A file symlink is followed and uploaded as a regular file.
+        symlink(root.join("real/f.txt"), root.join("filelink")).expect("symlink");
+
+        let (dirs, files, skipped) = collect_local_tree(&root).expect("walk");
+        assert!(dirs.contains(&"real".to_string()));
+        assert!(!dirs.contains(&"dirlink".to_string()));
+        assert_eq!(skipped, vec!["dirlink".to_string()]);
+        let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        assert!(rels.contains(&"real/f.txt"));
+        assert!(rels.contains(&"filelink"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_tree_tolerates_unreadable_entries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("walk_unreadable");
+        std::fs::write(root.join("ok.txt"), b"x").expect("write");
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).expect("mkdir");
+        std::fs::write(locked.join("s.txt"), b"y").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let (files, skipped, ok) = match collect_local_tree(&root) {
+            Ok((_, files, skipped)) => (files, skipped, true),
+            Err(_) => (Vec::new(), Vec::new(), false),
+        };
+        // Restore access before cleanup, whatever the assertions below do.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore mode");
+        assert!(ok, "walk should not abort on an unreadable entry");
+        // Root ignores permission bits — only assert when the skip happened.
+        if !skipped.is_empty() {
+            assert_eq!(skipped, vec!["locked".to_string()]);
+        }
+        assert!(files.iter().any(|f| f.rel == "ok.txt"));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -658,15 +658,20 @@ fn xterm_modifier_param(ks: &gpui::Keystroke) -> usize {
         + usize::from(ks.modifiers.control) * 4
 }
 
-/// Navigation key (arrows/Home/End): the plain sequence, or the xterm
-/// modified form `\x1b[1;<mods><F>` when shift/alt/ctrl are held (this is
-/// what shells/readline expect for e.g. Ctrl+Left = backward-word).
-fn nav_seq(ks: &gpui::Keystroke, plain: &[u8], final_ch: char) -> Vec<u8> {
+/// Navigation key (arrows/Home/End). The plain form honours DECCKM
+/// (application cursor keys): full-screen apps like vim/less/htop send smkx
+/// (`ESC[?1h`) and then expect `ESCO A`-style sequences — sending the plain
+/// `ESC[A` instead makes older vims parse it as `[` + `A` (no cursor move;
+/// Left even raises E349). The xterm modified form `ESC[1;<mods><F>` is not
+/// affected by DECCKM, so it stays CSI.
+fn nav_seq(ks: &gpui::Keystroke, app_cursor: bool, final_ch: char) -> Vec<u8> {
     let m = xterm_modifier_param(ks);
     if m > 1 {
         format!("\x1b[1;{m}{final_ch}").into_bytes()
+    } else if app_cursor {
+        format!("\x1bO{final_ch}").into_bytes()
     } else {
-        plain.to_vec()
+        format!("\x1b[{final_ch}").into_bytes()
     }
 }
 
@@ -682,7 +687,8 @@ fn tilde_seq(ks: &gpui::Keystroke, plain: &[u8], code: u8) -> Vec<u8> {
 
 /// Convert a GPUI keystroke to the byte sequence an SSH terminal expects
 /// (ANSI escape sequences for special keys, raw bytes for printable chars).
-fn keystroke_to_bytes(ks: &gpui::Keystroke) -> Vec<u8> {
+/// `app_cursor` is the terminal's DECCKM (application cursor keys) state.
+fn keystroke_to_bytes(ks: &gpui::Keystroke, app_cursor: bool) -> Vec<u8> {
     // Handle modifier combinations first.
     match ks.key.as_str() {
         "enter" | "return" => return b"\r".to_vec(),
@@ -697,12 +703,12 @@ fn keystroke_to_bytes(ks: &gpui::Keystroke) -> Vec<u8> {
         "tab" => return b"\t".to_vec(),
         "escape" => return b"\x1b".to_vec(),
         "space" => return b" ".to_vec(),
-        "up" => return nav_seq(ks, b"\x1b[A", 'A'),
-        "down" => return nav_seq(ks, b"\x1b[B", 'B'),
-        "right" => return nav_seq(ks, b"\x1b[C", 'C'),
-        "left" => return nav_seq(ks, b"\x1b[D", 'D'),
-        "home" => return nav_seq(ks, b"\x1b[H", 'H'),
-        "end" => return nav_seq(ks, b"\x1b[F", 'F'),
+        "up" => return nav_seq(ks, app_cursor, 'A'),
+        "down" => return nav_seq(ks, app_cursor, 'B'),
+        "right" => return nav_seq(ks, app_cursor, 'C'),
+        "left" => return nav_seq(ks, app_cursor, 'D'),
+        "home" => return nav_seq(ks, app_cursor, 'H'),
+        "end" => return nav_seq(ks, app_cursor, 'F'),
         "delete" => return tilde_seq(ks, b"\x1b[3~", 3),
         "pageup" => return tilde_seq(ks, b"\x1b[5~", 5),
         "pagedown" => return tilde_seq(ks, b"\x1b[6~", 6),
@@ -1662,7 +1668,15 @@ impl Render for TerminalView {
                             return;
                         }
                     }
-                    let bytes = keystroke_to_bytes(&event.keystroke);
+                    // Arrows/Home/End must honour the remote's DECCKM
+                    // (application cursor keys) request — see nav_seq.
+                    let app_cursor = if let Ok(term) = this.term.lock() {
+                        term.mode()
+                            .contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+                    } else {
+                        false
+                    };
+                    let bytes = keystroke_to_bytes(&event.keystroke, app_cursor);
                     if !bytes.is_empty() {
                         // If the user is scrolled back into history, any input
                         // key first jumps back to the newest line before sending
@@ -1884,10 +1898,70 @@ mod tests {
     // recursion limit.
     use super::{
         apply_log_highlights, apply_selection, col_to_byte, color_to_hsla, contains_sequence,
-        selection_to_string, slice_by_cols, RowData, SelectionPoint,
+        keystroke_to_bytes, selection_to_string, slice_by_cols, RowData, SelectionPoint,
     };
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, TextRun};
+
+    fn ks(key: &str) -> gpui::Keystroke {
+        gpui::Keystroke {
+            modifiers: Default::default(),
+            key: key.to_string(),
+            key_char: None,
+        }
+    }
+
+    fn ks_ctrl(key: &str) -> gpui::Keystroke {
+        gpui::Keystroke {
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            key: key.to_string(),
+            key_char: None,
+        }
+    }
+
+    /// Normal (cursor) mode sends the CSI arrow forms.
+    #[test]
+    fn arrows_csi_without_decckm() {
+        assert_eq!(keystroke_to_bytes(&ks("up"), false), b"\x1b[A");
+        assert_eq!(keystroke_to_bytes(&ks("down"), false), b"\x1b[B");
+        assert_eq!(keystroke_to_bytes(&ks("right"), false), b"\x1b[C");
+        assert_eq!(keystroke_to_bytes(&ks("left"), false), b"\x1b[D");
+        assert_eq!(keystroke_to_bytes(&ks("home"), false), b"\x1b[H");
+        assert_eq!(keystroke_to_bytes(&ks("end"), false), b"\x1b[F");
+    }
+
+    /// After smkx (DECCKM application cursor keys — what vim enters at
+    /// startup) arrows/Home/End must switch to the SS3 `ESCO x` forms.
+    /// Sending CSI here is what broke cursor movement on older remote vims
+    /// (`ESC[D` parsed as `[` + `D` → E349, no movement).
+    #[test]
+    fn arrows_ss3_with_decckm() {
+        assert_eq!(keystroke_to_bytes(&ks("up"), true), b"\x1bOA");
+        assert_eq!(keystroke_to_bytes(&ks("down"), true), b"\x1bOB");
+        assert_eq!(keystroke_to_bytes(&ks("right"), true), b"\x1bOC");
+        assert_eq!(keystroke_to_bytes(&ks("left"), true), b"\x1bOD");
+        assert_eq!(keystroke_to_bytes(&ks("home"), true), b"\x1bOH");
+        assert_eq!(keystroke_to_bytes(&ks("end"), true), b"\x1bOF");
+    }
+
+    /// Modifier combos keep the xterm `ESC[1;<mods><F>` form in both modes
+    /// (DECCKM does not affect the modified encoding), and tilde keys
+    /// (Delete/PgUp/PgDn) never change either.
+    #[test]
+    fn modified_and_tilde_keys_unchanged_by_decckm() {
+        for app in [false, true] {
+            assert_eq!(
+                keystroke_to_bytes(&ks_ctrl("right"), app),
+                b"\x1b[1;5C"
+            );
+            assert_eq!(keystroke_to_bytes(&ks("delete"), app), b"\x1b[3~");
+            assert_eq!(keystroke_to_bytes(&ks("pageup"), app), b"\x1b[5~");
+            assert_eq!(keystroke_to_bytes(&ks("pagedown"), app), b"\x1b[6~");
+        }
+    }
 
     /// Reproduces the exact panic from the crash report: a row containing the
     /// 2-byte `·` char where a selection column landed mid-character

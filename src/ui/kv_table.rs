@@ -285,12 +285,13 @@ impl RenderOnce for KvTable {
                         let units = estimate_display_units(&val_str);
                         let overflows = units > col_capacity;
                         let value_focused = row.value.read(cx).focus_handle(cx).is_focused(window);
-                        // For form-data file rows that already reference a
-                        // file, show the chosen file name as a read-only label
-                        // instead of the (always-empty, disabled) value input.
-                        // We deliberately avoid mutating the value InputState
-                        // so `to_kv()` keeps returning the model's real value
-                        // (empty) and only `file_path` carries the file.
+                        // For form-data file rows the value cell itself is the
+                        // picker trigger: clicking it opens the native file
+                        // dialog, showing the chosen file name or a
+                        // placeholder. We deliberately avoid mutating the
+                        // value InputState so `to_kv()` keeps returning the
+                        // model's real value (empty) and only `file_path`
+                        // carries the file.
                         let file_name: Option<String> = (is_file && allow_files)
                             .then(|| row.file_path.as_deref())
                             .flatten()
@@ -303,15 +304,20 @@ impl RenderOnce for KvTable {
                         div()
                             .w(value_w)
                             .flex_shrink_0()
-                            .child(if let Some(name) = file_name {
+                            .child(if is_file && allow_files {
+                                let on_file_cell = on_file.clone();
                                 div()
+                                    .id(("kv-file-cell", ix))
                                     .w_full()
                                     .h(px(24.))
                                     .flex()
                                     .items_center()
                                     .overflow_hidden()
+                                    .rounded(px(4.))
+                                    .px(px(4.))
                                     .text_size(px(12.))
                                     .text_color(theme.muted_foreground)
+                                    .hover(|d| d.bg(theme.accent.opacity(0.3)))
                                     .child(Icon::new(IconName::File).size_3())
                                     .child(
                                         div()
@@ -321,14 +327,17 @@ impl RenderOnce for KvTable {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .child(name),
+                                            .child(file_name
+                                                .unwrap_or_else(|| "点击选择文件".into())),
                                     )
+                                    .on_click(move |_, window, cx| {
+                                        (on_file_cell)(ix, window, cx);
+                                    })
                                     .into_any_element()
                             } else {
                                 let input = Input::new(&row.value)
                                     .small()
-                                    .appearance(false)
-                                    .disabled(is_file && allow_files);
+                                    .appearance(false);
                                 let input = if value_focused && overflows {
                                     // ~20px per wrapped line + 4px padding,
                                     // capped at 8 lines; taller content scrolls

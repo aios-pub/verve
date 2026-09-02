@@ -727,6 +727,12 @@ pub struct Response {
     /// nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub received_at: Option<String>,
+    /// For file-stream responses (content-disposition attachment or
+    /// `application/octet-stream`): path to a temp file holding the raw
+    /// (binary) bytes, so the response panel can offer a native save dialog.
+    /// Session-scoped; not persisted (only the lossy-text `body` is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_file: Option<String>,
 }
 
 impl Response {
@@ -734,6 +740,125 @@ impl Response {
     /// `received_at` in the response panel status bar.
     pub fn now_stamp() -> String {
         chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+/// Detect a file-stream response from its headers and derive a save name.
+/// Returns `Some(filename)` when the response carries a
+/// `Content-Disposition: attachment` (name from its `filename=` /
+/// `filename*=` parameter) or an explicit `application/octet-stream`
+/// content type (generic fallback name). `None` means an inline/text
+/// response the body tab can render as-is.
+pub fn file_stream_filename(headers: &[KeyValue]) -> Option<String> {
+    let mut octet_stream = false;
+    for h in headers {
+        if !h.key.eq_ignore_ascii_case("content-disposition") {
+            continue;
+        }
+        if h.value.to_ascii_lowercase().contains("attachment") {
+            if let Some(name) = parse_attachment_filename(&h.value) {
+                return sanitize_filename(&name);
+            }
+            return None;
+        }
+    }
+    for h in headers {
+        if h.key.eq_ignore_ascii_case("content-type") {
+            let ct = h.value.to_ascii_lowercase();
+            let ct = ct.split(';').next().unwrap_or("").trim();
+            if ct == "application/octet-stream" {
+                octet_stream = true;
+            }
+        }
+    }
+    octet_stream.then(|| "response.bin".to_string())
+}
+
+/// Extract the `filename` (or RFC 5987 `filename*`) parameter value from a
+/// Content-Disposition header.
+fn parse_attachment_filename(cd: &str) -> Option<String> {
+    // `filename*` must be tried first: a plain search for "filename" would
+    // match inside "filename*" and mis-parse the ext-value syntax.
+    if let Some(raw) = parse_filename_param(cd, "filename*") {
+        // ext-value = charset'lang'%E6%8A%A5.png — percent-decode the part
+        // after the two quotes; when they are absent, decode as-is.
+        let tail = match raw.split_once("''") {
+            Some((_, v)) => v,
+            None => raw.as_str(),
+        };
+        return Some(percent_decode_lossy(tail));
+    }
+    parse_filename_param(cd, "filename")
+}
+
+/// Find `param=...` (quoted-string or bare token) in a header value.
+/// Matching runs on an ASCII-lowercased copy so byte offsets carry over.
+fn parse_filename_param(cd: &str, param: &str) -> Option<String> {
+    let ix = cd.to_ascii_lowercase().find(param)?;
+    let rest = cd.get(ix + param.len()..)?;
+    let rest = rest.trim_start().strip_prefix('=')?.trim();
+    if let Some(after_quote) = rest.strip_prefix('"') {
+        // quoted-string: read to the closing quote ('"' is single-byte ASCII,
+        // so the byte index is a char boundary).
+        let end = after_quote.find('"')?;
+        Some(after_quote.get(..end)?.to_string())
+    } else {
+        let end = rest.find(';').unwrap_or(rest.len());
+        let value = rest.get(..end)?.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    }
+}
+
+fn percent_decode_lossy(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let Some(hex) = bytes.get(i + 1..i + 3) else {
+                    out.push(b'%');
+                    i += 1;
+                    continue;
+                };
+                let hi = (hex[0] as char).to_digit(16);
+                let lo = (hex[1] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Keep only the final path component, drop control characters, and require
+/// a non-empty result.
+fn sanitize_filename(name: &str) -> Option<String> {
+    let base = std::path::Path::new(name.trim())
+        .file_name()
+        .and_then(|n| n.to_str())?;
+    let cleaned: String = base.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
     }
 }
 
@@ -1921,6 +2046,78 @@ pub fn effective_variables(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kv(k: &str, v: &str) -> KeyValue {
+        KeyValue::new(k, v)
+    }
+
+    #[test]
+    fn file_stream_quoted_attachment_filename() {
+        let headers = vec![
+            kv("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            kv(
+                "content-disposition",
+                "attachment; filename=\"knowledge_error_report_20260902_111305.xlsx\"",
+            ),
+        ];
+        let name = file_stream_filename(&headers).expect("attachment");
+        assert_eq!(name, "knowledge_error_report_20260902_111305.xlsx");
+    }
+
+    #[test]
+    fn file_stream_unquoted_and_chinese_filename() {
+        let headers = vec![kv(
+            "Content-Disposition",
+            "attachment; filename=报表.png; size=123",
+        )];
+        assert_eq!(file_stream_filename(&headers).as_deref(), Some("报表.png"));
+    }
+
+    #[test]
+    fn file_stream_rfc5987_filename_star_is_percent_decoded() {
+        let headers = vec![kv(
+            "content-disposition",
+            "attachment; filename*=UTF-8''%E7%9F%A5%E8%AF%86%E5%BA%93.xlsx",
+        )];
+        assert_eq!(
+            file_stream_filename(&headers).as_deref(),
+            Some("知识库.xlsx")
+        );
+    }
+
+    #[test]
+    fn inline_disposition_is_not_a_file_stream() {
+        let headers = vec![
+            kv("content-type", "text/html"),
+            kv("content-disposition", "inline; filename=\"page.html\""),
+        ];
+        assert_eq!(file_stream_filename(&headers), None);
+    }
+
+    #[test]
+    fn octet_stream_gets_generic_name() {
+        let headers = vec![kv("content-type", "application/octet-stream")];
+        assert_eq!(
+            file_stream_filename(&headers).as_deref(),
+            Some("response.bin")
+        );
+        // A displayable type without disposition stays inline.
+        let headers = vec![kv("content-type", "application/json")];
+        assert_eq!(file_stream_filename(&headers), None);
+    }
+
+    #[test]
+    fn attachment_without_filename_and_path_traversal_sanitized() {
+        // attachment without any filename → not downloadable (no name to use).
+        let headers = vec![kv("content-disposition", "attachment")];
+        assert_eq!(file_stream_filename(&headers), None);
+        // A server-sent path component is stripped.
+        let headers = vec![kv(
+            "content-disposition",
+            "attachment; filename=\"../../etc/passwd\"",
+        )];
+        assert_eq!(file_stream_filename(&headers).as_deref(), Some("passwd"));
+    }
 
     #[test]
     fn raw_to_fields_parses_json_object() {

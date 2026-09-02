@@ -300,6 +300,7 @@ async fn execute_request_step(step: &RequestStep, ctx: &mut RunContext<'_>) {
             actual_request: None,
             actual_curl: None,
             received_at: Some(Response::now_stamp()),
+            download_file: None,
         }
     };
 

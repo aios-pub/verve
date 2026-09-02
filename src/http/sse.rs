@@ -220,6 +220,7 @@ pub fn stream(
             actual_request: None,
             actual_curl: None,
             received_at: Some(Response::now_stamp()),
+            download_file: None,
         })
     }
     .boxed()

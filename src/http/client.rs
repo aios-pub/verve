@@ -714,6 +714,7 @@ pub async fn execute(
                 actual_request: None,
                 actual_curl: None,
                 received_at: Some(Response::now_stamp()),
+                download_file: None,
             };
         }
     };
@@ -734,6 +735,26 @@ pub async fn execute(
     let mut buf = Vec::new();
     let _ = body.read_to_end(&mut buf).await;
     let size = buf.len() as u64;
+
+    // File-stream response (content-disposition attachment / octet-stream):
+    // stash the raw bytes into a session temp file so the response panel can
+    // offer a native save dialog. Best-effort — on any failure the save
+    // affordance is simply absent.
+    let download_file = match crate::state::models::file_stream_filename(&headers) {
+        Some(name) => {
+            let dir = std::env::temp_dir().join("verve-downloads");
+            if smol::fs::create_dir_all(&dir).await.is_ok() {
+                let path = dir.join(format!("{}_{name}", uuid::Uuid::new_v4().simple()));
+                smol::fs::write(&path, &buf)
+                    .await
+                    .ok()
+                    .map(|_| path.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
 
     let is_json = headers
         .iter()
@@ -762,6 +783,7 @@ pub async fn execute(
         actual_request: None,
         actual_curl: None,
         received_at: Some(Response::now_stamp()),
+        download_file,
     }
 }
 
@@ -1048,8 +1070,10 @@ mod tests {
                         continue;
                     }
                 }
-                sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-                    .ok();
+                sock.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.ms-excel\r\nContent-Disposition: attachment; filename=\"report.xlsx\"\r\nContent-Length: 2\r\n\r\nok",
+                )
+                .ok();
                 break;
             }
         });
@@ -1079,6 +1103,20 @@ mod tests {
         let client = reqwest_client::ReqwestClient::user_agent("verve-test").expect("client");
         let resp = smol::block_on(execute(&client, prepared, 10));
         assert_eq!(resp.status, 200, "error: {:?}", resp.error);
+        // The attachment response must be stashed for the save dialog, with
+        // byte-exact content and the parsed filename in the temp path.
+        let stashed = resp.download_file.clone().expect("download_file set");
+        assert!(
+            std::path::Path::new(&stashed)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("temp name")
+                .ends_with("report.xlsx"),
+            "{stashed}"
+        );
+        let stashed_bytes = std::fs::read(&stashed).expect("read stashed file");
+        assert_eq!(stashed_bytes, b"ok", "raw bytes intact");
+        let _ = std::fs::remove_file(&stashed);
         let _ = std::fs::remove_file(&file_path);
 
         let raw = raw.lock().expect("raw").clone();

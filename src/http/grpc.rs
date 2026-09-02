@@ -149,6 +149,7 @@ pub async fn execute_grpc_web(
         actual_request: None,
         actual_curl: None,
         received_at: Some(Response::now_stamp()),
+        download_file: None,
     }
 }
 

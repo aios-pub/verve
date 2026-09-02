@@ -362,6 +362,41 @@ impl ResponsePanel {
         }
     }
 
+    /// Save a file-stream response (raw bytes stashed by the send path at
+    /// `src`) to a user-chosen location via a native save dialog.
+    fn save_response_file(&self, src: &str, suggested: &str, cx: &mut Context<Self>) {
+        let (tx, rx) = smol::channel::bounded::<Option<std::path::PathBuf>>(1);
+        let suggested = suggested.to_string();
+        // rfd's dialog must run off the main thread (same pattern as the
+        // SFTP browser's download).
+        std::thread::spawn(move || {
+            let picked = rfd::FileDialog::new().set_file_name(&suggested).save_file();
+            let _ = smol::block_on(tx.send(picked));
+        });
+        let src = src.to_string();
+        cx.spawn(async move |this, cx| {
+            if let Ok(Some(dest)) = rx.recv().await {
+                let (title, message) = match smol::fs::copy(&src, &dest).await {
+                    Ok(n) => (
+                        "已保存文件",
+                        format!("{}\n（共 {} 字节）", dest.display(), n),
+                    ),
+                    Err(e) => ("保存文件失败", format!("{e}")),
+                };
+                let _ = this.update_in(cx, |_this, window, cx| {
+                    use gpui_component::WindowExt as _;
+                    window.push_notification(
+                        gpui_component::notification::Notification::new()
+                            .title(title)
+                            .message(message),
+                        cx,
+                    );
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Render the 响应示例 tab: success and failure examples as two
     /// side-by-side columns, each with its own vertical scroll. Every body is
     /// editable. Editors must be reconciled first.
@@ -692,6 +727,33 @@ impl Render for ResponsePanel {
                         },
                     )
                     .child(div().flex_1())
+                    // File-stream responses (content-disposition attachment /
+                    // octet-stream): offer a native save dialog for the raw
+                    // bytes stashed by the send path.
+                    .when_some(
+                        response
+                            .as_ref()
+                            .and_then(|r| r.download_file.clone())
+                            .filter(|p| !p.is_empty()),
+                        |bar, file_path| {
+                            let name = std::path::Path::new(&file_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("response.bin")
+                                .to_string();
+                            bar.child(
+                                Button::new("save-response-file")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::ArrowDown)
+                                    .label("保存文件")
+                                    .tooltip("响应为文件流，保存到本地")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.save_response_file(&file_path, &name, cx);
+                                    })),
+                            )
+                        },
+                    )
                     .when(self.active_tab == RespTab::ActualRequest, |bar| {
                         bar.child(
                             Button::new("copy-actual-request")

@@ -786,9 +786,17 @@ mod tests {
         form: Vec<KeyValue>,
         headers: Vec<KeyValue>,
     ) -> Result<PreparedRequest> {
+        form_data_request_at("http://api.io/up", form, headers)
+    }
+
+    fn form_data_request_at(
+        url: &str,
+        form: Vec<KeyValue>,
+        headers: Vec<KeyValue>,
+    ) -> Result<PreparedRequest> {
         prepare(
             RequestMethod::Post,
-            "http://api.io/up",
+            url,
             &[],
             &headers,
             &[],
@@ -990,5 +998,123 @@ mod tests {
         // Truncation must not split a UTF-8 char: the lossy decode never
         // produces U+FFFD from our own slicing (we cut at a boundary).
         assert!(!text.contains('\u{FFFD}'), "{text}");
+    }
+
+    /// End-to-end: send a real form-data request through `execute()` (the
+    /// actual reqwest client) against a local TCP server that dumps the raw
+    /// wire bytes. Guards against the send layer mangling the multipart body
+    /// (duplicate Content-Type, header/body boundary mismatch, truncation) —
+    /// the failure an axum/multipart server reports as "读取表单字段失败".
+    #[test]
+    fn form_data_wire_bytes_survive_the_real_client() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let raw: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let raw_srv = raw.clone();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .ok();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = match sock.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                {
+                    let mut g = raw_srv.lock().expect("raw");
+                    g.extend_from_slice(&buf[..n]);
+                    // Respond once the headers and the full body (per
+                    // Content-Length) have arrived, so the client can finish.
+                    let Some(header_end) = find_subsequence(&g, b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head =
+                        String::from_utf8_lossy(&g[..header_end]).to_ascii_lowercase();
+                    let cl = head.lines().find_map(|l| {
+                        l.strip_prefix("content-length:")?
+                            .trim()
+                            .parse::<usize>()
+                            .ok()
+                    });
+                    let Some(cl) = cl else { continue };
+                    if g.len() < header_end + 4 + cl {
+                        continue;
+                    }
+                }
+                sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .ok();
+                break;
+            }
+        });
+
+        let file_path = std::env::temp_dir().join("verve_wire_test.png");
+        std::fs::write(&file_path, b"\x89PNG-wire").expect("write temp file");
+        let form = vec![
+            KeyValue::new("note", "hi"),
+            KeyValue {
+                enabled: true,
+                key: "file".into(),
+                value: String::new(),
+                file_path: Some(file_path.to_string_lossy().into_owned()),
+                ..KeyValue::default()
+            },
+        ];
+        // Postman-style imported header WITH its own boundary: the wire body
+        // must reuse it, and no second Content-Type may appear.
+        let headers = vec![KeyValue::new(
+            "Content-Type",
+            "multipart/form-data; boundary=postman-bnd",
+        )];
+        let prepared =
+            form_data_request_at(&format!("http://127.0.0.1:{port}/up"), form, headers)
+                .expect("prepare form-data");
+
+        let client = reqwest_client::ReqwestClient::user_agent("verve-test").expect("client");
+        let resp = smol::block_on(execute(&client, prepared, 10));
+        assert_eq!(resp.status, 200, "error: {:?}", resp.error);
+        let _ = std::fs::remove_file(&file_path);
+
+        let raw = raw.lock().expect("raw").clone();
+        let header_end = find_subsequence(&raw, b"\r\n\r\n").expect("header terminator");
+        let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+        let body = raw[header_end + 4..].to_vec();
+
+        // Exactly one Content-Type on the wire.
+        let ct_count = head
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+            .count();
+        assert_eq!(ct_count, 1, "one Content-Type on the wire:\n{head}");
+
+        // The boundary in the header matches the delimiters in the body.
+        let ct_line = head
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+            .expect("content-type line");
+        assert_eq!(
+            extract_boundary(ct_line).expect("wire boundary"),
+            "postman-bnd"
+        );
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(body_text.contains("--postman-bnd\r\n"), "{body_text}");
+        assert!(
+            body.ends_with(b"--postman-bnd--\r\n"),
+            "closing delimiter intact: {body_text}"
+        );
+        assert!(
+            find_subsequence(&body, b"\x89PNG-wire").is_some(),
+            "file bytes intact"
+        );
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
     }
 }

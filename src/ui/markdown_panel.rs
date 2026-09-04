@@ -453,15 +453,17 @@ impl MarkdownPanel {
             self.tabs[self.active].pending_external_change = false;
         } else {
             let editor = cx.new(|cx| {
-                let mut e = Editor::from_markdown(cx, String::new(), None).side_view();
+                // Pass the path here so `save_document` writes back to the
+                // original file instead of prompting for a new one; the tab
+                // keeps its own copy for panel bookkeeping.
+                let mut e = Editor::from_markdown(cx, String::new(), Some(path.to_path_buf()))
+                    .side_view();
                 // Load content into the new editor.
                 if let Ok(content) = std::fs::read_to_string(path) {
                     e.set_content(&content, cx);
                 }
                 e
             });
-            // Re-attach the path after construction (from_markdown's path arg
-            // is for window-title in standalone mode; we set it via the tab).
             self.tabs.push(MarkdownTab {
                 editor,
                 file_path: Some(path.to_path_buf()),

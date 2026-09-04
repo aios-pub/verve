@@ -539,6 +539,20 @@ impl Editor {
         entity_id: EntityId,
         scroll_offset: Point<Pixels>,
     ) -> Option<Bounds<Pixels>> {
+        // Matches can land in table cells / wrapper children, which are not
+        // visible rows themselves. Those are edited in place inside their
+        // owning row, so estimate against that row's stride — once the row
+        // scrolls into view the cell mounts and real bounds take over.
+        let anchor_id = self
+            .table_cells
+            .get(&entity_id)
+            .map(|binding| binding.table_block.entity_id())
+            .or_else(|| {
+                self.html_wrapper_children
+                    .get(&entity_id)
+                    .map(|binding| binding.wrapper_block.entity_id())
+            })
+            .unwrap_or(entity_id);
         let visible = self.document.visible_blocks();
         let estimate = visible
             .first()
@@ -551,7 +565,7 @@ impl Editor {
                 .get(&visible.entity.entity_id())
                 .copied()
                 .unwrap_or(estimate);
-            if visible.entity.entity_id() == entity_id {
+            if visible.entity.entity_id() == anchor_id {
                 return Some(Bounds::new(
                     point(px(0.0), px(top)),
                     size(px(0.0), px(stride.max(estimate))),

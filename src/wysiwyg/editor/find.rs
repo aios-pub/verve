@@ -3,8 +3,10 @@
 //! Opened by the `Find` action (Cmd/Ctrl+F). The bar holds its own key context
 //! (`EditorFindBar`) so `FindNext` / `FindPrevious` can drive navigation via
 //! Cmd-G / F3 without clashing with block editing. Matches are computed over
-//! each block's visible (rendered) text; navigating to a match focuses the
-//! owning block and selects the matched range so the user sees it highlighted.
+//! each block's visible (rendered) text — including native table cells, whose
+//! content lives in the table runtime rather than the block title — navigating
+//! to a match focuses the owning block (or cell) and selects the matched range
+//! so the user sees it highlighted.
 
 use std::ops::Range;
 
@@ -18,7 +20,9 @@ use crate::wysiwyg::components::{Find, FindNext, FindPrevious, Replace, ReplaceA
 /// One query match, located inside a specific block's visible text.
 #[derive(Clone, Debug)]
 pub(super) struct FindMatch {
-    /// Entity id of the block that contains the match.
+    /// Entity id of the block that contains the match. For a match inside a
+    /// native table this is the *cell* block's id (resolvable via
+    /// `Editor::focusable_entity_by_id`), not the table block's.
     pub block: EntityId,
     /// Byte range of the match inside the block's visible text.
     pub range: Range<usize>,
@@ -43,6 +47,10 @@ impl Editor {
     /// case-insensitive when the query is all-lowercase (the common
     /// editor convention); otherwise it is case-sensitive.  Returns the
     /// matches in visible-block order.
+    ///
+    /// Native table blocks carry their content in `record.table` / the table
+    /// runtime, so their own `display_text()` is empty; the cells of the
+    /// runtime are searched in display order right after their owning block.
     pub(super) fn compute_find_matches(&self, query: &str, cx: &App) -> Vec<FindMatch> {
         if query.is_empty() {
             return Vec::new();
@@ -59,26 +67,61 @@ impl Editor {
             // Skip non-text blocks (separators, images, empty containers) that
             // have no searchable visible text.
             let text = block.display_text();
-            if text.is_empty() {
-                continue;
+            if !text.is_empty() {
+                let haystack = if case_sensitive {
+                    text.to_string()
+                } else {
+                    text.to_lowercase()
+                };
+                Self::push_matches_in(
+                    haystack.as_str(),
+                    &needle,
+                    visible.entity.entity_id(),
+                    &mut matches,
+                );
             }
-            let haystack = if case_sensitive {
-                text.to_string()
-            } else {
-                text.to_lowercase()
-            };
-            let mut from = 0;
-            while let Some(rel) = haystack[from..].find(&needle) {
-                let start = from + rel;
-                let end = start + needle.len();
-                matches.push(FindMatch {
-                    block: visible.entity.entity_id(),
-                    range: start..end,
-                });
-                from = end.max(start + 1);
+            // Table cells live in the runtime, not in the block title.
+            if let Some(runtime) = block.table_runtime.as_ref() {
+                for cell in runtime.header.iter().chain(runtime.rows.iter().flatten()) {
+                    let text = cell.read(cx).display_text();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let haystack = if case_sensitive {
+                        text.to_string()
+                    } else {
+                        text.to_lowercase()
+                    };
+                    Self::push_matches_in(
+                        haystack.as_str(),
+                        &needle,
+                        cell.entity_id(),
+                        &mut matches,
+                    );
+                }
             }
         }
         matches
+    }
+
+    /// Collect the byte-range matches of `needle` in `haystack` and append
+    /// them as `FindMatch`s attributed to `block`.
+    fn push_matches_in(
+        haystack: &str,
+        needle: &str,
+        block: EntityId,
+        matches: &mut Vec<FindMatch>,
+    ) {
+        let mut from = 0;
+        while let Some(rel) = haystack[from..].find(needle) {
+            let start = from + rel;
+            let end = start + needle.len();
+            matches.push(FindMatch {
+                block,
+                range: start..end,
+            });
+            from = end.max(start + 1);
+        }
     }
 
     /// Refresh `find_state`'s matches from its current query. The current
@@ -141,7 +184,9 @@ impl Editor {
         let Some(m) = m else {
             return;
         };
-        if let Some(block) = self.document.block_entity_by_id(m.block) {
+        // Matches can live in table cells (or wrapper children), which are not
+        // part of the document tree; `focusable_entity_by_id` resolves both.
+        if let Some(block) = self.focusable_entity_by_id(m.block) {
             self.focus_block_range(&block, m.range.clone(), cx);
             // The matched block is intentionally NOT keyboard-focused while the
             // find bar is up (see `focus_block`), so the `focused`-gated caret/
@@ -152,7 +197,7 @@ impl Editor {
             // stepping through matches doesn't leave a trail of highlights.
             if let Some(previous) = previous_block
                 && previous != m.block
-                && let Some(prev_block) = self.document.block_entity_by_id(previous)
+                && let Some(prev_block) = self.focusable_entity_by_id(previous)
             {
                 prev_block.update(cx, |block, cx| {
                     if block.editor_selection_range.take().is_some() {
@@ -172,6 +217,15 @@ impl Editor {
     fn clear_find_match_highlight(&mut self, cx: &mut Context<Self>) {
         for visible in self.document.visible_blocks().to_vec() {
             visible.entity.update(cx, |block, cx| {
+                if block.editor_selection_range.take().is_some() {
+                    cx.notify();
+                }
+            });
+        }
+        // Table cells are runtime blocks outside the document tree; matches can
+        // leave highlights there too.
+        for binding in self.table_cells.values() {
+            binding.cell.update(cx, |block, cx| {
                 if block.editor_selection_range.take().is_some() {
                     cx.notify();
                 }
@@ -234,7 +288,7 @@ impl Editor {
             Some(state) if !state.matches.is_empty() => {
                 let m = &state.matches[state.current];
                 let replacement = state.replace_input.read(cx).value().to_string();
-                let Some(block) = self.document.block_entity_by_id(m.block) else {
+                let Some(block) = self.focusable_entity_by_id(m.block) else {
                     return;
                 };
                 (block, m.range.clone(), replacement)
@@ -245,10 +299,15 @@ impl Editor {
         self.focus_block_range(&block, range.clone(), cx);
         block.update(cx, |block, cx| {
             block.selected_range = range;
+            // Drop the find-match highlight: with it set, `replace_text_in_range`
+            // routes to the cross-block-selection path (there is no cross-block
+            // selection here) and the replacement is silently dropped.
+            block.editor_selection_range = None;
             cx.notify();
         });
         // Drive the replacement through the block's own text-replace path so
-        // undo/history stay consistent.
+        // undo/history stay consistent. For a table cell this emits the cell's
+        // Changed event, which syncs the table record from the runtime.
         block.update(cx, |block, cx| {
             block.replace_text_in_range(None, &replacement, _window, cx);
         });
@@ -281,8 +340,9 @@ impl Editor {
             query.to_lowercase()
         };
 
-        // Collect the distinct blocks that contain at least one match, then
-        // replace within each from the end so earlier ranges stay valid.
+        // Collect the distinct searchable blocks: document-tree blocks plus
+        // every table-cell runtime block (matches inside cells must be
+        // replaced too). Each entry is replaced independently below.
         let mut blocks: Vec<gpui::Entity<crate::wysiwyg::components::Block>> = Vec::new();
         for visible in self.document.visible_blocks() {
             if self
@@ -292,6 +352,9 @@ impl Editor {
             {
                 blocks.push(visible.entity.clone());
             }
+        }
+        for binding in self.table_cells.values() {
+            blocks.push(binding.cell.clone());
         }
         for block in blocks {
             let text = block.read(cx).display_text().to_string();
@@ -320,6 +383,10 @@ impl Editor {
             }
             block.update(cx, |b, cx| {
                 b.selected_range = 0..b.display_text().len();
+                // Drop any find-match highlight so `replace_text_in_range`
+                // below takes the in-block path (the cross-block route would
+                // silently drop the edit — there is no cross-block selection).
+                b.editor_selection_range = None;
                 cx.notify();
             });
             block.update(cx, |block, cx| {

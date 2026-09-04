@@ -3540,3 +3540,299 @@ async fn stride_drift_drops_stale_measurements(cx: &mut TestAppContext) {
         "cache should be re-populated after the full mount, got {count} entries"
     );
 }
+
+#[gpui::test]
+async fn find_bar_computes_and_navigates_matches(cx: &mut TestAppContext) {
+    use std::ops::Deref as _;
+    init_editor_test_app(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let editor_for_window = editor.clone();
+    let window = cx.add_window(|window, cx| {
+        let editor_view = cx.new(|cx| {
+            Editor::from_markdown(cx, "alpha beta\ngamma alpha".to_string(), None)
+        });
+        *editor_for_window.borrow_mut() = Some(editor_view.clone());
+        gpui_component::Root::new(editor_view, window, cx).into()
+    });
+    let editor = editor.borrow().clone().expect("editor built");
+    let mut cx = VisualTestContext::from_window(*window.deref(), cx);
+    redraw(&mut cx);
+
+    // Open the find bar (Cmd+F) and type a query into the focused input.
+    cx.simulate_keystrokes("cmd-f");
+    redraw(&mut cx);
+    editor.read_with(&cx, |editor, _cx| {
+        assert!(editor.find_state.is_some(), "find bar should open on cmd-f");
+    });
+
+    cx.simulate_input("alpha");
+    redraw(&mut cx);
+
+    editor.read_with(&cx, |editor, app| {
+        let state = editor.find_state.as_ref().expect("find bar still open");
+        assert_eq!(
+            state.matches.len(),
+            2,
+            "both alpha occurrences should match"
+        );
+        assert_eq!(state.current, 0);
+        assert_eq!(
+            state.input.read(app).value().to_string(),
+            "alpha",
+            "query input should hold the typed text"
+        );
+    });
+
+    // Advance to the next match (Cmd-G).
+    cx.simulate_keystrokes("cmd-g");
+    redraw(&mut cx);
+    editor.read_with(&cx, |editor, _cx| {
+        let state = editor.find_state.as_ref().expect("find bar still open");
+        assert_eq!(state.current, 1, "cmd-g should advance to the second match");
+    });
+}
+
+#[gpui::test]
+async fn find_bar_scrolls_to_offscreen_match(cx: &mut TestAppContext) {
+    use std::ops::Deref as _;
+    init_editor_test_app(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    // A long document: many filler paragraphs, the keyword only near the end.
+    let mut content = String::new();
+    for i in 0..300 {
+        content.push_str(&format!("filler paragraph {i}\n\n"));
+    }
+    content.push_str("needle paragraph here\n\n");
+    for i in 300..400 {
+        content.push_str(&format!("filler paragraph {i}\n\n"));
+    }
+
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let editor_for_window = editor.clone();
+    let window = cx.add_window(|window, cx| {
+        let editor_view =
+            cx.new(|cx| Editor::from_markdown(cx, content.clone(), None).side_view());
+        *editor_for_window.borrow_mut() = Some(editor_view.clone());
+        gpui_component::Root::new(editor_view, window, cx).into()
+    });
+    let editor = editor.borrow().clone().expect("editor built");
+    let mut cx = VisualTestContext::from_window(*window.deref(), cx);
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    let offset_before = editor.read_with(&cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    cx.simulate_keystrokes("cmd-f");
+    redraw(&mut cx);
+    cx.simulate_input("needle");
+    redraw(&mut cx);
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    let (count, offset_after) = editor.read_with(&cx, |editor, _cx| {
+        let state = editor.find_state.as_ref().expect("find bar open");
+        (state.matches.len(), editor.scroll_handle.offset().y)
+    });
+    assert_eq!(count, 1, "should find the needle");
+
+    // The view should have scrolled down towards the match.
+    assert!(
+        offset_after < offset_before,
+        "find should scroll to an off-screen match (before {offset_before:?}, after {offset_after:?})"
+    );
+
+    // The matched block should be mounted (scrolled into view).
+    let matched_mounted = editor.read_with(&cx, |editor, cx| {
+        let state = editor.find_state.as_ref().expect("find bar open");
+        let m = &state.matches[state.current];
+        editor
+            .focusable_entity_by_id(m.block)
+            .map(|b| b.read(cx).last_bounds.is_some())
+            .unwrap_or(false)
+    });
+    assert!(matched_mounted, "matched block should be mounted (scrolled into view)");
+}
+
+#[gpui::test]
+async fn find_works_through_panel_like_flow(cx: &mut TestAppContext) {
+    use std::ops::Deref as _;
+    init_editor_test_app(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        crate::wysiwyg::config::EditorSettings::init(cx, true);
+    });
+
+    // Write a markdown file to disk, then mimic markdown_panel::open_path:
+    // construct an empty side_view editor, then set_content from the file.
+    let path = std::env::temp_dir().join(format!(
+        "verve-find-panel-flow-{}.md",
+        std::process::id()
+    ));
+    fs::write(&path, "alpha beta\ngamma alpha\n").expect("write md");
+    let path_for_editor = path.clone();
+
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let editor_for_window = editor.clone();
+    let window = cx.add_window(|window, cx| {
+        let editor_view = cx.new(|cx| {
+            let mut e =
+                Editor::from_markdown(cx, String::new(), Some(path_for_editor.clone())).side_view();
+            if let Ok(content) = fs::read_to_string(&path_for_editor) {
+                e.set_content(&content, cx);
+            }
+            e
+        });
+        *editor_for_window.borrow_mut() = Some(editor_view.clone());
+        gpui_component::Root::new(editor_view, window, cx).into()
+    });
+    let editor = editor.borrow().clone().expect("editor built");
+    let mut cx = VisualTestContext::from_window(*window.deref(), cx);
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    cx.simulate_keystrokes("cmd-f");
+    redraw(&mut cx);
+    editor.read_with(&cx, |editor, _cx| {
+        assert!(editor.find_state.is_some(), "find bar should open on cmd-f");
+    });
+
+    cx.simulate_input("alpha");
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    editor.read_with(&cx, |editor, _cx| {
+        let state = editor.find_state.as_ref().expect("find bar open");
+        assert_eq!(state.matches.len(), 2, "should match both occurrences after set_content");
+    });
+
+    let _ = fs::remove_file(&path);
+}
+
+#[gpui::test]
+async fn find_and_replace_cover_table_cells(cx: &mut TestAppContext) {
+    use std::ops::Deref as _;
+    init_editor_test_app(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    let markdown = "# Title\n\n| name | note |\n| --- | --- |\n| candle-svr | plain |\n| other | candle too |\n";
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let editor_for_window = editor.clone();
+    let window = cx.add_window(|window, cx| {
+        let editor_view = cx.new(|cx| Editor::from_markdown(cx, markdown.to_string(), None));
+        *editor_for_window.borrow_mut() = Some(editor_view.clone());
+        gpui_component::Root::new(editor_view, window, cx).into()
+    });
+    let editor = editor.borrow().clone().expect("editor built");
+    let mut cx = VisualTestContext::from_window(*window.deref(), cx);
+    redraw(&mut cx);
+    redraw(&mut cx);
+
+    editor.read_with(&cx, |editor, _cx| {
+        assert!(
+            !editor.table_cells.is_empty(),
+            "table cells should be registered in the runtime"
+        );
+    });
+
+    // "candle" exists only inside table cells; the find must report both
+    // cell occurrences and land on a cell block.
+    cx.simulate_keystrokes("cmd-f");
+    redraw(&mut cx);
+    cx.simulate_input("candle");
+    redraw(&mut cx);
+
+    editor.read_with(&cx, |editor, _cx| {
+        let state = editor.find_state.as_ref().expect("find bar open");
+        assert_eq!(
+            state.matches.len(),
+            2,
+            "both cell occurrences of 'candle' should match"
+        );
+        assert!(
+            editor.table_cells.contains_key(&state.matches[0].block),
+            "the match should be attributed to a table cell block"
+        );
+    });
+
+    // Replace every occurrence through the replace row: open replace mode,
+    // fill the replacement field, run ReplaceAll.
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_replace(&crate::wysiwyg::components::Replace, window, cx);
+            let state = editor.find_state.as_ref().expect("find bar open");
+            state
+                .replace_input
+                .update(cx, |input, cx| input.set_value("lantern", window, cx));
+            editor.on_replace_all(&crate::wysiwyg::components::ReplaceAll, window, cx);
+        });
+    });
+    redraw(&mut cx);
+
+    let serialized = editor.read_with(&cx, |editor, cx| editor.markdown(cx));
+    assert!(
+        !serialized.contains("candle"),
+        "cell matches should be replaced, got: {serialized}"
+    );
+    assert!(
+        serialized.contains("lantern-svr") && serialized.contains("lantern too"),
+        "table record should reflect the cell replacements, got: {serialized}"
+    );
+}
+
+#[gpui::test]
+async fn replace_one_works_on_plain_paragraph(cx: &mut TestAppContext) {
+    use std::ops::Deref as _;
+    init_editor_test_app(cx);
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let editor_for_window = editor.clone();
+    let window = cx.add_window(|window, cx| {
+        let editor_view =
+            cx.new(|cx| Editor::from_markdown(cx, "alpha beta\ngamma alpha".to_string(), None));
+        *editor_for_window.borrow_mut() = Some(editor_view.clone());
+        gpui_component::Root::new(editor_view, window, cx).into()
+    });
+    let editor = editor.borrow().clone().expect("editor built");
+    let mut cx = VisualTestContext::from_window(*window.deref(), cx);
+    redraw(&mut cx);
+
+    cx.simulate_keystrokes("cmd-f");
+    redraw(&mut cx);
+    cx.simulate_input("alpha");
+    redraw(&mut cx);
+
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.on_replace(&crate::wysiwyg::components::Replace, window, cx);
+            let state = editor.find_state.as_ref().expect("find bar open");
+            state
+                .replace_input
+                .update(cx, |input, cx| input.set_value("omega", window, cx));
+            editor.on_replace_one(window, cx);
+        });
+    });
+    redraw(&mut cx);
+
+    let serialized = editor.read_with(&cx, |editor, cx| editor.markdown(cx));
+    assert!(
+        serialized.contains("omega"),
+        "replace-one should replace the current match, got: {serialized}"
+    );
+}

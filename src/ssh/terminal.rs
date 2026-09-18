@@ -2,9 +2,11 @@
 
 use std::sync::{Arc, Mutex as StdMutex};
 
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, SEMANTIC_ESCAPE_CHARS, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{StatefulInteractiveElement as _, *};
@@ -67,7 +69,9 @@ impl EntityInputHandler for TerminalView {
             }
         } else {
             log::info!("INPUT replace_text full: [{:?}]", text);
-            self.send_input(text.as_bytes());
+            // Composition commit: cancel any selection and jump to the newest
+            // line, same as a plain keypress.
+            self.send_user_input(text.as_bytes());
         }
         self.last_marked_text.clear();
     }
@@ -97,7 +101,9 @@ impl EntityInputHandler for TerminalView {
             }
         } else {
             log::info!("INPUT mark full: [{:?}]", text);
-            self.send_input(text.as_bytes());
+            // First composing text of a fresh IME sequence: treat as user input
+            // (clear selection / snap bottom) while later deltas stay raw sends.
+            self.send_user_input(text.as_bytes());
         }
         self.last_marked_text = text.to_string();
     }
@@ -149,7 +155,7 @@ impl EntityInputHandler for TerminalView {
 
     fn character_index_for_point(
         &mut self,
-        _point: Point<Pixels>,
+        _point: gpui::Point<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
@@ -159,44 +165,6 @@ impl EntityInputHandler for TerminalView {
     fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
         true
     }
-}
-
-/// A selected (row, col) coordinate in the terminal grid. 0-indexed, row 0 is
-/// the topmost visible line after trimming leading empties.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SelectionPoint {
-    row: usize,
-    col: usize,
-}
-
-/// Convert a terminal grid **column** index into a UTF-8 **byte** offset within
-/// a rendered row string.
-///
-/// Terminal rows are built one `char` per grid column (`text.push(cell.c)` per
-/// column), so a column index is a *char* index — NOT a byte index. CJK glyphs
-/// are 3 bytes and `·`/accented chars are 2 bytes, so slicing `row[col..]`
-/// directly lands inside a multi-byte char and panics
-/// ("byte index N is not a char boundary"). This maps the char index to a
-/// safe byte boundary, clamped to the string length.
-fn col_to_byte(s: &str, col: usize) -> usize {
-    s.char_indices()
-        .nth(col)
-        .map(|(byte_idx, _)| byte_idx)
-        .unwrap_or(s.len())
-}
-
-/// Slice a rendered row by terminal column (char) indices instead of byte
-/// indices, snapping both ends to valid char boundaries. The two indices need
-/// not be ordered; this returns the text between min and max.
-fn slice_by_cols(s: &str, start_col: usize, end_col: usize) -> &str {
-    let (a, b) = if start_col <= end_col {
-        (start_col, end_col)
-    } else {
-        (end_col, start_col)
-    };
-    let start_byte = col_to_byte(s, a);
-    let end_byte = col_to_byte(s, b).max(start_byte);
-    &s[start_byte..end_byte]
 }
 
 /// Return true if `haystack` contains the byte sequence `needle`. A simple
@@ -225,12 +193,35 @@ pub struct TerminalView {
     _keystroke_sub: Option<gpui::Subscription>,
     /// Last IME composing text (for delta calculation).
     last_marked_text: String,
-    /// Active text selection (start/end in visible row indices after trimming).
-    /// None when no selection. When dragging, anchor stays fixed while head moves.
-    selection_anchor: Option<SelectionPoint>,
-    selection_head: Option<SelectionPoint>,
-    /// Whether the mouse is currently being dragged to extend a selection.
+    /// Whether the left mouse button is currently held during a selection
+    /// drag. The selection itself lives in the alacritty grid (`term.selection`)
+    /// as ABSOLUTE grid coordinates, so it stays attached to its text while the
+    /// viewport scrolls instead of floating over the viewport.
     selecting: bool,
+    /// Last known mouse position (window-absolute px), used by the edge
+    /// auto-scroll timer while dragging past the viewport borders.
+    last_mouse: Option<(f32, f32)>,
+    /// Whether the pointer moved at all during the current drag. A plain click
+    /// (press + release without movement) clears its selection even when it
+    /// lands on a cell's right half whose `Side::Right` would otherwise keep a
+    /// one-cell selection alive.
+    selection_moved: bool,
+    /// Dwell counter for edge auto-scroll acceleration (reset once the pointer
+    /// leaves the top/bottom hot zone).
+    autoscroll_ticks: u32,
+    /// Bumped on every mouse-down; stale auto-scroll tasks exit when their
+    /// captured generation no longer matches, so only the latest drag scrolls.
+    drag_generation: u64,
+    /// Window-absolute px where the current left-button press started. A drag
+    /// only begins selecting once the pointer leaves the 2 px threshold, so a
+    /// tiny focus-click jitter leaves no selection (matches Zed).
+    mouse_down_pos: Option<(f32, f32)>,
+    /// Sub-line wheel accumulator (px). Touch pads emit small pixel deltas;
+    /// whole lines are committed once the accumulator crosses a row boundary.
+    scroll_px: f32,
+    /// `(col, visible_row, button code)` of the last PTY mouse report, used to
+    /// suppress duplicate reports while the pointer stays in one cell.
+    last_report_cell: Option<(usize, usize, u8)>,
     /// Cached number of leading empty rows trimmed on last render — needed to
     /// map a screen-space Y coordinate back to the right visible row (since we
     /// render from `first_non_empty..`).
@@ -279,7 +270,10 @@ impl TerminalView {
             cols: cols as usize,
             rows: rows as usize,
         };
-        let config = Config::default();
+        let mut config = Config::default();
+        // Match Zed: box-drawing `─` (tree output like `└─zms-demo.target`)
+        // breaks semantic words, so double-click selects the name only.
+        config.semantic_escape_chars = format!("{SEMANTIC_ESCAPE_CHARS}\u{2500}");
         let term = Term::new(config, &dims, NullListener);
         let term_arc = Arc::new(std::sync::Mutex::new(term));
         let input_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>> =
@@ -301,12 +295,17 @@ impl TerminalView {
             if ks.key == "tab" {
                 let bytes = b"\t".to_vec();
                 log::info!("INTERCEPT Tab → sending \\t");
+                // Same user-input bookkeeping as the key handler: clear the
+                // selection and snap back to the newest line.
+                if let Ok(mut term) = term_for_intercept.lock() {
+                    term.selection = None;
+                    term.scroll_display(Scroll::Bottom);
+                }
                 if let Ok(tx) = tx_for_intercept.lock() {
                     if let Some(tx) = tx.as_ref() {
                         let _ = tx.send(bytes);
                     }
                 }
-                let _ = &term_for_intercept;
             }
         });
 
@@ -320,9 +319,14 @@ impl TerminalView {
             resize_tx,
             _keystroke_sub: Some(sub),
             last_marked_text: String::new(),
-            selection_anchor: None,
-            selection_head: None,
             selecting: false,
+            last_mouse: None,
+            selection_moved: false,
+            autoscroll_ticks: 0,
+            drag_generation: 0,
+            mouse_down_pos: None,
+            scroll_px: 0.0,
+            last_report_cell: None,
             last_trim_top: 0,
             last_visible_rows: 0,
             last_line_height: 18.0,
@@ -335,102 +339,541 @@ impl TerminalView {
         }
     }
 
-    /// Return the currently selected text (normalized from anchor/head), or
-    /// None if no selection exists.
-    ///
-    /// Column→byte mapping uses each row's `prefix` map (NOT `col_to_byte`) so
-    /// wide-char spacer columns — which contribute 0 bytes — are handled
-    /// correctly; a raw char index would drift once a CJK/emoji glyph precedes
-    /// the selection endpoint.
-    fn selected_text(&self, rows: &[RowData]) -> Option<String> {
-        let (a, h) = self.selection_anchor.zip(self.selection_head)?;
-        selection_to_string(rows, a, h)
+    /// Map a visible row/col (row 0 = topmost rendered viewport line) to an
+    /// ABSOLUTE grid point (negative line = scrollback history). This is the
+    /// same viewport mapping `render` uses, so a point round-trips through
+    /// scrolling exactly onto its cell.
+    fn visible_to_point(&self, visible_row: usize, col: usize) -> Option<Point> {
+        let term = self.term.lock().ok()?;
+        let dims: &dyn Dimensions = &*term;
+        let screen_lines = dims.screen_lines();
+        let num_cols = dims.columns();
+        let grid = term.grid();
+        let viewport_top = grid.bottommost_line().0
+            - screen_lines as i32 + 1
+            - grid.display_offset() as i32;
+        let row = visible_row.min(screen_lines.saturating_sub(1)) as i32;
+        let col = Column(col.min(num_cols.saturating_sub(1)));
+        Some(Point::new(Line(viewport_top + row), col))
     }
 
-    /// Read the raw characters of one **visible** row (0 = top of viewport)
-    /// directly from the alacritty grid, as a `Vec<char>` indexed by grid
-    /// column. HIDDEN cells and `\0` read as spaces (matching how rows are
-    /// rendered). Wide-char spacers are emitted as a space placeholder so the
-    /// vector stays aligned 1:1 with grid columns (i.e. `chars[col]` is the
-    /// char at grid column `col`). Returns `None` if the grid can't be locked
-    /// or the row is off-screen.
-    ///
-    /// Used by double-click word selection to find word boundaries without
-    /// needing the rendered `RowData` (which only exists transiently during
-    /// `render`).
-    fn chars_of_visible_row(&self, visible_row: usize) -> Option<Vec<char>> {
-        let term = self.term.lock().ok()?;
-        let dims: &dyn alacritty_terminal::grid::Dimensions = &*term;
-        let screen_lines = dims.screen_lines();
-        if visible_row >= screen_lines {
+    /// Map a window-absolute mouse position to the `(col, visible row)` under
+    /// it, clamped to the grid — coordinates outside the content area snap to
+    /// its nearest edge (edge detection itself uses the unclamped values in the
+    /// drag/up handlers).
+    fn mouse_cell(&self, px: f32, py: f32) -> Option<(usize, usize)> {
+        let bounds = self.bounds.lock().ok()?;
+        if self.last_visible_rows == 0 || self.cols == 0 {
             return None;
         }
-        let grid = term.grid();
-        let num_cols = dims.columns();
-        let display_offset = grid.display_offset();
-        let bottommost = grid.bottommost_line().0;
-        // Match the viewport mapping used in render() (see terminal.rs ~1283).
-        let grid_line = alacritty_terminal::index::Line(
-            bottommost - screen_lines as i32 + 1 - display_offset as i32 + visible_row as i32,
-        );
-
-        let mut chars: Vec<char> = Vec::with_capacity(num_cols);
-        for col_idx in 0..num_cols {
-            let point = alacritty_terminal::index::Point::new(
-                grid_line,
-                alacritty_terminal::index::Column(col_idx),
-            );
-            let cell: &Cell = &grid[point];
-            // Keep 1:1 column alignment: wide-char spacers contribute a space
-            // placeholder so indices still map to grid columns.
-            let ch = if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                || cell.flags.contains(Flags::HIDDEN)
-                || cell.c == '\0'
-            {
-                ' '
-            } else {
-                cell.c
-            };
-            chars.push(ch);
-        }
-        Some(chars)
+        let ox: f32 = bounds.origin.x.into();
+        let oy: f32 = bounds.origin.y.into();
+        let cw = self.last_char_width.max(0.5);
+        let ch = self.last_line_height.max(1.0);
+        let lx = (px - ox - 8.0).max(0.0);
+        let ly = (py - oy - 4.0).max(0.0);
+        let col = ((lx / cw).floor() as i64).clamp(0, self.cols as i64 - 1) as usize;
+        let row =
+            ((ly / ch).floor() as i64).clamp(0, self.last_visible_rows as i64 - 1) as usize;
+        Some((col, row))
     }
 
-    /// Select the word around `(row, col)` and return `(start_col, end_col)` —
-    /// the half-open `[start, end)` column range of the run of non-whitespace
-    /// chars containing `col`. If the clicked cell is whitespace, selects only
-    /// that single column (so a double-click on space clears any selection
-    /// rather than grabbing a whole run of blanks).
-    fn word_bounds(chars: &[char], col: usize) -> (usize, usize) {
-        let n = chars.len();
-        if n == 0 {
-            return (0, 0);
+    /// Begin a new selection at an absolute grid point. `ty` picks the
+    /// mainstream behavior: `Simple` for a drag, `Semantic` for double-click
+    /// (word; drag extends word by word), `Lines` for triple-click (whole line).
+    fn start_selection(&mut self, ty: SelectionType, point: Point) {
+        if let Ok(mut term) = self.term.lock() {
+            let mut selection = Selection::new(ty, point, Side::Left);
+            // Semantic/Lines selections expand immediately so the word/line is
+            // highlighted before any drag.
+            if matches!(ty, SelectionType::Semantic | SelectionType::Lines) {
+                selection.update(point, Side::Right);
+            }
+            term.selection = Some(selection);
         }
-        let c = col.min(n - 1);
-        // A "word" is a run of identifier-like chars: letters, digits, and
-        // underscore (Unicode-aware, so CJK/alphanumeric glyphs count too).
-        // Everything else — whitespace AND punctuation (/, =, :, ., -, etc.) —
-        // breaks words. This matches standard editor/terminal behavior, so a
-        // double-click on `/usr/bin` selects just `usr` or `bin`, and on
-        // `foo=bar` selects just `foo` or `bar`.
-        let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
-        if !is_word_char(chars[c]) {
-            // Clicked a separator/punctuation cell: select only that one cell
-            // (e.g. double-clicking `/` selects `/`, not the adjacent path
-            // segment).
-            return (c, c + 1);
+    }
+
+    /// Move the live end of the current selection to an absolute grid point.
+    fn update_selection(&mut self, point: Point, side: Side) {
+        if let Ok(mut term) = self.term.lock() {
+            if let Some(selection) = term.selection.as_mut() {
+                selection.update(point, side);
+            }
         }
-        // Expand left.
-        let mut start = c;
-        while start > 0 && is_word_char(chars[start - 1]) {
-            start -= 1;
+    }
+
+    /// Finish a drag: optionally snap the live end to the release point, then
+    /// drop a zero-length selection (a plain click without movement).
+    fn end_selection(&mut self, point: Option<(Point, Side)>) {
+        self.selecting = false;
+        self.autoscroll_ticks = 0;
+        let moved = self.selection_moved;
+        self.selection_moved = false;
+        if let Ok(mut term) = self.term.lock() {
+            if let Some((point, side)) = point {
+                if let Some(selection) = term.selection.as_mut() {
+                    selection.update(point, side);
+                }
+            }
+            let clear = term.selection.as_ref().map_or(true, |s| {
+                // A click that never moved clears a Simple selection even when
+                // the release cell's right half makes it look one cell wide.
+                // Semantic/Lines selections come from double/triple-click and
+                // always remain.
+                (!moved && s.ty == SelectionType::Simple) || s.to_range(&*term).is_none()
+            });
+            if clear {
+                term.selection = None;
+            }
         }
-        // Expand right (half-open end).
-        let mut end = c + 1;
-        while end < n && is_word_char(chars[end]) {
-            end += 1;
+    }
+
+    /// Scroll the viewport while the drag pointer rests beyond the top/bottom
+    /// edge and extend the selection to the newly revealed edge line. Positive
+    /// `lines` scrolls up into history (matching `Scroll::Delta`), negative
+    /// returns toward the newest line. Called both per mouse-move event and by
+    /// the dwell timer with an accelerating step count.
+    fn selection_scroll(&mut self, lines: i32, col: usize) {
+        if lines == 0 {
+            return;
         }
-        (start, end)
+        let Ok(mut term) = self.term.lock() else { return };
+        if term.selection.is_none() {
+            return;
+        }
+        term.scroll_display(Scroll::Delta(lines));
+        let (viewport_top, screen_lines, num_cols) = {
+            let dims: &dyn Dimensions = &*term;
+            let grid = term.grid();
+            let top = grid.bottommost_line().0
+                - dims.screen_lines() as i32 + 1
+                - grid.display_offset() as i32;
+            (top, dims.screen_lines(), dims.columns())
+        };
+        let col = Column(col.min(num_cols.saturating_sub(1)));
+        // Selecting UPWARD the head is the range start; Side::Left includes the
+        // edge cell. Selecting DOWNWARD the head is the end; Side::Right does.
+        let (line, side) = if lines > 0 {
+            (viewport_top, Side::Left)
+        } else {
+            (viewport_top + screen_lines as i32 - 1, Side::Right)
+        };
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(Point::new(Line(line), col), side);
+        }
+    }
+
+    /// One edge auto-scroll dwell tick. Returns false when the drag is over and
+    /// the polling task should exit.
+    fn autoscroll_tick(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.selecting {
+            return false;
+        }
+        let Some((px, py)) = self.last_mouse else { return true };
+        if self.last_visible_rows == 0 {
+            return true;
+        }
+        // Alt screen (vim/less/tmux, including Shift-forced local selection):
+        // no edge auto-scroll — there is no primary-screen history to reveal.
+        if self.term_mode().contains(TermMode::ALT_SCREEN) {
+            self.autoscroll_ticks = 0;
+            return true;
+        }
+        // Extract pointer-local coords in a block so the bounds lock guard is
+        // released before the `&mut self` call below.
+        let (lx, ly) = {
+            let Ok(bounds) = self.bounds.lock() else { return true };
+            let ox: f32 = bounds.origin.x.into();
+            let oy: f32 = bounds.origin.y.into();
+            (px - ox - 8.0, py - oy - 4.0)
+        };
+        let cw = self.last_char_width.max(0.5);
+        let ch = self.last_line_height.max(1.0);
+        let content_h = self.last_visible_rows as f32 * ch;
+        // Hot zone: above the top padding or below the last rendered row.
+        let dir = if ly < 0.0 {
+            1
+        } else if ly > content_h {
+            -1
+        } else {
+            self.autoscroll_ticks = 0;
+            return true;
+        };
+        self.autoscroll_ticks = self.autoscroll_ticks.saturating_add(1).min(100);
+        // 1 line/tick (~20 lines/s at 50 ms), ramping up to 6 (~120 lines/s).
+        let speed = (1 + self.autoscroll_ticks / 8).min(6);
+        let col = ((lx / cw).floor() as i64).clamp(0, self.cols as i64 - 1) as usize;
+        self.selection_scroll(dir * speed as i32, col);
+        cx.notify();
+        true
+    }
+
+    /// Snapshot the current terminal mode flags (TermMode is a Copy bitflag).
+    /// On a poisoned lock, fall back to NONE (plain local behavior).
+    fn term_mode(&self) -> TermMode {
+        self.term.lock().map(|t| *t.mode()).unwrap_or(TermMode::NONE)
+    }
+
+    /// Whether the foreground app owns the mouse. Holding Shift is the
+    /// conventional escape hatch: it forces local selection/scrolling.
+    fn mouse_reporting(mode: TermMode, mods: Modifiers) -> bool {
+        mode.intersects(TermMode::MOUSE_MODE) && !mods.shift
+    }
+
+    /// Send bytes typed/pasted by the USER (as opposed to internal writes):
+    /// cancel the current selection and jump back to the newest line first,
+    /// matching Zed's `write_input` behavior.
+    fn send_user_input(&mut self, data: &[u8]) {
+        if let Ok(mut term) = self.term.lock() {
+            term.selection = None;
+            term.scroll_display(Scroll::Bottom);
+        }
+        self.send_input(data);
+    }
+
+    /// Select everything from the first history line to the end of the
+    /// bottommost line. Anchors are absolute grid coords, so the highlight
+    /// stays attached to its content while scrolling.
+    fn select_all(&mut self) {
+        if let Ok(mut term) = self.term.lock() {
+            let (start, end) = {
+                let grid = term.grid();
+                (
+                    Point::new(grid.topmost_line(), Column(0)),
+                    Point::new(grid.bottommost_line(), grid.last_column()),
+                )
+            };
+            let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+            selection.update(end, Side::Right);
+            term.selection = Some(selection);
+        }
+    }
+
+    /// Cmd+K: clear scrollback and the viewport LOCALLY (no PTY bytes). The
+    /// row under the cursor is preserved and moved to the top line, so the
+    /// prompt context stays visible (approximates Zed's terminal.clear()).
+    fn clear(&mut self) {
+        let Ok(mut term) = self.term.lock() else { return };
+        term.selection = None;
+
+        // Snapshot the cursor row under a shared borrow, released before mut.
+        let (cursor_point, num_cols, current_line) = {
+            let dims: &dyn Dimensions = &*term;
+            let num_cols = dims.columns();
+            let grid = term.grid();
+            let point = grid.cursor.point;
+            let row: Vec<Cell> = grid[point.line][..Column(num_cols)].iter().cloned().collect();
+            (point, num_cols, row)
+        };
+
+        // clear_history also zeroes display_offset; then blank every viewport row.
+        term.grid_mut().clear_history();
+        let screen_lines = {
+            let dims: &dyn Dimensions = &*term;
+            dims.screen_lines()
+        };
+        term.grid_mut().reset_region(Line(0)..Line(screen_lines as i32));
+
+        // Move the preserved row (and cursor) to the top line.
+        for (i, cell) in current_line.into_iter().enumerate() {
+            term.grid_mut()[Line(0)][Column(i)] = cell;
+        }
+        term.grid_mut().cursor.point = Point::new(Line(0), cursor_point.column);
+    }
+
+    /// Left/middle/right button press. In mouse-reporting apps the event is
+    /// encoded to the PTY and no local selection starts; otherwise the left
+    /// button drives the normal selection gesture.
+    fn handle_mouse_down(
+        &mut self,
+        button: MouseButton,
+        click_count: usize,
+        px: f32,
+        py: f32,
+        mods: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = self.term_mode();
+
+        if Self::mouse_reporting(mode, mods) {
+            self.last_report_cell = None;
+            if let Some((col, row)) = self.mouse_cell(px, py) {
+                if let Some(code) = mouse_press_code(button) {
+                    if let Some(bytes) = encode_mouse_report(
+                        col,
+                        row,
+                        code,
+                        true,
+                        mods,
+                        MouseEncoding::from_mode(mode),
+                    ) {
+                        self.send_input(&bytes);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Local behavior: only the left button starts a selection gesture.
+        if button != MouseButton::Left {
+            return;
+        }
+        // click_count 0 is a synthetic release (ignored); four+ rapid clicks
+        // clear the selection instead of creating one (matches Zed).
+        if click_count == 0 {
+            return;
+        }
+        if click_count >= 4 {
+            if let Ok(mut term) = self.term.lock() {
+                term.selection = None;
+            }
+            self.selecting = false;
+            self.last_mouse = None;
+            self.mouse_down_pos = None;
+            cx.notify();
+            return;
+        }
+
+        let Some((col, row)) = self.mouse_cell(px, py) else { return };
+
+        // Double-click → semantic word selection (dragging extends it word by
+        // word); triple-click → whole lines. Both resolve against the grid.
+        let ty = if click_count >= 3 {
+            SelectionType::Lines
+        } else if click_count == 2 {
+            SelectionType::Semantic
+        } else {
+            SelectionType::Simple
+        };
+        let Some(point) = self.visible_to_point(row, col) else { return };
+        self.start_selection(ty, point);
+
+        // Start (or restart) the drag bookkeeping + edge auto-scroll poller.
+        // A fresh generation retires any task lingering from a previous drag.
+        self.selecting = true;
+        self.mouse_down_pos = Some((px, py));
+        self.last_mouse = Some((px, py));
+        self.selection_moved = false;
+        self.autoscroll_ticks = 0;
+        self.drag_generation = self.drag_generation.wrapping_add(1);
+        let generation = self.drag_generation;
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                smol::Timer::after(std::time::Duration::from_millis(50)).await;
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        if !this.selecting || this.drag_generation != generation {
+                            return false;
+                        }
+                        this.autoscroll_tick(cx)
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        cx.notify();
+    }
+
+    /// Pointer motion. In mouse-reporting apps this sends motion/drag reports;
+    /// otherwise it extends the live selection and edge-scrolls.
+    fn handle_mouse_move(
+        &mut self,
+        px: f32,
+        py: f32,
+        pressed: Option<MouseButton>,
+        mods: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = self.term_mode();
+
+        if Self::mouse_reporting(mode, mods) {
+            let Some(code) = reportable_move_code(mode, pressed) else { return };
+            let Some((col, row)) = self.mouse_cell(px, py) else { return };
+            // Skip duplicates while the pointer jitters inside one cell.
+            if self.last_report_cell == Some((col, row, code)) {
+                return;
+            }
+            self.last_report_cell = Some((col, row, code));
+            if let Some(bytes) =
+                encode_mouse_report(col, row, code, true, mods, MouseEncoding::from_mode(mode))
+            {
+                self.send_input(&bytes);
+            }
+            return;
+        }
+        self.last_report_cell = None;
+
+        // Local selection gesture: left button held after a local press.
+        if !self.selecting || pressed != Some(MouseButton::Left) {
+            return;
+        }
+        self.last_mouse = Some((px, py));
+
+        // Ignore sub-threshold jitter from the press point (no head update,
+        // no "moved" flag) — a click within 2 px behaves as a plain click.
+        if let Some(down) = self.mouse_down_pos {
+            if !exceeds_drag_threshold(down, (px, py)) {
+                return;
+            }
+        }
+        self.selection_moved = true;
+
+        let Some((col, row)) = self.mouse_cell(px, py) else { return };
+        let line_h = self.last_line_height.max(1.0);
+        let cell_w = self.last_char_width.max(0.5);
+        let content_h = self.last_visible_rows as f32 * line_h;
+
+        // Local Y relative to the FIRST rendered row (may be negative above
+        // the top edge or exceed the content height below it).
+        let (lx, ly) = {
+            let Ok(b) = self.bounds.lock() else { return };
+            let ox: f32 = b.origin.x.into();
+            let oy: f32 = b.origin.y.into();
+            (px - ox - 8.0, py - oy - 4.0)
+        };
+
+        // Edge auto-scroll: speed follows overflow distance (^1.1), up to 3
+        // lines per motion event; the dwell poller keeps scrolling while the
+        // pointer rests. Disabled entirely on the alt screen (matches Zed).
+        if !mode.contains(TermMode::ALT_SCREEN) {
+            if let Some(lines) = drag_line_delta(ly, content_h, line_h) {
+                self.selection_scroll(lines, col);
+                cx.notify();
+                return;
+            }
+        }
+
+        // Inside the content area: the pixel half-cell decides whether the
+        // cell itself is included (Right) or the boundary is before it (Left).
+        if let Some(point) = self.visible_to_point(row, col) {
+            self.update_selection(point, cell_horizontal_side(lx, cell_w));
+        }
+        cx.notify();
+    }
+
+    /// Button release: encode a PTY release report or finish the local gesture.
+    fn handle_mouse_up(
+        &mut self,
+        button: MouseButton,
+        px: f32,
+        py: f32,
+        mods: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = self.term_mode();
+
+        if Self::mouse_reporting(mode, mods) {
+            if let Some((col, row)) = self.mouse_cell(px, py) {
+                if let Some(code) = mouse_press_code(button) {
+                    if let Some(bytes) = encode_mouse_report(
+                        col,
+                        row,
+                        code,
+                        false,
+                        mods,
+                        MouseEncoding::from_mode(mode),
+                    ) {
+                        self.send_input(&bytes);
+                    }
+                }
+            }
+            self.last_report_cell = None;
+            return;
+        }
+
+        // Local: only finish a gesture actually started by a left press.
+        if button != MouseButton::Left || !self.selecting {
+            return;
+        }
+        // Finalize the head at the release cell, but only while the pointer
+        // is inside the content area: an edge release keeps the head the
+        // auto-scroll left on the edge line.
+        let mut final_point = None;
+        if let Some((col, row)) = self.mouse_cell(px, py) {
+            if let Ok(b) = self.bounds.lock() {
+                let oy: f32 = b.origin.y.into();
+                let ox: f32 = b.origin.x.into();
+                let ly = py - oy - 4.0;
+                let content_h = self.last_visible_rows as f32 * self.last_line_height.max(1.0);
+                if ly >= 0.0 && ly <= content_h {
+                    if let Some(point) = self.visible_to_point(row, col) {
+                        let lx = px - ox - 8.0;
+                        final_point = Some((point, cell_horizontal_side(lx, self.last_char_width)));
+                    }
+                }
+            }
+        }
+        self.end_selection(final_point);
+        self.last_mouse = None;
+        self.mouse_down_pos = None;
+        cx.notify();
+    }
+
+    /// Wheel: extend an active selection, report to a mouse-aware app, translate
+    /// to arrow keys on the alt screen, or scroll local history — in that order.
+    fn handle_scroll_wheel(&mut self, ev: &gpui::ScrollWheelEvent, cx: &mut Context<Self>) {
+        let line_h = self.last_line_height.max(1.0);
+        let content_h = self.last_visible_rows as f32 * line_h;
+
+        // Normalize Pixels/Lines deltas to pixels, then commit whole lines via
+        // the sub-line accumulator (smooth trackpad inertia / discrete notches).
+        let delta_px_y: f32 = ev.delta.pixel_delta(px(line_h)).y.into();
+        let Some(lines) =
+            wheel_line_delta(&mut self.scroll_px, ev.touch_phase, delta_px_y, line_h, content_h)
+        else {
+            return;
+        };
+
+        let mode = self.term_mode();
+        let shift = ev.modifiers.shift;
+
+        // 1) Wheel while selecting extends the selection to the new edge.
+        if self.selecting {
+            let col = self
+                .last_mouse
+                .and_then(|(x, _)| {
+                    let b = self.bounds.lock().ok()?;
+                    let ox: f32 = b.origin.x.into();
+                    let cw = self.last_char_width.max(0.5);
+                    Some((((x - ox - 8.0) / cw).floor() as i64).clamp(0, self.cols as i64 - 1) as usize)
+                })
+                .unwrap_or(0);
+            self.selection_scroll(lines, col);
+            cx.notify();
+            return;
+        }
+
+        // 2) App owns the mouse: repeated wheel reports (press-only).
+        if mode.intersects(TermMode::MOUSE_MODE) && !shift {
+            let p = ev.position;
+            if let Some((col, row)) = self.mouse_cell(p.x.into(), p.y.into()) {
+                for report in encode_wheel_reports(col, row, lines, ev.modifiers, mode) {
+                    self.send_input(&report);
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        // 3) Alt-screen app with alternate scroll (the default): wheel acts as
+        // Up/Down cursor-key presses, so less/vim/tmux scroll without a mouse.
+        if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) && !shift {
+            let bytes = alt_scroll_bytes(lines);
+            self.send_input(&bytes);
+            cx.notify();
+            return;
+        }
+
+        // 4) Primary screen (or Shift escape hatch): local history scroll.
+        if let Ok(mut term) = self.term.lock() {
+            term.scroll_display(Scroll::Delta(lines));
+        }
+        cx.notify();
     }
 
     /// Feed raw bytes from SSH into the terminal parser.
@@ -743,6 +1186,245 @@ fn keystroke_to_bytes(ks: &gpui::Keystroke, app_cursor: bool) -> Vec<u8> {
     Vec::new()
 }
 
+/// Whether the pointer has moved more than 2 px from the press point — the
+/// drag threshold used by Zed (`SELECTION_DRAG_THRESHOLD`), below which a
+/// press/release is treated as a click instead of a drag-select.
+fn exceeds_drag_threshold(down: (f32, f32), now: (f32, f32)) -> bool {
+    let dx = now.0 - down.0;
+    let dy = now.1 - down.1;
+    (dx * dx + dy * dy).sqrt() > SELECTION_DRAG_THRESHOLD_PX
+}
+
+/// Lines to scroll for one mouse-motion event while the pointer is above the
+/// top edge (positive) or below the bottom edge (negative). Speed grows with
+/// overflow distance as `distance^1.1 / line_height`, clamped to ±3 lines per
+/// event (ported from Zed `drag_line_delta`). Returns None inside the area.
+fn drag_line_delta(ly: f32, content_h: f32, line_h: f32) -> Option<i32> {
+    let line_h = line_h.max(1.0);
+    if ly < 0.0 {
+        Some((((-ly).powf(1.1) / line_h).ceil() as i32).clamp(1, 3))
+    } else if ly > content_h {
+        Some(((-(ly - content_h).powf(1.1) / line_h).floor() as i32).clamp(-3, -1))
+    } else {
+        None
+    }
+}
+
+/// Fold one wheel pixel delta into the sub-line accumulator and return the
+/// whole-line delta to commit. Started/Ended touch phases reset the
+/// accumulator (trackpad gesture boundaries); on Moved, the change of the
+/// truncated pixel/line quotient is emitted. Plain wheel mice always report
+/// Moved, so a sign reversal against the residue resets as well, making the
+/// first notch after a direction change respond immediately.
+fn wheel_line_delta(
+    acc: &mut f32,
+    touch_phase: gpui::TouchPhase,
+    dy_px: f32,
+    line_h: f32,
+    content_h: f32,
+) -> Option<i32> {
+    if matches!(touch_phase, gpui::TouchPhase::Started | gpui::TouchPhase::Ended) {
+        *acc = 0.0;
+        return None;
+    }
+    let line_h = line_h.max(1.0);
+    if dy_px != 0.0 && *acc != 0.0 && dy_px.signum() != acc.signum() {
+        *acc = 0.0;
+    }
+    let old = (*acc / line_h) as i32;
+    *acc += dy_px;
+    let new = (*acc / line_h) as i32;
+    // Modulo the content height so residue wraps quickly at the scroll ends.
+    *acc %= content_h.max(line_h);
+    let lines = new - old;
+    (lines != 0).then_some(lines)
+}
+
+/// Arrow-key bytes for alt-screen alternate scroll: `ESC O A` per line upward
+/// (toward history), `ESC O B` downward (ported from Zed `alt_scroll`).
+fn alt_scroll_bytes(lines: i32) -> Vec<u8> {
+    let seq: &[u8] = if lines > 0 { b"\x1bOA" } else { b"\x1bOB" };
+    let mut out = Vec::with_capacity(lines.unsigned_abs() as usize * 3);
+    for _ in 0..lines.unsigned_abs() {
+        out.extend_from_slice(seq);
+    }
+    out
+}
+
+/// Horizontal half-cell of a local x coordinate: left half = Side::Left (the
+/// boundary sits before the cell), right half = Side::Right (cell included).
+fn cell_horizontal_side(lx: f32, cell_w: f32) -> Side {
+    if (lx / cell_w.max(0.5)).fract() < 0.5 {
+        Side::Left
+    } else {
+        Side::Right
+    }
+}
+
+/// xterm mouse wire format selected by the terminal modes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MouseEncoding {
+    /// SGR (1006): `ESC [ < b ; col ; row M/m`, coordinates are unlimited.
+    Sgr,
+    /// Legacy X10/normal (1000) and the UTF-8 coordinate extension (1005).
+    Normal { utf8: bool },
+}
+
+impl MouseEncoding {
+    fn from_mode(mode: TermMode) -> Self {
+        if mode.contains(TermMode::SGR_MOUSE) {
+            MouseEncoding::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            MouseEncoding::Normal { utf8: true }
+        } else {
+            MouseEncoding::Normal { utf8: false }
+        }
+    }
+}
+
+/// xterm mouse button codes (modifier bits are added separately).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum MouseButtonCode {
+    Left = 0,
+    Middle = 1,
+    Right = 2,
+    LeftMove = 32,
+    MiddleMove = 33,
+    RightMove = 34,
+    NoneMove = 35,
+    ScrollUp = 64,
+    ScrollDown = 65,
+}
+
+/// Modifier mask for mouse reports: Shift=4, Alt=8, Control=16 (Cmd excluded,
+/// matching Zed).
+fn mouse_mod_bits(mods: Modifiers) -> u8 {
+    u8::from(mods.shift) * 4 + u8::from(mods.alt) * 8 + u8::from(mods.control) * 16
+}
+
+/// Button code for a press/release; unsupported buttons (Navigate) return None.
+fn mouse_press_code(button: MouseButton) -> Option<u8> {
+    Some(match button {
+        MouseButton::Left => MouseButtonCode::Left as u8,
+        MouseButton::Middle => MouseButtonCode::Middle as u8,
+        MouseButton::Right => MouseButtonCode::Right as u8,
+        MouseButton::Navigate(_) => return None,
+    })
+}
+
+/// Button code for a motion event: held left/middle/right drag = 32/33/34,
+/// plain hover = 35.
+fn mouse_move_code(pressed: Option<MouseButton>) -> Option<u8> {
+    Some(match pressed {
+        Some(MouseButton::Left) => MouseButtonCode::LeftMove as u8,
+        Some(MouseButton::Middle) => MouseButtonCode::MiddleMove as u8,
+        Some(MouseButton::Right) => MouseButtonCode::RightMove as u8,
+        Some(MouseButton::Navigate(_)) => return None,
+        None => MouseButtonCode::NoneMove as u8,
+    })
+}
+
+/// Whether a motion event should be reported under the active modes:
+/// MOUSE_MOTION (1003) reports hover and drags; MOUSE_DRAG (1002) only drags;
+/// MOUSE_REPORT_CLICK (1000) never reports motion.
+fn reportable_move_code(mode: TermMode, pressed: Option<MouseButton>) -> Option<u8> {
+    let code = mouse_move_code(pressed)?;
+    if code == MouseButtonCode::NoneMove as u8 && !mode.contains(TermMode::MOUSE_MOTION) {
+        return None;
+    }
+    if !mode.intersects(TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG) {
+        return None;
+    }
+    Some(code)
+}
+
+/// Encode one mouse report. `col`/`visible_row` are 0-based viewport
+/// coordinates (clamped by `mouse_cell`); the protocols are 1-based.
+fn encode_mouse_report(
+    col: usize,
+    visible_row: usize,
+    button: u8,
+    pressed: bool,
+    mods: Modifiers,
+    encoding: MouseEncoding,
+) -> Option<Vec<u8>> {
+    let mod_bits = mouse_mod_bits(mods);
+    match encoding {
+        MouseEncoding::Sgr => {
+            let c = if pressed { 'M' } else { 'm' };
+            Some(
+                format!(
+                    "\x1b[<{};{};{}{}",
+                    button + mod_bits,
+                    col + 1,
+                    visible_row + 1,
+                    c
+                )
+                .into_bytes(),
+            )
+        }
+        MouseEncoding::Normal { utf8 } => {
+            // Legacy releases always use button code 3 (plus modifier bits),
+            // independent of which button was released.
+            let code = if pressed { button + mod_bits } else { 3 + mod_bits };
+            encode_normal_mouse(col, visible_row, code, utf8)
+        }
+    }
+}
+
+/// Legacy `ESC [ M Cb Cx Cy` encoding (Cb = 32 + button). Coordinates are 1
+/// byte (<=223), extended to 2 UTF-8-like bytes (up to 2015) in utf8 mode.
+fn encode_normal_mouse(col: usize, row: usize, button: u8, utf8: bool) -> Option<Vec<u8>> {
+    let max_point = if utf8 { 2015 } else { 223 };
+    if row >= max_point || col >= max_point {
+        return None;
+    }
+    let mut msg = vec![0x1b, b'[', b'M', 32 + button];
+    let encode_pos = |pos: usize| -> Vec<u8> {
+        let pos = 32 + 1 + pos;
+        vec![(0xC0 + pos / 64) as u8, (0x80 + (pos & 63)) as u8]
+    };
+    if utf8 && col >= 95 {
+        msg.extend_from_slice(&encode_pos(col));
+    } else {
+        msg.push((32 + 1 + col) as u8);
+    }
+    if utf8 && row >= 95 {
+        msg.extend_from_slice(&encode_pos(row));
+    } else {
+        msg.push((32 + 1 + row) as u8);
+    }
+    Some(msg)
+}
+
+/// Wheel reports are press-only (no matching release), repeated once per
+/// scrolled line. Returns one byte vector per line.
+fn encode_wheel_reports(
+    col: usize,
+    visible_row: usize,
+    lines: i32,
+    mods: Modifiers,
+    mode: TermMode,
+) -> Vec<Vec<u8>> {
+    let button = if lines > 0 {
+        MouseButtonCode::ScrollUp as u8
+    } else {
+        MouseButtonCode::ScrollDown as u8
+    };
+    match encode_mouse_report(
+        col,
+        visible_row,
+        button,
+        true,
+        mods,
+        MouseEncoding::from_mode(mode),
+    ) {
+        Some(bytes) => vec![bytes; lines.unsigned_abs() as usize],
+        None => Vec::new(),
+    }
+}
+
 /// Convert a VTE `Color` to a GPUI `Hsla`.
 fn color_to_hsla(color: &Color) -> Hsla {
     match color {
@@ -867,6 +1549,10 @@ const TERMINAL_FG: Hsla = Hsla {
 /// Extra leading (px) added to font_size to get line height. 13 + 4 = 17px.
 const LINE_LEADING: f32 = 4.0;
 
+/// Pointer must leave this radius (px) from the press point before a drag
+/// selection starts (matches Zed's SELECTION_DRAG_THRESHOLD = 2.0).
+const SELECTION_DRAG_THRESHOLD_PX: f32 = 2.0;
+
 /// Resolved, coalesce-able visual attributes for a run of terminal cells.
 #[derive(Clone, PartialEq)]
 struct RunStyle {
@@ -890,10 +1576,6 @@ struct RowData {
     /// bytes, so `prefix[c+1] == prefix[c]` for a spacer. Every value is on a
     /// char boundary, so it is safe to slice `text` with these offsets.
     prefix: Vec<usize>,
-    /// True when the grid line's last cell carries `WRAPLINE` — the terminal
-    /// auto-wrapped this row and the logical line continues on the next visual
-    /// row. Copy joins such rows without an intervening newline.
-    wrapped: bool,
 }
 
 /// Build a solid underline style colored with the run's foreground.
@@ -1057,80 +1739,7 @@ fn build_row(
         "terminal row TextRun lengths must sum to the text byte length"
     );
 
-    // A wrapped row's WRAPLINE flag sits on the last column's cell (set by
-    // `wrap_input` on the cursor cell right before it moves to the next line),
-    // so checking the final column is enough — no full-row scan needed.
-    let wrapped = num_cols > 0
-        && grid[alacritty_terminal::index::Point::new(
-            grid_line,
-            alacritty_terminal::index::Column(num_cols - 1),
-        )]
-        .flags
-        .contains(Flags::WRAPLINE);
-
-    RowData {
-        text,
-        runs,
-        prefix,
-        wrapped,
-    }
-}
-
-/// Assemble the copy text for a selection spanning the rendered `rows`, from
-/// `a`/`h` (order-agnostic; normalized to top-left → bottom-right).
-///
-/// Column→byte mapping uses each row's `prefix` map (NOT `col_to_byte`) so
-/// wide-char spacer columns — which contribute 0 bytes — are handled
-/// correctly; a raw char index would drift once a CJK/emoji glyph precedes
-/// the selection endpoint.
-///
-/// Copy semantics mirror the terminal's own selection copy
-/// (`alacritty_terminal::Term::bounds_to_string`): every grid row is padded
-/// with spaces to the full column width for rendering, and that padding is
-/// trimmed instead of being copied out as trailing spaces; rows the terminal
-/// visually wrapped (`wrapped`) are joined into one logical line with no
-/// newline, while real line breaks stay newlines.
-fn selection_to_string(rows: &[RowData], a: SelectionPoint, h: SelectionPoint) -> Option<String> {
-    let (start, end) = if (a.row, a.col) <= (h.row, h.col) {
-        (a, h)
-    } else {
-        (h, a)
-    };
-    if start.row >= rows.len() {
-        return None;
-    }
-    let row_bytes = |r: &RowData, col: usize| -> usize {
-        r.prefix.get(col).copied().unwrap_or(r.text.len())
-    };
-    if start.row == end.row {
-        let r = rows.get(start.row)?;
-        let b0 = row_bytes(r, start.col);
-        let b1 = row_bytes(r, end.col).max(b0);
-        return r.text.get(b0..b1).map(str::to_string);
-    }
-    let mut out = String::new();
-    // The start row tail: from `start.col` to the row's end, minus the
-    // right-edge grid padding.
-    let r0 = rows.get(start.row)?;
-    out.push_str(r0.text.get(row_bytes(r0, start.col)..)?.trim_end());
-    // Rows past a viewport resize may no longer exist; copy what's there.
-    let last_row = end.row.min(rows.len().saturating_sub(1));
-    let mut prev = r0;
-    for row_idx in (start.row + 1)..=last_row {
-        let r = rows.get(row_idx)?;
-        // A row whose predecessor was visually wrapped is a continuation
-        // of the same logical line — join it without a newline.
-        if !prev.wrapped {
-            out.push('\n');
-        }
-        if row_idx == end.row {
-            out.push_str(r.text.get(..row_bytes(r, end.col))?);
-        } else {
-            out.push_str(r.text.trim_end());
-        }
-        prev = r;
-    }
-    Some(out)
+    RowData { text, runs, prefix }
 }
 
 /// Given base runs covering `text_len` fully, return a new run list in which
@@ -1439,7 +2048,12 @@ impl Render for TerminalView {
             },
         ];
 
-        let (lines, cursor_cell): (Vec<RowData>, Option<(usize, usize)>) = {
+        let (lines, cursor_cell, viewport_top, sel_pts): (
+            Vec<RowData>,
+            Option<(usize, usize)>,
+            i32,
+            Option<(Point, Point)>,
+        ) = {
             let Ok(term) = self.term.lock() else {
                 return div()
                     .id("terminal-view")
@@ -1482,6 +2096,17 @@ impl Render for TerminalView {
                 None
             };
 
+            // Resolve the live selection to ABSOLUTE grid points (negative line
+            // = scrollback history). `to_range` already normalized it to
+            // top-left → bottom-right and clamped it to the grid. We intersect
+            // these with each visible row below, so the highlight stays pinned
+            // to its text while the viewport scrolls instead of floating.
+            let sel_pts = term
+                .selection
+                .as_ref()
+                .and_then(|s| s.to_range(&*term))
+                .map(|range| (range.start, range.end));
+
             // Do NOT trim trailing whitespace: trailing spaces can carry a
             // colored background (e.g. a TUI status bar), and trimming would
             // cut that background short.
@@ -1489,15 +2114,12 @@ impl Render for TerminalView {
                 (0..screen_lines)
                     .map(|row_idx| {
                         let grid_line = viewport_top + row_idx as i32;
-                        build_row(
-                            grid,
-                            alacritty_terminal::index::Line(grid_line),
-                            num_cols,
-                            &fonts,
-                        )
+                        build_row(grid, Line(grid_line), num_cols, &fonts)
                     })
                     .collect::<Vec<_>>(),
                 cursor_cell,
+                viewport_top,
+                sel_pts,
             )
         };
 
@@ -1505,18 +2127,6 @@ impl Render for TerminalView {
         self.last_trim_top = 0; // trim only affects what we render; mapping uses visible rows
         self.last_visible_rows = lines.len();
         self.last_line_height = line_height;
-
-        // Normalize selection points (anchor ≤ head) for rendering.
-        let sel = self
-            .selection_anchor
-            .zip(self.selection_head)
-            .map(|(a, h)| {
-                if (a.row, a.col) <= (h.row, h.col) {
-                    (a, h)
-                } else {
-                    (h, a)
-                }
-            });
 
         // Selection highlight color (bright blue overlay for visibility).
         let sel_bg = gpui::hsla(0.60, 0.70, 0.50, 0.45);
@@ -1545,18 +2155,28 @@ impl Render for TerminalView {
                 let base_runs = apply_log_highlights(&row.text, &row.runs);
 
                 // Layer 2: selection overlay. Determine whether the selection
-                // intersects this row and, if so, the byte range
-                // [from_byte, to_byte) to highlight. Column indices map to
-                // bytes via `row.prefix` (which correctly skips wide-char
-                // spacer columns and always lands on char boundaries).
-                let final_runs = match sel {
-                    Some((start, end)) if row_idx >= start.row && row_idx <= end.row => {
-                        let from_col = if row_idx == start.row { start.col } else { 0 };
-                        let to_col = if row_idx == end.row {
-                            end.col
+                // intersects this VISIBLE row by translating it to the absolute
+                // grid line it renders; if so, [from_byte, to_byte) is the byte
+                // range to highlight. Column indices map to bytes via
+                // `row.prefix` (which skips wide-char spacer columns and always
+                // lands on char boundaries). The selection end column is
+                // inclusive, hence `+ 1`.
+                let abs_line = viewport_top + row_idx as i32;
+                let final_runs = match sel_pts {
+                    Some((start, end))
+                        if abs_line >= start.line.0 && abs_line <= end.line.0 =>
+                    {
+                        let num_row_cols = row.prefix.len().saturating_sub(1);
+                        let from_col = if abs_line == start.line.0 {
+                            start.column.0
+                        } else {
+                            0
+                        };
+                        let to_col = if abs_line == end.line.0 {
+                            (end.column.0 + 1).min(num_row_cols)
                         } else {
                             // Full row: last prefix entry == text byte length.
-                            row.prefix.len().saturating_sub(1)
+                            num_row_cols
                         };
                         let from_byte = row.prefix.get(from_col).copied().unwrap_or(row.text.len());
                         let to_byte = row
@@ -1624,26 +2244,47 @@ impl Render for TerminalView {
                     .children(lines_rendered),
             )
             .when_some(cursor_el, |el, caret| el.child(caret))
-            .on_key_down({
-                let lines_for_copy = lines.clone();
-                cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                     let is_copy = (event.keystroke.modifiers.platform
                         && event.keystroke.key == "c")
                         || (event.keystroke.modifiers.control && event.keystroke.key == "insert");
                     if is_copy {
-                        if let Some(text) = this.selected_text(&lines_for_copy) {
-                            if !text.is_empty() {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                                cx.stop_propagation();
-                                return;
+                        // Copy straight from the grid: works for selections that
+                        // span scrollback (edge auto-scroll / wheel-drag) and
+                        // handles visual wrap, tabs and wide chars correctly.
+                        if let Ok(term) = this.term.lock() {
+                            if let Some(text) = term.selection_to_string() {
+                                if !text.is_empty() {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                    cx.stop_propagation();
+                                    return;
+                                }
                             }
                         }
+                    }
+                    // Cmd+A: select all scrollback + viewport content.
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.key == "a"
+                    {
+                        this.select_all();
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // Cmd+K: clear the screen locally (no PTY bytes).
+                    if event.keystroke.modifiers.platform
+                        && event.keystroke.key == "k"
+                    {
+                        this.clear();
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
                     }
                     if event.keystroke.modifiers.platform && event.keystroke.key == "v" {
                         if let Some(item) = cx.read_from_clipboard() {
                             let text = item.text().unwrap_or_default();
                             if !text.is_empty() {
-                                this.send_input(text.as_bytes());
+                                this.send_user_input(text.as_bytes());
                                 cx.notify();
                                 cx.stop_propagation();
                                 return;
@@ -1678,48 +2319,23 @@ impl Render for TerminalView {
                     };
                     let bytes = keystroke_to_bytes(&event.keystroke, app_cursor);
                     if !bytes.is_empty() {
-                        // If the user is scrolled back into history, any input
-                        // key first jumps back to the newest line before sending
-                        // (standard terminal behaviour — avoids typing into the
-                        // old scrollback view).
-                        let need_reset = if let Ok(term) = this.term.lock() {
-                            term.grid().display_offset() != 0
-                        } else {
-                            false
-                        };
-                        if need_reset {
-                            if let Ok(mut term) = this.term.lock() {
-                                term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-                            }
-                        }
-                        this.send_input(&bytes);
+                        // User keystrokes clear any selection and snap the
+                        // viewport back to the newest line (see send_user_input).
+                        this.send_user_input(&bytes);
                         cx.notify();
                         cx.stop_propagation();
                         window.refresh();
                     }
                 })
-            })
-            // Mouse wheel → scroll the local scrollback history. We translate
-            // GPUI's scroll delta into alacritty line deltas and call
-            // `scroll_display`, which only moves the viewport offset (history is
-            // already retained by the grid). Direction: wheel up (deltaY > 0)
-            // scrolls up into history; wheel down returns toward the newest line.
-            .on_scroll_wheel(
-                cx.listener(|this, ev: &gpui::ScrollWheelEvent, _window, cx| {
-                    let lines = match &ev.delta {
-                        gpui::ScrollDelta::Pixels(p) => {
-                            (p.y.as_f32() / this.last_line_height.max(1.0)).round() as i32
-                        }
-                        gpui::ScrollDelta::Lines(l) => l.y.round() as i32,
-                    };
-                    if lines != 0 {
-                        if let Ok(mut term) = this.term.lock() {
-                            term.scroll_display(alacritty_terminal::grid::Scroll::Delta(lines));
-                        }
-                        cx.notify();
-                    }
-                }),
             )
+            // Mouse wheel. Selection-drag extends the selection; mouse-aware
+            // TUI apps get wheel reports; alt-screen apps with alternate scroll
+            // (less/vim/tmux) get cursor-key presses; otherwise the local
+            // scrollback history scrolls. Sub-pixel deltas accumulate, so
+            // trackpad inertia is smooth. See `handle_scroll_wheel`.
+            .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _window, cx| {
+                this.handle_scroll_wheel(ev, cx);
+            }))
             // Absolutely-positioned canvas that covers the entire area so its
             // paint hook fires reliably. Only job: record bounds (for mouse coord
             // conversion) and register the keyboard input handler.
@@ -1743,112 +2359,84 @@ impl Render for TerminalView {
                 .right_0()
                 .bottom_0(),
             )
-            // Mouse handlers live on the outer div (not canvas) so GPUI dispatches
-            // them reliably. ev.position is window-absolute; we subtract bounds.origin.
+            // Mouse handlers live on the outer div (not canvas) so GPUI
+            // dispatches them reliably. ev.position is window-absolute; the
+            // handlers subtract bounds.origin. All three buttons are
+            // registered so TUI apps receive middle/right mouse reports.
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                     window.focus(&cx.focus_handle(), cx);
-                    let px: f32 = ev.position.x.into();
-                    let py: f32 = ev.position.y.into();
-                    let bounds = match this.bounds.lock() {
-                        Ok(g) => *g,
-                        Err(_) => return,
-                    };
-                    let ox: f32 = bounds.origin.x.into();
-                    let oy: f32 = bounds.origin.y.into();
-                    let cw = this.last_char_width.max(0.5);
-                    let ch = this.last_line_height.max(1.0);
-                    let lx = (px - ox - 8.0).max(0.0);
-                    let ly = (py - oy - 4.0).max(0.0);
-                    let col = (lx / cw).floor() as usize;
-                    let row = (ly / ch).floor() as usize;
-                    let row = row.min(this.last_visible_rows.saturating_sub(1));
-
-                    // Double-click → select the word under the cursor.
-                    // Triple-click → select the whole line. Both set anchor/head
-                    // and leave `selecting` false so a subsequent drag starts a
-                    // fresh selection (standard terminal behavior).
-                    if ev.click_count >= 3 {
-                        // Select the entire row up to the last non-blank cell.
-                        let end_col = this
-                            .chars_of_visible_row(row)
-                            .map(|chars| {
-                                // Last non-whitespace column + 1 (half-open);
-                                // 0 if the whole row is blank.
-                                chars
-                                    .iter()
-                                    .rposition(|c| !c.is_whitespace())
-                                    .map(|i| i + 1)
-                                    .unwrap_or(0)
-                            })
-                            .unwrap_or(0);
-                        this.selection_anchor = Some(SelectionPoint { row, col: 0 });
-                        this.selection_head = Some(SelectionPoint { row, col: end_col });
-                        this.selecting = false;
-                        cx.notify();
-                        return;
-                    }
-                    if ev.click_count == 2 {
-                        if let Some(chars) = this.chars_of_visible_row(row) {
-                            let (start, end) = Self::word_bounds(&chars, col);
-                            this.selection_anchor = Some(SelectionPoint { row, col: start });
-                            this.selection_head = Some(SelectionPoint { row, col: end });
-                            this.selecting = false;
-                            cx.notify();
-                            return;
-                        }
-                    }
-
-                    let pt = SelectionPoint { row, col };
-                    this.selection_anchor = Some(pt);
-                    this.selection_head = Some(pt);
-                    this.selecting = true;
-                    cx.notify();
+                    let p = ev.position;
+                    this.handle_mouse_down(
+                        ev.button,
+                        ev.click_count,
+                        p.x.into(),
+                        p.y.into(),
+                        ev.modifiers,
+                        cx,
+                    );
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    window.focus(&cx.focus_handle(), cx);
+                    let p = ev.position;
+                    this.handle_mouse_down(
+                        ev.button,
+                        ev.click_count,
+                        p.x.into(),
+                        p.y.into(),
+                        ev.modifiers,
+                        cx,
+                    );
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    window.focus(&cx.focus_handle(), cx);
+                    let p = ev.position;
+                    this.handle_mouse_down(
+                        ev.button,
+                        ev.click_count,
+                        p.x.into(),
+                        p.y.into(),
+                        ev.modifiers,
+                        cx,
+                    );
                 }),
             )
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _window, cx| {
-                if !this.selecting {
-                    return;
-                }
-                if ev.pressed_button != Some(MouseButton::Left) {
-                    return;
-                }
-                let px: f32 = ev.position.x.into();
-                let py: f32 = ev.position.y.into();
-                let bounds = match this.bounds.lock() {
-                    Ok(g) => *g,
-                    Err(_) => return,
-                };
-                let ox: f32 = bounds.origin.x.into();
-                let oy: f32 = bounds.origin.y.into();
-                let bw: f32 = bounds.size.width.into();
-                let bh: f32 = bounds.size.height.into();
-                let pxc = px.clamp(ox + 8.0, ox + bw - 1.0);
-                let pyc = py.clamp(oy + 4.0, oy + bh - 1.0);
-                let cw = this.last_char_width.max(0.5);
-                let ch = this.last_line_height.max(1.0);
-                let lx = (pxc - ox - 8.0).max(0.0);
-                let ly = (pyc - oy - 4.0).max(0.0);
-                let col = (lx / cw).floor() as usize;
-                let row = (ly / ch).floor() as usize;
-                this.selection_head = Some(SelectionPoint {
-                    row: row.min(this.last_visible_rows.saturating_sub(1)),
-                    col,
-                });
-                cx.notify();
+                let p = ev.position;
+                this.handle_mouse_move(
+                    p.x.into(),
+                    p.y.into(),
+                    ev.pressed_button,
+                    ev.modifiers,
+                    cx,
+                );
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _ev: &MouseUpEvent, _window, cx| {
-                    this.selecting = false;
-                    if let (Some(a), Some(h)) = (this.selection_anchor, this.selection_head) {
-                        if a == h {
-                            this.selection_anchor = None;
-                            this.selection_head = None;
-                        }
-                    }
-                    cx.notify();
+                cx.listener(|this, ev: &MouseUpEvent, _window, cx| {
+                    let p = ev.position;
+                    this.handle_mouse_up(ev.button, p.x.into(), p.y.into(), ev.modifiers, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, ev: &MouseUpEvent, _window, cx| {
+                    let p = ev.position;
+                    this.handle_mouse_up(ev.button, p.x.into(), p.y.into(), ev.modifiers, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, ev: &MouseUpEvent, _window, cx| {
+                    let p = ev.position;
+                    this.handle_mouse_up(ev.button, p.x.into(), p.y.into(), ev.modifiers, cx);
                 }),
             )
             .into_any_element()
@@ -1897,11 +2485,18 @@ mod tests {
     // pull in GPUI's macro-heavy prelude and blow the `#[test]` macro's
     // recursion limit.
     use super::{
-        apply_log_highlights, apply_selection, col_to_byte, color_to_hsla, contains_sequence,
-        keystroke_to_bytes, selection_to_string, slice_by_cols, RowData, SelectionPoint,
+        MouseEncoding,
+        alt_scroll_bytes, apply_log_highlights, apply_selection, cell_horizontal_side,
+        color_to_hsla, contains_sequence, drag_line_delta, encode_mouse_report,
+        encode_wheel_reports, exceeds_drag_threshold, keystroke_to_bytes, reportable_move_code,
+        wheel_line_delta,
     };
+    use alacritty_terminal::term::TermMode;
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
-    use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, TextRun};
+    use gpui::{
+        Font, FontFeatures, FontStyle, FontWeight, Hsla, Modifiers, MouseButton, TextRun,
+        TouchPhase,
+    };
 
     fn ks(key: &str) -> gpui::Keystroke {
         gpui::Keystroke {
@@ -1961,43 +2556,6 @@ mod tests {
             assert_eq!(keystroke_to_bytes(&ks("pageup"), app), b"\x1b[5~");
             assert_eq!(keystroke_to_bytes(&ks("pagedown"), app), b"\x1b[6~");
         }
-    }
-
-    /// Reproduces the exact panic from the crash report: a row containing the
-    /// 2-byte `·` char where a selection column landed mid-character
-    /// ("end byte index 70 is not a char boundary; it is inside '·'").
-    /// Before the fix, slicing `text[69..70]` panicked because column 70 is a
-    /// char index that is not a valid byte boundary.
-    #[test]
-    fn col_to_byte_handles_multibyte_chars() {
-        // `·` is U+00B7 (2 bytes), CJK chars are 3 bytes.
-        let row = "ab·cd阅"; // chars: a(0) b(1) ·(2) c(3) d(4) 阅(5)
-        // bytes: a=0 b=1 ·=2..4 c=4 d=5 阅=6..9
-        assert_eq!(col_to_byte(row, 0), 0); // 'a'
-        assert_eq!(col_to_byte(row, 2), 2); // '·' start byte
-        assert_eq!(col_to_byte(row, 3), 4); // 'c' (skips the 2nd byte of '·')
-        assert_eq!(col_to_byte(row, 5), 6); // '阅' start byte
-        // Out of range clamps to end (byte length 9), never panics.
-        assert_eq!(col_to_byte(row, 99), 9);
-    }
-
-    #[test]
-    fn slice_by_cols_does_not_panic_on_multibyte() {
-        // The panic case: a column index that falls inside a multi-byte char.
-        let row = " prd.pdf   Ⅳ. 阅 读 理 解 （ 2025·福建泉州期中）.pdf";
-        // Slicing at arbitrary column boundaries must never panic.
-        let _ = slice_by_cols(row, 0, row.chars().count());
-        let _ = slice_by_cols(row, 30, 50);
-        let _ = slice_by_cols(row, 40, 40); // empty selection
-        assert!(slice_by_cols(row, 0, 1).chars().count() <= 1);
-    }
-
-    #[test]
-    fn slice_by_cols_orders_endpoints() {
-        let row = "阅读测试"; // 4 chars, 12 bytes
-        assert_eq!(slice_by_cols(row, 1, 3), "读测");
-        // Reversed endpoints produce the same span.
-        assert_eq!(slice_by_cols(row, 3, 1), "读测");
     }
 
     #[test]
@@ -2217,135 +2775,166 @@ mod tests {
         assert_eq!(out[0].color, super::TERMINAL_FG);
     }
 
-    // word_bounds is a pure associated fn on TerminalView (no self, no GPUI
-    // types) so we can call it via the type path without pulling in macros.
     #[test]
-    fn word_bounds_selects_inner_token() {
-        let chars: Vec<char> = "git status".chars().collect();
-        // Click the 'i' of "git" (col 1) → selects "git" (cols 0..3).
-        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (0, 3));
-        // Click the 't' of "status" (col 5) → selects "status" (cols 4..10).
-        assert_eq!(super::TerminalView::word_bounds(&chars, 5), (4, 10));
+    fn drag_threshold_two_px() {
+        assert!(!exceeds_drag_threshold((0.0, 0.0), (1.0, 1.0)));
+        // Exactly 2 px is still below the strict threshold.
+        assert!(!exceeds_drag_threshold((0.0, 0.0), (2.0, 0.0)));
+        assert!(exceeds_drag_threshold((0.0, 0.0), (2.1, 0.0)));
+        assert!(exceeds_drag_threshold((10.0, 10.0), (10.0, 5.0)));
     }
 
     #[test]
-    fn word_bounds_at_boundaries() {
-        let chars: Vec<char> = "git status".chars().collect();
-        // First char of a word.
-        assert_eq!(super::TerminalView::word_bounds(&chars, 0), (0, 3));
-        // Last char of a word.
-        assert_eq!(super::TerminalView::word_bounds(&chars, 9), (4, 10));
+    fn edge_drag_delta_curve_and_clamp() {
+        const LH: f32 = 18.0;
+        // Inside the content area: no edge scroll.
+        assert_eq!(drag_line_delta(0.0, 100.0, LH), None);
+        assert_eq!(drag_line_delta(50.0, 100.0, LH), None);
+        // Just past the top: one line; far past the top accelerates but caps
+        // at 3 per motion event.
+        assert_eq!(drag_line_delta(-1.0, 100.0, LH), Some(1));
+        assert_eq!(drag_line_delta(-18.0, 100.0, LH), Some(2));
+        assert_eq!(drag_line_delta(-100.0, 100.0, LH), Some(3));
+        // Below the bottom edge: symmetric, negative (toward the newest line).
+        assert_eq!(drag_line_delta(101.0, 100.0, LH), Some(-1));
+        assert_eq!(drag_line_delta(200.0, 100.0, LH), Some(-3));
     }
 
     #[test]
-    fn word_bounds_on_whitespace_selects_single_cell() {
-        // Double-clicking a space should NOT grab the whole blank run.
-        let chars: Vec<char> = "a    b".chars().collect();
-        // col 2 is a space.
-        assert_eq!(super::TerminalView::word_bounds(&chars, 2), (2, 3));
-    }
-
-    #[test]
-    fn word_bounds_with_punctuation() {
-        // Punctuation breaks words: a path like /usr/bin selects only one
-        // path segment per double-click (e.g. "usr" or "bin"), not the whole.
-        let chars: Vec<char> = "/usr/bin".chars().collect();
-        // Click "u" (col 1) → selects "usr" (cols 1..4).
-        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (1, 4));
-        // Click "b" (col 5) → selects "bin" (cols 5..8).
-        assert_eq!(super::TerminalView::word_bounds(&chars, 5), (5, 8));
-        // Click "/" (col 0, a separator) → selects only that cell.
-        assert_eq!(super::TerminalView::word_bounds(&chars, 0), (0, 1));
-    }
-
-    #[test]
-    fn word_bounds_key_value_and_flags() {
-        // `KEY=value` — double-click each side selects just that side.
-        let chars: Vec<char> = "PATH=/usr/bin".chars().collect();
-        assert_eq!(super::TerminalView::word_bounds(&chars, 1), (0, 4)); // PATH
-        assert_eq!(super::TerminalView::word_bounds(&chars, 8), (6, 9)); // usr
-        // `--rm` style flag: double-click "rm" selects "rm", not "--rm".
-        let chars: Vec<char> = "--rm".chars().collect();
-        assert_eq!(super::TerminalView::word_bounds(&chars, 3), (2, 4)); // rm
-    }
-
-    #[test]
-    fn word_bounds_underscore_joins() {
-        // Underscore is a word char, so error_code selects as one token.
-        let chars: Vec<char> = "error_code foo".chars().collect();
-        assert_eq!(super::TerminalView::word_bounds(&chars, 3), (0, 10));
-    }
-
-    #[test]
-    fn word_bounds_empty_and_oob() {
-        assert_eq!(super::TerminalView::word_bounds(&[], 5), (0, 0));
-        // Col past the end is clamped to the last cell.
-        let chars: Vec<char> = "hi".chars().collect();
-        assert_eq!(super::TerminalView::word_bounds(&chars, 99), (0, 2));
-    }
-
-    /// A test RowData with a per-char `prefix` map (one char per column).
-    fn copy_row(text: &str, wrapped: bool) -> RowData {
-        let mut prefix = vec![0usize];
-        let mut byte = 0usize;
-        for ch in text.chars() {
-            byte += ch.len_utf8();
-            prefix.push(byte);
+    fn wheel_accumulator_phases_and_sub_lines() {
+        let (lh, h) = (18.0_f32, 360.0_f32);
+        let mut acc = 9.0;
+        // Touch phases reset the accumulator and never commit a scroll.
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Started, 10.0, lh, h), None);
+        assert_eq!(acc, 0.0);
+        // Two small trackpad deltas accumulate into one line.
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Moved, 12.0, lh, h), None);
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Moved, 12.0, lh, h), Some(1));
+        acc = 5.0;
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Ended, 99.0, lh, h), None);
+        assert_eq!(acc, 0.0);
+        // A reversed notch after accumulated motion reacts immediately.
+        let mut acc = 0.0;
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Moved, 30.0, lh, h), Some(1));
+        assert_eq!(wheel_line_delta(&mut acc, TouchPhase::Moved, -30.0, lh, h), Some(-1));
+        // Steady stream of exactly one line per event, 20 times (modulo wrap).
+        let mut acc = 0.0;
+        let mut total = 0;
+        for _ in 0..20 {
+            if let Some(n) = wheel_line_delta(&mut acc, TouchPhase::Moved, 18.0, lh, h) {
+                total += n;
+            }
         }
-        RowData {
-            text: text.to_string(),
-            runs: Vec::new(),
-            prefix,
-            wrapped,
-        }
+        assert_eq!(total, 20);
     }
 
-    fn sel_point(row: usize, col: usize) -> SelectionPoint {
-        SelectionPoint { row, col }
-    }
-
-    /// Regression: a long command the terminal visually wrapped across rows
-    /// must copy back as ONE logical line (no inserted newlines) with the
-    /// row-end padding spaces stripped — not "part1   \npart2".
     #[test]
-    fn copy_joins_wrapped_rows_without_newline_or_padding() {
-        // "echo hello w" wrapped onto row 1 ("orld"), which ends the line;
-        // trailing spaces are right-edge grid padding.
-        let rows = [
-            copy_row("echo hello w     ", true),
-            copy_row("orld continuation ", false),
-            copy_row("next line     ", false),
-        ];
-        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(2, 9)).unwrap();
-        assert_eq!(out, "echo hello world continuation\nnext line");
+    fn alt_scroll_sequences() {
+        assert_eq!(alt_scroll_bytes(3), b"\x1bOA\x1bOA\x1bOA");
+        assert_eq!(alt_scroll_bytes(-2), b"\x1bOB\x1bOB");
     }
 
-    /// Regression: the START row's tail used to keep its full-width padding,
-    /// so a copied multi-line selection gained stray trailing spaces.
     #[test]
-    fn copy_trims_padding_on_start_row_tail() {
-        let rows = [copy_row("first   ", false), copy_row("second", false)];
-        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(1, 6)).unwrap();
-        assert_eq!(out, "first\nsecond");
+    fn cell_side_left_and_right_half() {
+        const CW: f32 = 8.0;
+        assert_eq!(cell_horizontal_side(0.25 * CW, CW), super::Side::Left);
+        // Whole-cell offsets must not affect the fractional half-cell check.
+        assert_eq!(cell_horizontal_side(10.0 * CW + 0.75 * CW, CW), super::Side::Right);
     }
 
-    /// A single-row selection is exactly the columns the user picked — inner
-    /// spaces are kept, nothing is trimmed.
     #[test]
-    fn copy_single_row_keeps_user_range_verbatim() {
-        let rows = [copy_row("abc def", false)];
-        let out = selection_to_string(&rows, sel_point(0, 2), sel_point(0, 5)).unwrap();
-        assert_eq!(out, "c d");
+    fn sgr_mouse_reports() {
+        let no_mods = Modifiers::default();
+        // Left press/release at the origin cell (protocol coords 1-based).
+        assert_eq!(
+            encode_mouse_report(0, 0, 0, true, no_mods, MouseEncoding::Sgr).unwrap(),
+            b"\x1b[<0;1;1M"
+        );
+        assert_eq!(
+            encode_mouse_report(0, 0, 0, false, no_mods, MouseEncoding::Sgr).unwrap(),
+            b"\x1b[<0;1;1m"
+        );
+        // Modifier bits: control=16, shift+alt=12.
+        let ctrl = Modifiers { control: true, ..Default::default() };
+        assert_eq!(
+            encode_mouse_report(0, 0, 0, true, ctrl, MouseEncoding::Sgr).unwrap(),
+            b"\x1b[<16;1;1M"
+        );
+        let shift_alt = Modifiers { shift: true, alt: true, ..Default::default() };
+        assert_eq!(
+            encode_mouse_report(0, 0, 0, true, shift_alt, MouseEncoding::Sgr).unwrap(),
+            b"\x1b[<12;1;1M"
+        );
+        // col 4, row 2 → 5,3.
+        assert_eq!(
+            encode_mouse_report(4, 2, 0, true, no_mods, MouseEncoding::Sgr).unwrap(),
+            b"\x1b[<0;5;3M"
+        );
+        // Wheel: press-only reports repeated per scrolled line.
+        let sgr_mode = TermMode::SGR_MOUSE;
+        let ups = encode_wheel_reports(0, 0, 3, no_mods, sgr_mode);
+        assert_eq!(ups.len(), 3);
+        assert!(ups.iter().all(|b| b == b"\x1b[<64;1;1M"));
+        let downs = encode_wheel_reports(0, 0, -2, no_mods, sgr_mode);
+        assert_eq!(downs.len(), 2);
+        assert!(downs.iter().all(|b| b == b"\x1b[<65;1;1M"));
     }
 
-    /// Selection endpoints past the end of the row list (viewport shrank
-    /// after a resize) copy what exists instead of panicking.
     #[test]
-    fn copy_with_end_row_beyond_viewport_is_clamped() {
-        let rows = [copy_row("first", false), copy_row("second", false)];
-        let out = selection_to_string(&rows, sel_point(0, 0), sel_point(5, 3)).unwrap();
-        assert_eq!(out, "first\nsecond");
-        // Selection starting entirely below the viewport → nothing to copy.
-        assert_eq!(selection_to_string(&rows, sel_point(9, 0), sel_point(9, 2)), None);
+    fn normal_mouse_reports() {
+        let no_mods = Modifiers::default();
+        let enc = MouseEncoding::Normal { utf8: false };
+        // ESC [ M, 32+0, 32+1+col, 32+1+row.
+        assert_eq!(
+            encode_mouse_report(0, 0, 0, true, no_mods, enc).unwrap(),
+            vec![0x1b, b'[', b'M', 32, 33, 33]
+        );
+        // Release uses button code 3 regardless of the released button.
+        let up = encode_mouse_report(0, 0, 0, false, no_mods, enc).unwrap();
+        assert_eq!(up[3], 32 + 3);
+        // One-byte coordinate ceiling is 223 (222 → final byte 255).
+        assert!(encode_mouse_report(223, 0, 0, true, no_mods, enc).is_none());
+        let edge = encode_mouse_report(222, 0, 0, true, no_mods, enc).unwrap();
+        assert_eq!(edge[4], 255);
+
+        // UTF-8 extended coordinates: col 95 encodes as two bytes, and the
+        // range extends to 2015.
+        let u8enc = MouseEncoding::Normal { utf8: true };
+        let pos = 32 + 1 + 95; // 128 → 0xC2, 0x80
+        let msg = encode_mouse_report(95, 0, 0, true, no_mods, u8enc).unwrap();
+        assert_eq!(&msg[4..6], &[(0xC0 + pos / 64) as u8, (0x80 + (pos & 63)) as u8]);
+        assert!(encode_mouse_report(0, 2014, 0, true, no_mods, u8enc).is_some());
+        assert!(encode_mouse_report(0, 2015, 0, true, no_mods, u8enc).is_none());
     }
+
+    #[test]
+    fn move_reports_follow_mode_bits() {
+        // Click-only (1000): no motion reports at all.
+        assert_eq!(
+            reportable_move_code(TermMode::MOUSE_REPORT_CLICK, Some(MouseButton::Left)),
+            None
+        );
+        assert_eq!(reportable_move_code(TermMode::MOUSE_REPORT_CLICK, None), None);
+        // Button-event/drag (1002): drags report, plain hover does not.
+        assert_eq!(
+            reportable_move_code(TermMode::MOUSE_DRAG, Some(MouseButton::Left)),
+            Some(32)
+        );
+        assert_eq!(reportable_move_code(TermMode::MOUSE_DRAG, None), None);
+        // Any-motion (1003): hover = 35, right-drag = 34.
+        assert_eq!(reportable_move_code(TermMode::MOUSE_MOTION, None), Some(35));
+        assert_eq!(
+            reportable_move_code(TermMode::MOUSE_MOTION, Some(MouseButton::Right)),
+            Some(34)
+        );
+        // Nav buttons have no mouse encoding.
+        assert_eq!(
+            reportable_move_code(
+                TermMode::MOUSE_MOTION,
+                Some(MouseButton::Navigate(gpui::NavigationDirection::Back))
+            ),
+            None
+        );
+    }
+
 }

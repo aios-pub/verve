@@ -110,6 +110,8 @@ pub struct ProjectManagePanel {
     pub pending_reseed: bool,
     /// Reseed basic-settings inputs when the active project changes.
     pub pending_project_reseed: bool,
+    /// Which MCP copy button currently shows the "已复制" flash (button key).
+    pub mcp_flash: Option<String>,
     focus_handle: FocusHandle,
     _subs: Vec<gpui::Subscription>,
 }
@@ -190,6 +192,7 @@ impl ProjectManagePanel {
             token_label_input,
             pending_reseed: true,
             pending_project_reseed: true,
+            mcp_flash: None,
             focus_handle: cx.focus_handle(),
             _subs: vec![sub_git, sub_state],
         };
@@ -1830,6 +1833,26 @@ impl ProjectManagePanel {
     }
 
     // -----------------------------------------------------------------
+    /// Copy an MCP client config snippet to the clipboard and flash the
+    /// matching button for ~1.6s so the user gets visible feedback.
+    fn copy_mcp_snippet(&mut self, key: &'static str, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        self.mcp_flash = Some(key.to_string());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1600))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mcp_flash.as_deref() == Some(key) {
+                    this.mcp_flash = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     // Section: 对外能力 (External capabilities — OpenAPI + API tokens)
     // -----------------------------------------------------------------
     fn render_external_caps(
@@ -1845,6 +1868,20 @@ impl ProjectManagePanel {
             .map(|p| (p.id.clone(), p.api_tokens.clone()))
             .unwrap_or_default();
         let (project_id, tokens) = proj;
+
+        // MCP client config snippets (one-click copy). The command path is
+        // this binary; clients launch `verve mcp` as a stdio subprocess.
+        let mcp_generic = crate::mcp::client_config(crate::mcp::ClientKind::Generic);
+        let mcp_desktop = crate::mcp::client_config(crate::mcp::ClientKind::ClaudeDesktop);
+        let mcp_cursor = crate::mcp::client_config(crate::mcp::ClientKind::Cursor);
+        let mcp_vscode = crate::mcp::client_config(crate::mcp::ClientKind::VsCode);
+        let mcp_cli = crate::mcp::claude_code_command(true);
+        let desktop_hint = crate::mcp::ClientKind::ClaudeDesktop
+            .config_path_hint()
+            .unwrap_or_else(|| "Claude Desktop 配置文件".to_string());
+        let cursor_hint = crate::mcp::ClientKind::Cursor
+            .config_path_hint()
+            .unwrap_or_else(|| "~/.cursor/mcp.json".to_string());
 
         v_flex()
             .size_full()
@@ -1885,7 +1922,104 @@ impl ProjectManagePanel {
                                     })),
                             ),
                     )
-                    .child(token_table(&tokens, &theme, self.state.clone())),
+                    .child(token_table(&tokens, &theme, self.state.clone()))
+                    // ---- MCP 接入：外部 AI 通过 stdio MCP 管理接口 ----
+                    .child(div().h(px(20.)))
+                    .child(section_title("MCP 接入"))
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .whitespace_normal()
+                            .child(
+                                "MCP（Model Context Protocol）让外部 AI 客户端（Claude Desktop、Cursor、Claude Code、VS Code 等）直接读取和管理 Verve 的项目、目录、接口与环境变量。客户端会在本机以 stdio 方式启动 Verve（verve mcp），无需开放网络端口；每次写入前都会自动备份工作区。复制下方配置粘贴到对应客户端即可。",
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(8.))
+                            .bg(theme.muted)
+                            .p_3()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_size(px(11.))
+                                    .text_color(theme.foreground)
+                                    .whitespace_normal()
+                                    .child(mcp_generic.clone()),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .gap_2()
+                            .items_center()
+                            .child(mcp_copy_button(
+                                "mcp-generic",
+                                "generic",
+                                "一键复制配置",
+                                mcp_generic,
+                                true,
+                                self.mcp_flash.as_deref() == Some("generic"),
+                                cx,
+                            ))
+                            .child(mcp_copy_button(
+                                "mcp-cc",
+                                "cc",
+                                "Claude Code 命令",
+                                mcp_cli,
+                                false,
+                                self.mcp_flash.as_deref() == Some("cc"),
+                                cx,
+                            ))
+                            .child(mcp_copy_button(
+                                "mcp-desktop",
+                                "desktop",
+                                "Claude Desktop",
+                                mcp_desktop,
+                                false,
+                                self.mcp_flash.as_deref() == Some("desktop"),
+                                cx,
+                            ))
+                            .child(mcp_copy_button(
+                                "mcp-cursor",
+                                "cursor",
+                                "Cursor",
+                                mcp_cursor,
+                                false,
+                                self.mcp_flash.as_deref() == Some("cursor"),
+                                cx,
+                            ))
+                            .child(mcp_copy_button(
+                                "mcp-vscode",
+                                "vscode",
+                                "VS Code",
+                                mcp_vscode,
+                                false,
+                                self.mcp_flash.as_deref() == Some("vscode"),
+                                cx,
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap(px(6.))
+                            .text_size(px(11.))
+                            .text_color(theme.muted_foreground)
+                            .children([
+                                "Claude Code：点「Claude Code 命令」复制后在终端执行（已带 -s user，全局生效）。".to_string(),
+                                format!("Claude Desktop：点对应按钮复制 JSON，粘贴到 {desktop_hint}。"),
+                                format!("Cursor：点「Cursor」复制 JSON，粘贴到 {cursor_hint}。"),
+                                "VS Code：点「VS Code」复制 JSON，粘贴到项目 .vscode/mcp.json。".to_string(),
+                                "更多用法见 verve mcp --help（可用 --data-dir 指定工作区目录）。".to_string(),
+                            ]),
+                    ),
             )
             .into_any_element()
     }
@@ -2410,4 +2544,30 @@ fn toggle_row(
                 }),
         )
         .child(div().text_size(px(13.)).child(label.to_string()))
+}
+
+/// Small/primary button that copies an MCP config snippet to the clipboard
+/// and shows a transient "已复制" state via the panel's `mcp_flash`.
+fn mcp_copy_button(
+    id: &'static str,
+    key: &'static str,
+    label: &'static str,
+    text: String,
+    primary: bool,
+    flashed: bool,
+    cx: &mut Context<ProjectManagePanel>,
+) -> AnyElement {
+    let mut button = Button::new(id).small();
+    button = if primary { button.primary() } else { button.ghost() };
+    button = if flashed {
+        button.icon(IconName::Check).label("已复制")
+    } else {
+        button.icon(IconName::Copy).label(label)
+    };
+    button
+        .tooltip(label)
+        .on_click(cx.listener(move |this, _ev, _window, cx| {
+            this.copy_mcp_snippet(key, text.clone(), cx);
+        }))
+        .into_any_element()
 }

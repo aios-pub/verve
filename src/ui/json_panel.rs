@@ -1,5 +1,7 @@
 //! JSON Formatter panel — left pane raw input, right pane formatted collapsible code view.
-//! Supports expand/collapse per node, all expand/collapse, copy result, and compact mode.
+//! Supports expand/collapse per node, all expand/collapse, copy result, compact mode,
+//! and an in-output search bar (Cmd/Ctrl+F) that matches keys/values, highlights the
+//! hit rows and steps through matches.
 //!
 //! # Performance note
 //! The output view is a directly-virtualized, variable-height `list` over a flat
@@ -19,9 +21,14 @@ use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::{
-    ActiveTheme, IconName, Sizable as _, button::{Button, ButtonVariants as _}, h_flex,
-    v_flex,
+    ActiveTheme, Disableable as _, IconName, Sizable as _, button::{Button, ButtonVariants as _},
+    h_flex, v_flex,
 };
+
+// Opens the JSON panel's search bar. Bound to Cmd/Ctrl+F under the
+// "JsonPanel" key context (the panel root), so it never clashes with the
+// Markdown editor's own Cmd+F.
+actions!(verve, [JsonFind]);
 
 /// Threshold above which a non-root container is rendered collapsed by default,
 /// so opening a 100k-element array never eagerly flattens the whole thing.
@@ -85,6 +92,18 @@ enum ValueTy {
     Null,
 }
 
+/// Search highlight level for a row, decided per visible row in the list
+/// render closure from [`JsonPanel::match_set`] and the current match's path.
+#[derive(Clone, Copy, PartialEq, Default)]
+enum RowHighlight {
+    #[default]
+    None,
+    /// The row matches the active query.
+    Match,
+    /// The row is the currently selected match (Enter / ↑ / ↓ target).
+    Current,
+}
+
 pub struct JsonPanel {
     input: Entity<InputState>,
     /// Latest (possibly compacted) parsed value, kept for expand/collapse rebuilds and copy.
@@ -120,6 +139,24 @@ pub struct JsonPanel {
     /// the panel state is already consistent, and re-formatting would reset
     /// the expansion state for no reason.
     syncing_input: bool,
+    /// Query input of the output search bar. Created once; the bar itself is
+    /// only rendered while `search_open`.
+    search_input: Entity<InputState>,
+    /// Whether the search bar is shown (toggled by the `JsonFind` action).
+    search_open: bool,
+    /// Matched node paths in document order. Computed over the *full* parsed
+    /// value — not the visible rows — so hits inside collapsed subtrees are
+    /// found too; navigating to one expands its ancestors.
+    matches: Vec<NodePath>,
+    /// Index into `matches` of the currently highlighted match.
+    current_match: usize,
+    /// Path set of `matches`, shared with the row render closure so frames
+    /// only bump the refcount (same trick as [`Self::rows`]).
+    match_set: Arc<HashSet<NodePath>>,
+    /// Panel-level focus handle: activated (focused) when the JSON view is
+    /// switched to, so the `"JsonPanel"` key context — and with it Cmd/Ctrl+F —
+    /// works without first clicking into a text field.
+    focus_handle: FocusHandle,
     _subs: Vec<Subscription>,
 }
 
@@ -157,6 +194,37 @@ impl JsonPanel {
             }
         });
 
+        // Search-bar query input: recompute matches live on every keystroke;
+        // Enter / Shift+Enter step to the next / previous match.
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(rust_i18n::t!("json.search_ph").to_string())
+        });
+        let search_input_for_sub = search_input.clone();
+        let search_sub = cx.subscribe(
+            &search_input_for_sub,
+            move |this: &mut Self, _src, ev: &InputEvent, cx| {
+                if !this.search_open {
+                    return;
+                }
+                match ev {
+                    InputEvent::Change => {
+                        this.refresh_search_matches(cx);
+                        this.goto_current_match(false, cx);
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { shift, .. } => {
+                        if *shift {
+                            this.goto_prev_match(cx);
+                        } else {
+                            this.goto_next_match(cx);
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        );
+
         Self {
             input,
             value: None,
@@ -171,7 +239,13 @@ impl JsonPanel {
             expanded: HashSet::new(),
             format_timer: None,
             syncing_input: false,
-            _subs: vec![input_sub],
+            search_input,
+            search_open: false,
+            matches: Vec::new(),
+            current_match: 0,
+            match_set: Arc::new(HashSet::new()),
+            focus_handle: cx.focus_handle(),
+            _subs: vec![input_sub, search_sub],
         }
     }
 
@@ -296,6 +370,11 @@ impl JsonPanel {
         self.syncing_input = true;
         self.input
             .update(cx, |s, cx| s.set_value(new_json, window, cx));
+        // The delete shifted sibling paths; re-derive matches against the new
+        // document so stale paths don't point at the wrong rows.
+        if self.search_open {
+            self.refresh_search_matches(cx);
+        }
         self.notice = Some(rust_i18n::t!("json.deleted").to_string());
         cx.notify();
     }
@@ -332,6 +411,9 @@ impl JsonPanel {
             // may still ask the render closure for a stale index → index out of bounds.
             self.list_state.reset(0);
             self.expanded.clear();
+            if self.search_open {
+                self.refresh_search_matches(cx);
+            }
             cx.notify();
             return;
         }
@@ -389,6 +471,10 @@ impl JsonPanel {
                     seed_default_expanded(v, &mut Vec::new(), &mut self.expanded);
                 }
                 self.rebuild_rows();
+                if self.search_open {
+                    self.refresh_search_matches(cx);
+                    self.goto_current_match(false, cx);
+                }
             }
             Err(e) => {
                 self.error = Some(format!("{}: {}", rust_i18n::t!("json.invalid_json"), e));
@@ -397,6 +483,9 @@ impl JsonPanel {
                 self.parsing = false;
                 self.rows = Arc::new(Vec::new());
                 self.list_state.reset(0);
+                if self.search_open {
+                    self.refresh_search_matches(cx);
+                }
             }
         }
         self.notice = None;
@@ -438,6 +527,104 @@ impl JsonPanel {
         // heights for rows that no longer exist and re-measures the new ones. This is what
         // makes expand/collapse (which change the visible row count) stay correct.
         self.list_state.reset(self.rows.len());
+    }
+
+    /// The `JsonFind` action handler (Cmd/Ctrl+F while the JSON panel holds focus).
+    fn on_find_action(&mut self, _: &JsonFind, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(window, cx);
+    }
+
+    /// Show the search bar, focus its query input, and reveal the first match
+    /// for any existing query. Re-invoking with the bar already open just
+    /// refocuses the input.
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_open = true;
+        self.refresh_search_matches(cx);
+        self.goto_current_match(false, cx);
+        self.search_input
+            .update(cx, |s, cx| s.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Hide the search bar and drop all match state (and with it the row
+    /// highlights).
+    fn close_search(&mut self, cx: &mut Context<Self>) {
+        if !self.search_open {
+            return;
+        }
+        self.search_open = false;
+        self.matches.clear();
+        self.current_match = 0;
+        self.match_set = Arc::new(HashSet::new());
+        cx.notify();
+    }
+
+    /// Recompute `matches` / `match_set` for the current query by walking the
+    /// full parsed value — not the visible rows — so hits inside collapsed
+    /// subtrees count too. Matching is case-insensitive unless the query
+    /// contains uppercase (the same convention as the Markdown find bar).
+    fn refresh_search_matches(&mut self, cx: &App) {
+        self.matches.clear();
+        self.current_match = 0;
+        if !self.search_open {
+            self.match_set = Arc::new(HashSet::new());
+            return;
+        }
+        let query = self.search_input.read(cx).value().to_string();
+        if let Some(value) = self.value.as_ref() {
+            let case_sensitive = query.chars().any(|c| c.is_uppercase());
+            let mut matches = Vec::new();
+            collect_matches(value, &mut Vec::new(), &query, case_sensitive, &mut matches);
+            self.matches = matches;
+        }
+        self.match_set = Arc::new(self.matches.iter().cloned().collect());
+    }
+
+    /// Reveal `matches[current_match]`: expand every ancestor container so
+    /// the row is actually on screen, rebuild rows if anything opened, then
+    /// scroll the list to the match. `advance` wraps to the next match first.
+    fn goto_current_match(&mut self, advance: bool, cx: &mut Context<Self>) {
+        if self.matches.is_empty() {
+            cx.notify();
+            return;
+        }
+        if advance {
+            self.current_match = (self.current_match + 1) % self.matches.len();
+        }
+        let Some(path) = self.matches.get(self.current_match).cloned() else {
+            return;
+        };
+        // Only ancestors need opening — the match's own row renders whether
+        // the container itself is expanded or collapsed.
+        let mut expanded_any = false;
+        for depth in 1..path.len() {
+            if self.expanded.insert(path[..depth].to_vec()) {
+                expanded_any = true;
+            }
+        }
+        if expanded_any {
+            self.rebuild_rows();
+        }
+        // Close rows carry `path + [u32::MAX]`, so plain equality cannot hit them.
+        if let Some(ix) = self.rows.iter().position(|r| r.path == path) {
+            self.list_state.scroll_to_reveal_item(ix);
+        }
+        cx.notify();
+    }
+
+    fn goto_next_match(&mut self, cx: &mut Context<Self>) {
+        self.goto_current_match(true, cx);
+    }
+
+    fn goto_prev_match(&mut self, cx: &mut Context<Self>) {
+        if self.matches.is_empty() {
+            return;
+        }
+        self.current_match = self
+            .current_match
+            .checked_sub(1)
+            .unwrap_or(self.matches.len() - 1);
+        self.goto_current_match(false, cx);
     }
 }
 
@@ -641,6 +828,86 @@ fn collect_all_paths(value: &serde_json::Value, path: &mut Vec<u32>, out: &mut H
     }
 }
 
+/// Depth-first collect the paths of nodes whose key (object members) or
+/// primitive value contains the query — over the full tree, regardless of the
+/// current expansion state. A node whose key *and* value both match is only
+/// pushed once (the `out.last()` check in the primitive arm).
+fn collect_matches(
+    value: &serde_json::Value,
+    path: &mut Vec<u32>,
+    query: &str,
+    case_sensitive: bool,
+    out: &mut Vec<NodePath>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (i, (k, v)) in map.iter().enumerate() {
+                path.push(i as u32);
+                if text_matches(k, query, case_sensitive) {
+                    out.push(path.clone());
+                }
+                collect_matches(v, path, query, case_sensitive, out);
+                path.pop();
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                path.push(i as u32);
+                collect_matches(v, path, query, case_sensitive, out);
+                path.pop();
+            }
+        }
+        primitive => {
+            let text = match primitive {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Null => "null".to_string(),
+                // Containers were matched by the arms above.
+                _ => return,
+            };
+            if text_matches(&text, query, case_sensitive)
+                && out.last().is_none_or(|p: &NodePath| p.as_slice() != path.as_slice())
+            {
+                out.push(path.clone());
+            }
+        }
+    }
+}
+
+/// Substring test honoring the find-bar case convention: case-sensitive when
+/// the query contains uppercase, insensitive otherwise.
+fn text_matches(haystack: &str, needle: &str, case_sensitive: bool) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    if case_sensitive {
+        haystack.contains(needle)
+    } else {
+        contains_ignore_case(haystack, needle)
+    }
+}
+
+/// Case-insensitive substring test that allocates no lowercased copies:
+/// compares `char::to_lowercase` windows across the haystack. Works on chars
+/// (not byte slices), so multi-byte content can never panic on a boundary.
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() {
+        return false;
+    }
+    let haystack: Vec<char> = haystack.chars().collect();
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    (0..=haystack.len() - needle.len()).any(|start| {
+        haystack[start..start + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+    })
+}
+
 /// Recursively simplify a JSON value: every array keeps only its first element.
 /// Objects are walked key-by-key; primitives are returned as-is. Empty arrays stay empty.
 ///
@@ -762,6 +1029,28 @@ impl Render for JsonPanel {
         let rows = self.rows.clone();
         let has_output = !rows.is_empty();
         let parsing = self.parsing;
+        // Search highlighting for the render closure: the full match set plus
+        // the current match's path (decides Match vs Current per visible row).
+        let match_set = self.match_set.clone();
+        let current_match_path: Option<NodePath> = self.matches.get(self.current_match).cloned();
+
+        // Search-bar status: "current/total", or "no matches" once the user has
+        // typed something (kept muted/empty for an untouched empty query).
+        let search_query_empty = self.search_input.read(cx).value().is_empty();
+        let search_count_label = if self.matches.is_empty() {
+            if search_query_empty {
+                String::new()
+            } else {
+                rust_i18n::t!("json.search_no_match").to_string()
+            }
+        } else {
+            rust_i18n::t!(
+                "json.search_count",
+                current = self.current_match + 1,
+                total = self.matches.len()
+            )
+            .to_string()
+        };
 
         let output_el = v_flex()
             .size_full()
@@ -787,6 +1076,78 @@ impl Render for JsonPanel {
                         )
                     }),
             )
+            // Search bar (Cmd/Ctrl+F): query input + match counter + prev/next/close.
+            // Esc closes it; Enter/Shift+Enter step through matches (handled on the
+            // input's own PressEnter subscription in `new`).
+            .when(self.search_open, |out| {
+                let bar = h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
+                        if ev.keystroke.key == "escape"
+                            && ev.keystroke.modifiers.number_of_modifiers() == 0
+                        {
+                            this.close_search(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .border_1()
+                            .border_color(theme.border)
+                            .rounded(px(4.))
+                            .overflow_hidden()
+                            .child(Input::new(&self.search_input).small()),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(44.))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(if self.matches.is_empty() && !search_query_empty {
+                                theme.danger
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .child(search_count_label),
+                    )
+                    .child(
+                        Button::new("json-search-prev")
+                            .ghost()
+                            .small()
+                            .label("↑")
+                            .disabled(self.matches.is_empty())
+                            .tooltip(rust_i18n::t!("json.search_prev").to_string())
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.goto_prev_match(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("json-search-next")
+                            .ghost()
+                            .small()
+                            .label("↓")
+                            .disabled(self.matches.is_empty())
+                            .tooltip(rust_i18n::t!("json.search_next").to_string())
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.goto_next_match(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("json-search-close")
+                            .ghost()
+                            .small()
+                            .label("×")
+                            .tooltip(rust_i18n::t!("json.search_close").to_string())
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.close_search(cx);
+                            })),
+                    );
+                out.child(bar)
+            })
             .child(
                 div()
                     .flex_1()
@@ -808,6 +1169,14 @@ impl Render for JsonPanel {
                             let Some(row) = rows.get(ix) else {
                                 return div().h(px(0.)).into_any_element();
                             };
+                            let highlight =
+                                if current_match_path.as_deref() == Some(row.path.as_slice()) {
+                                    RowHighlight::Current
+                                } else if match_set.contains(&row.path) {
+                                    RowHighlight::Match
+                                } else {
+                                    RowHighlight::None
+                                };
                             render_row(
                                 ix,
                                 row,
@@ -818,6 +1187,7 @@ impl Render for JsonPanel {
                                 success,
                                 info,
                                 can_delete,
+                                highlight,
                                 weak.clone(),
                             )
                         })
@@ -861,14 +1231,32 @@ impl Render for JsonPanel {
                     }),
             );
 
-        h_resizable("json-split")
+        // Panel root: focusable + tagged with the "JsonPanel" key context so the
+        // Cmd/Ctrl+F binding (registered with that context) only fires while the
+        // JSON view is the user's context — never over the Markdown editor's own
+        // find. `activate_view` focuses this handle when the view is switched to.
+        div()
+            .id("json-panel-root")
+            .key_context("JsonPanel")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .on_action(cx.listener(Self::on_find_action))
             .child(
-                resizable_panel()
-                    .size(px(400.))
-                    .size_range(px(200.)..px(800.))
-                    .child(input_el),
+                h_resizable("json-split")
+                    .child(
+                        resizable_panel()
+                            .size(px(400.))
+                            .size_range(px(200.)..px(800.))
+                            .child(input_el),
+                    )
+                    .child(resizable_panel().overflow_hidden().child(output_el)),
             )
-            .child(resizable_panel().overflow_hidden().child(output_el))
+    }
+}
+
+impl Focusable for JsonPanel {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -885,6 +1273,7 @@ fn render_row(
     success: Hsla,
     info: Hsla,
     can_delete: bool,
+    highlight: RowHighlight,
     weak: WeakEntity<JsonPanel>,
 ) -> AnyElement {
     let indent_width = 18.;
@@ -899,7 +1288,15 @@ fn render_row(
         .pl(px(indent_width) * row.depth)
         .w_full()
         .font_family(mono_font.clone())
-        .text_sm();
+        .text_sm()
+        // Search highlighting: every matched row gets a faint tint; the match the
+        // user is currently on gets a stronger one so it stands out while stepping.
+        .when(highlight == RowHighlight::Current, |el| {
+            el.bg(warn.opacity(0.25))
+        })
+        .when(highlight == RowHighlight::Match, |el| {
+            el.bg(info.opacity(0.10))
+        });
 
     // The delete affordance sits at the row's right edge. Hidden for the root
     // (the document itself) and whenever row paths don't map 1:1 onto the
@@ -1132,11 +1529,18 @@ fn delete_button(ix: usize, row: &FlatRow, weak: WeakEntity<JsonPanel>) -> Butto
 #[cfg(test)]
 mod tests {
     use super::{
-        COLLAPSE_THRESHOLD, FlatRow, RowKind, collect_all_paths, flatten, remove_at,
-        seed_default_expanded, simplify,
+        COLLAPSE_THRESHOLD, FlatRow, RowKind, collect_all_paths, collect_matches, contains_ignore_case,
+        flatten, remove_at, seed_default_expanded, simplify, text_matches,
     };
     use serde_json::json;
     use std::collections::HashSet;
+
+    /// Collect match paths for `query` over `value` (document order).
+    fn paths_of(value: &serde_json::Value, query: &str, case_sensitive: bool) -> Vec<Vec<u32>> {
+        let mut out = Vec::new();
+        collect_matches(value, &mut Vec::new(), query, case_sensitive, &mut out);
+        out
+    }
 
     /// Helper: flatten `value` with all containers expanded, returning the row labels.
     fn flat_all(value: &serde_json::Value) -> Vec<String> {
@@ -1343,5 +1747,82 @@ mod tests {
         let serialized = serde_json::to_string(&s).unwrap();
         let reparsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
         assert_eq!(reparsed, json!({"list": [{"a": [1]}], "k": 1}));
+    }
+
+    #[test]
+    fn collect_matches_finds_keys_and_values() {
+        let v = json!({"userName": "alice", "tags": ["admin", "user"], "count": 42});
+        // preserve_order: insertion order — userName=0, tags=1, count=2.
+        // "user" case-insensitively hits the key "userName" and the value "user".
+        let paths = paths_of(&v, "user", false);
+        assert_eq!(paths, vec![vec![0], vec![1, 1]]);
+        // "42" hits the numeric value rendered as text.
+        assert_eq!(paths_of(&v, "42", false), vec![vec![2]]);
+        // "name" hits only the key of "userName".
+        assert_eq!(paths_of(&v, "name", false), vec![vec![0]]);
+    }
+
+    #[test]
+    fn collect_matches_case_sensitivity_follows_query() {
+        let v = json!({"Name": "Value"});
+        // All-lowercase query → case-insensitive: both hit.
+        assert_eq!(paths_of(&v, "name", false), vec![vec![0]]);
+        assert_eq!(paths_of(&v, "value", false), vec![vec![0]]);
+        // Uppercase in the query → case-sensitive: exact-case only. The key
+        // "Name" still matches "Name"; the value "Value" matches "Value".
+        assert_eq!(paths_of(&v, "Name", true), vec![vec![0]]);
+        assert_eq!(paths_of(&v, "Value", true), vec![vec![0]]);
+        assert!(paths_of(&v, "name", true).is_empty());
+    }
+
+    #[test]
+    fn collect_matches_dedupes_key_and_value_hit_on_same_node() {
+        // Key and value both contain "a": one match, not two.
+        let v = json!({"alpha": "gamma"});
+        assert_eq!(paths_of(&v, "a", false), vec![vec![0]]);
+    }
+
+    #[test]
+    fn collect_matches_walks_nested_containers() {
+        let v = json!({"outer": {"deep": [{"needle": 1}, {"other": "needle"}]}});
+        // Key hit on the "needle" member of element 0; value hit on the
+        // "needle" value of element 1's "other" member — in DFS order.
+        assert_eq!(
+            paths_of(&v, "needle", false),
+            vec![vec![0, 0, 0, 0], vec![0, 0, 1, 0]]
+        );
+    }
+
+    #[test]
+    fn collect_matches_empty_query_matches_nothing() {
+        let v = json!({"a": 1});
+        assert!(paths_of(&v, "", false).is_empty());
+    }
+
+    #[test]
+    fn collect_matches_finds_null_and_bool_by_text() {
+        let v = json!({"ok": true, "nothing": null});
+        assert_eq!(paths_of(&v, "true", false), vec![vec![0]]);
+        assert_eq!(paths_of(&v, "null", false), vec![vec![1]]);
+    }
+
+    #[test]
+    fn contains_ignore_case_handles_multibyte_and_boundaries() {
+        assert!(contains_ignore_case("你好, World", "world"));
+        assert!(contains_ignore_case("WORLD", "world"));
+        assert!(contains_ignore_case("wOrLd", "WoRlD"));
+        assert!(!contains_ignore_case("worl", "world"));
+        assert!(contains_ignore_case("中文内容", "文内"));
+        assert!(!contains_ignore_case("", "x"));
+        assert!(!contains_ignore_case("x", ""));
+        // Full-width vs ASCII letters are distinct characters.
+        assert!(!contains_ignore_case("ＡＢＣ", "abc"));
+    }
+
+    #[test]
+    fn text_matches_respects_case_flag() {
+        assert!(text_matches("Hello", "hello", false));
+        assert!(!text_matches("Hello", "hello", true));
+        assert!(text_matches("Hello", "Hello", true));
     }
 }

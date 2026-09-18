@@ -29,6 +29,12 @@ json:
   parsing: Parsing JSON…
   delete_tip: Delete this property
   deleted: Property deleted; input synced
+  search_ph: Search keys or values...
+  search_no_match: No matches
+  search_count: "%{current}/%{total}"
+  search_prev: Previous match
+  search_next: Next match
+  search_close: Close search
 
 pdf:
   title: PDF Editor

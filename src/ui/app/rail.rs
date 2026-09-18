@@ -10,7 +10,7 @@ use crate::assets::{
 };
 use crate::state::AppEvent;
 use gpui::prelude::FluentBuilder as _;
-use gpui::{img, *};
+use gpui::*;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable as _, Sizable as _,
     Size::Medium,
@@ -144,6 +144,13 @@ impl VerveApp {
             }
             SideView::K8s => {
                 self.k8s.update(cx, |k, cx| k.activate(window, cx));
+            }
+            // Focus the panel root so its "JsonPanel" key context is active —
+            // Cmd/Ctrl+F opens the search bar immediately after switching,
+            // without requiring a click inside the view first.
+            SideView::JsonFormat => {
+                let handle = self.json.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
             }
             _ => {}
         }
@@ -438,11 +445,11 @@ impl VerveApp {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{SideView, rail_slot_keybindings};
     // Import only what's under test — a `use super::*` glob would pull in
     // gpui's own `test` attribute macro (via the parent's `use gpui::*`) and
     // shadow the builtin `#[test]`.
     use super::rail_slot_hint;
-    use super::super::{SideView, rail_slot_keybindings};
 
     #[test]
     fn rail_slot_hint_digits() {

@@ -200,6 +200,14 @@ k8s-openapi = { version = "0.28", features = ["latest"] }
 # Windows named-pipe support for cross-platform parity.
 bollard = { version = "0.21", default-features = false, features = ["http", "pipe", "ssl"] }
 
+# MCP (Model Context Protocol) server SDK. Lets external AI clients (Claude
+# Desktop, Cursor, Claude Code, VS Code Copilot, ...) manage the Verve API
+# workspace over stdio; the client launches `verve mcp` as a subprocess.
+# Default features provide server + #[tool] macros + schemars; `transport-io`
+# adds the stdio transport (tokio stdin/stdout). rmcp 3.x uses schemars 1.x and
+# tokio 1, matching the rest of the dependency tree.
+rmcp = { version = "3.0", features = ["transport-io"] }
+
 # Markdown parser (CommonMark compliant) for the notepad live preview.
 pulldown-cmark = "0.12"
 # Spec-compliant HTML5 parser (servo's). Used to parse raw-HTML blocks in the

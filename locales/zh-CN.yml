@@ -29,6 +29,12 @@ json:
   parsing: 正在解析 JSON…
   delete_tip: 删除该属性
   deleted: 已删除属性，并同步到左侧输入
+  search_ph: 搜索键或值...
+  search_no_match: 无匹配
+  search_count: "%{current}/%{total}"
+  search_prev: 上一个匹配
+  search_next: 下一个匹配
+  search_close: 关闭搜索
 
 pdf:
   title: PDF 编辑器

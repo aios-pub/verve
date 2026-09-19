@@ -10,10 +10,10 @@
 | 角色 | 仓库 | 分支 | 说明 |
 |---|---|---|---|
 | **工作仓库**（website/ 源码） | `lijingrs/verve` | `dev` | 开发在这里进行 |
-| **部署目标** | `aios-rs/verve` | `gh-pages` | 独立仓库（**非 fork**），Pages 从此分支提供 |
+| **部署目标** | `aios-pub/verve` | `gh-pages` | 独立仓库（**非 fork**），Pages 从此分支提供 |
 
 - 两仓库相互独立，没有 fork 关系。
-- 线上地址：`https://aios.pub/verve/`（经自定义域重定向到 `https://aios-rs.github.io/verve/`）。
+- 线上地址：`https://aios.pub/verve/`（经自定义域重定向到 `https://aios-pub.github.io/verve/`）。
 - 部署仓库默认分支是 `main`（项目源码）；`gh-pages` 是 orphan 部署分支，只含构建产物。
 
 ---
@@ -58,7 +58,7 @@ brew install binaryen     # 提供 wasm-opt
 
 ---
 
-## 4. 发布流程（预构建 dist → 推 aios-rs/verve:gh-pages）
+## 4. 发布流程（预构建 dist → 推 aios-pub/verve:gh-pages）
 
 无 CI，每次手动重建 + 推送。
 
@@ -83,7 +83,7 @@ git config user.email "lijingrs@users.noreply.github.com"
 git checkout -q -b gh-pages
 cp -R "/Users/lijing/CodeProjects/verve/website/dist/." .
 TOKEN="$(gh auth token)"
-git remote add deploy "https://x-access-token:${TOKEN}@github.com/aios-rs/verve.git"
+git remote add deploy "https://x-access-token:${TOKEN}@github.com/aios-pub/verve.git"
 git add -A
 git commit -q -m "Deploy website: <简述>"
 git push -u deploy gh-pages
@@ -95,16 +95,16 @@ cd - && rm -rf "$TMP"
 ### 4.4 确认 Pages 与上线
 
 ```sh
-gh api repos/aios-rs/verve/pages \
+gh api repos/aios-pub/verve/pages \
   --jq '"status=\(.status) branch=\(.source.branch)/\(.source.path)"'
 # 期望：status=built  branch=gh-pages/
 
-curl -sL -o /dev/null -w "%{http_code}\n" https://aios-rs.github.io/verve/
+curl -sL -o /dev/null -w "%{http_code}\n" https://aios-pub.github.io/verve/
 curl -sL -o /dev/null -w "%{http_code}\n" "https://aios.pub/verve/$( \
   curl -sL https://aios.pub/verve/ | grep -oE 'website-[a-f0-9]+\.js' | head -1)"
 ```
 
-> ⚠️ **常见坑**：`aios-rs/verve` 仓库名**小写** `verve` 决定 Pages 路径；改 base path 或动仓库名时必须与构建 base path 一致，否则全站资源 404、白屏。
+> ⚠️ **常见坑**：`aios-pub/verve` 仓库名**小写** `verve` 决定 Pages 路径；改 base path 或动仓库名时必须与构建 base path 一致，否则全站资源 404、白屏。
 
 ---
 
@@ -136,5 +136,5 @@ curl -sL -o /dev/null -w "%{http_code}\n" "https://aios.pub/verve/$( \
 ## 7. 注意事项
 
 - `dist/`、`public/tailwind.css` 都在 `.gitignore`——**勿提交构建产物到工作仓库**。
-- 发布只推 `aios-rs/verve` 的 `gh-pages`；**勿向其 `main` 推网站产物**，也勿把产物推到 `lijingrs/verve`。
+- 发布只推 `aios-pub/verve` 的 `gh-pages`；**勿向其 `main` 推网站产物**，也勿把产物推到 `lijingrs/verve`。
 - 发布后检查工作仓库 `dev` 是否领先 `origin/dev`（`git log --oneline origin/dev..dev`）；部署用临时 clone 不影响工作仓库。

@@ -1,6 +1,6 @@
 # Verve website
 
-The official website for **Verve**, built with [Leptos](https://leptos.dev) 0.8 (Rust, CSR) + [Tailwind CSS](https://tailwindcss.com) v4, bundled by [Trunk](https://trunkrs.dev). Deployed to GitHub Pages at **https://aios-rs.github.io/verve/**.
+The official website for **Verve**, built with [Leptos](https://leptos.dev) 0.8 (Rust, CSR) + [Tailwind CSS](https://tailwindcss.com) v4, bundled by [Trunk](https://trunkrs.dev). Deployed to GitHub Pages at **https://aios-pub.github.io/verve/**.
 
 ## Stack
 
@@ -44,7 +44,7 @@ Trunk's JS shim calls `init()` but **not** `main`, so the WASM entry runs via `#
 
 - Screenshots are copied from `../assets/verve_demo/` into `public/screenshots/`.
 - The `verve-server` doc is embedded at build time via `include_str!("../../../../docs/verve-server.md")`.
-- Release/download links point to `https://github.com/aios-rs/verve`.
+- Release/download links point to `https://github.com/aios-pub/verve`.
 
 ## License
 

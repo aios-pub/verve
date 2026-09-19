@@ -1,8 +1,8 @@
 name: Deploy website to GitHub Pages
 
 # Builds the Trunk CSR bundle and deploys `dist/` to the gh-pages branch of
-# this repo (aios-rs/verve). Pages is then served from
-# https://aios-rs.github.io/verve/
+# this repo (aios-pub/verve). Pages is then served from
+# https://aios-pub.github.io/verve/
 #
 # Trigger: any push that touches the website/ directory or shared assets,
 # or manual dispatch.

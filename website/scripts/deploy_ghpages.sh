@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the Verve website to GitHub Pages (aios-rs/verve:gh-pages).
+# Deploy the Verve website to GitHub Pages (aios-pub/verve:gh-pages).
 #
 # Pipeline (CLAUDE.md §4):
 #   1. trunk build --release  -> dist/
@@ -12,14 +12,14 @@
 #
 # Notes:
 #   - Force-pushes gh-pages: every deploy is a fresh orphan history by design.
-#   - Never touches aios-rs/verve:main, lijingrs/verve, or any build artifact
+#   - Never touches aios-pub/verve:main, lijingrs/verve, or any build artifact
 #     in the work repo. dist/ and public/tailwind.css stay gitignored.
 #   - Requires: trunk, wasm32-unknown-unknown target, npx, gh (logged in),
 #     wasm-opt (`brew install binaryen` if missing).
 
 set -euo pipefail
 
-DEPLOY_REPO="aios-rs/verve"          # owner/repo for Pages
+DEPLOY_REPO="aios-pub/verve"          # owner/repo for Pages
 DEPLOY_BRANCH="gh-pages"
 GIT_NAME="Jing.Li"
 GIT_EMAIL="lijingrs@users.noreply.github.com"
@@ -75,7 +75,7 @@ gh api "repos/${DEPLOY_REPO}/pages" \
   --jq '"    status=\(.status) branch=\(.source.branch)/\(.source.path)"' 2>/dev/null \
   || e "could not read Pages status (may need admin scope on gh)"
 c "Live URL probe (Pages may take ~1 min to rebuild):"
-curl -sL -o /dev/null -w '    https://aios-rs.github.io/verve/ -> %{http_code}\n' https://aios-rs.github.io/verve/ || true
+curl -sL -o /dev/null -w '    https://aios-pub.github.io/verve/ -> %{http_code}\n' https://aios-pub.github.io/verve/ || true
 curl -sL -o /dev/null -w '    https://aios.pub/verve/         -> %{http_code}\n' https://aios.pub/verve/ || true
 
 c "Done. See https://aios.pub/verve/"

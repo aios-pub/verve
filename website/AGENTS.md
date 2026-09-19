@@ -9,12 +9,12 @@
 | 角色 | 仓库 | 分支 | 说明 |
 |---|---|---|---|
 | **工作仓库**（website/ 源码） | `lijingrs/verve` | `dev` | 开发在这里进行 |
-| **部署目标** | `aios-rs/verve` | `gh-pages` | 独立仓库（**非 fork**），Pages 从此分支提供 |
+| **部署目标** | `aios-pub/verve` | `gh-pages` | 独立仓库（**非 fork**），Pages 从此分支提供 |
 
 - 两仓库相互独立，没有 fork 关系。
-- 站点线上地址：`https://aios-rs.github.io/verve/`
+- 站点线上地址：`https://aios-pub.github.io/verve/`
   - 经组织自定义域 `aios.pub` 重定向，实际访问到 `https://aios.pub/verve/`。
-  - 部署仓库 `aios-rs/verve` 的**默认分支是 `main`**（项目源码）；`gh-pages` 是部署专用的 orphan 分支，只含构建产物。
+  - 部署仓库 `aios-pub/verve` 的**默认分支是 `main`**（项目源码）；`gh-pages` 是部署专用的 orphan 分支，只含构建产物。
 
 ---
 
@@ -45,7 +45,7 @@ trunk serve          # 127.0.0.1:8080，热重载
 
 ---
 
-## 4. 发布流程（预构建 dist → 推 aios-rs/verve:gh-pages）
+## 4. 发布流程（预构建 dist → 推 aios-pub/verve:gh-pages）
 
 采用**预构建产物直接推送**到部署仓库的 orphan `gh-pages` 分支。每次更新站点都需手动重建 + 推送（无 CI）。
 
@@ -63,7 +63,7 @@ trunk build --release          # 产物输出到 dist/
 
 ### 4.3 推送到 gh-pages
 
-部署仓库 `aios-rs/verve` 与工作仓库独立，用**临时 git clone 方式**推送（不污染工作仓库）：
+部署仓库 `aios-pub/verve` 与工作仓库独立，用**临时 git clone 方式**推送（不污染工作仓库）：
 
 ```sh
 TMP="$(mktemp -d)"
@@ -74,7 +74,7 @@ git config user.email "lijingrs@users.noreply.github.com"
 git checkout -q -b gh-pages
 cp -R "/Users/lijing/CodeProjects/verve/website/dist/." .
 TOKEN="$(gh auth token)"
-git remote add deploy "https://x-access-token:${TOKEN}@github.com/aios-rs/verve.git"
+git remote add deploy "https://x-access-token:${TOKEN}@github.com/aios-pub/verve.git"
 git add -A
 git commit -q -m "Deploy website: <简述>"
 git push -u deploy gh-pages      # 首次会创建该分支；后续为 fast-forward 更新
@@ -84,14 +84,14 @@ cd - && rm -rf "$TMP"
 ### 4.4 确认 Pages 配置
 
 ```sh
-gh api repos/aios-rs/verve/pages \
+gh api repos/aios-pub/verve/pages \
   --jq '"status=\(.status) branch=\(.source.branch)/\(.source.path)"'
 # 期望：status=built  branch=gh-pages/
 ```
 
 若未启用 Pages（新环境）：
 ```sh
-gh api -X POST repos/aios-rs/verve/pages \
+gh api -X POST repos/aios-pub/verve/pages \
   -f "source[branch]=gh-pages" -f "source[path]=/"
 ```
 
@@ -99,12 +99,12 @@ gh api -X POST repos/aios-rs/verve/pages \
 
 ```sh
 # HTML 与资源都应 200
-curl -sL -o /dev/null -w "%{http_code}\n" https://aios-rs.github.io/verve/
+curl -sL -o /dev/null -w "%{http_code}\n" https://aios-pub.github.io/verve/
 curl -sL -o /dev/null -w "%{http_code}\n" "https://aios.pub/verve/$( \
   curl -sL https://aios.pub/verve/ | grep -oE 'website-[a-f0-9]+\.js' | head -1)"
 ```
 
-> ⚠️ **常见坑**：`aios-rs/verve` 仓库**大小写**决定 Pages 路径。曾因仓库大小写（`Verve` vs `verve`）与构建 base path 不一致导致全站资源 404、白屏。重命名为小写 `verve` 后修复。**改 base path 或动仓库名时务必保持两者一致。**
+> ⚠️ **常见坑**：`aios-pub/verve` 仓库**大小写**决定 Pages 路径。曾因仓库大小写（`Verve` vs `verve`）与构建 base path 不一致导致全站资源 404、白屏。重命名为小写 `verve` 后修复。**改 base path 或动仓库名时务必保持两者一致。**
 
 ---
 
@@ -130,5 +130,5 @@ curl -sL -o /dev/null -w "%{http_code}\n" "https://aios.pub/verve/$( \
 
 - `dist/` 已在工作仓库 `.gitignore` —— **勿把构建产物提交到工作仓库**。
 - 发布后检查工作仓库 `dev` 分支是否领先 `origin/dev` 未推送（`git log --oneline origin/dev..dev`）；发布用临时 clone 推到部署仓库，不影响工作仓库的推送状态。
-- 部署仓库 `aios-rs/verve` 的 `main` 是项目源码，**勿向其推网站产物**；网站只在 `gh-pages`。
+- 部署仓库 `aios-pub/verve` 的 `main` 是项目源码，**勿向其推网站产物**；网站只在 `gh-pages`。
 - 主题：默认亮色，`<html class="dark">` 切暗色；防闪烁脚本在 `index.html` `<head>` 最前（读 localStorage `leptos-use-color-scheme`）。

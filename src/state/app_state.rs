@@ -64,6 +64,10 @@ pub struct AppState {
     /// Shared, hot-swappable mock rule set (written by the UI, read by the
     /// running mock server on every request). Populated at startup in main.rs.
     pub mock_rules: Option<crate::mock::SharedRules>,
+    /// Last-known `(size, mtime)` fingerprint of `workspace.json` produced by
+    /// THIS process (init / persist / reload). The file watcher compares the
+    /// on-disk fingerprint against it to spot external edits (MCP server).
+    pub disk_fingerprint: Option<(u64, std::time::SystemTime)>,
 }
 
 /// Global wrapper holding the single shared [`AppState`] entity.
@@ -97,6 +101,7 @@ impl AppState {
             dirty: false,
             save_timer: None,
             mock_rules: None,
+            disk_fingerprint: super::persistence::file_fingerprint(),
         });
         cx.set_global(AppStateGlobal(entity.clone()));
         entity
@@ -187,6 +192,7 @@ impl AppState {
         self.active_tab_id = None;
         self.sending = None;
         self.dirty = false;
+        self.disk_fingerprint = super::persistence::file_fingerprint();
     }
 
     /// Mark the workspace dirty and emit a [`AppEvent::WorkspaceChanged`].
@@ -232,9 +238,35 @@ impl AppState {
             log::error!("persist failed: {e:?}");
         } else {
             self.dirty = false;
+            self.disk_fingerprint = super::persistence::file_fingerprint();
             cx.emit(AppEvent::Persisted);
         }
         let _ = cx;
+    }
+
+    /// Called by the workspace file watcher. If `workspace.json` changed on
+    /// disk since this process last wrote/loaded it, and there are no unsaved
+    /// edits, reload it and emit [`AppEvent::WorkspaceSwitched`] so every
+    /// panel re-seeds. Returns whether a reload happened.
+    ///
+    /// This is how changes made by the MCP server subprocess (`verve mcp`)
+    /// appear live in the running app.
+    pub fn reload_external_changes(&mut self, cx: &mut Context<Self>) -> bool {
+        let current = super::persistence::file_fingerprint();
+        if current == self.disk_fingerprint {
+            return false;
+        }
+        if self.dirty {
+            // Unsaved in-memory edits would be clobbered by a reload; wait
+            // until the debounced persist lands (it refreshes the baseline).
+            return false;
+        }
+        log::info!("检测到 workspace.json 外部变更（MCP/其他程序），热重载");
+        let workspace_id = self.active_workspace_id.clone();
+        self.reload_from_disk(workspace_id);
+        self.refresh_mock_rules();
+        cx.emit(AppEvent::WorkspaceSwitched);
+        true
     }
 }
 

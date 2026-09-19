@@ -119,6 +119,16 @@ pub fn validate_workspace_file() -> Result<(), String> {
         .map(|_| ())
 }
 
+/// Cheap `(size, modified time)` fingerprint of `workspace.json`, used by the
+/// GUI watcher to detect edits made by other local processes (the MCP server
+/// subprocess, hand edits). `None` when the file is unavailable.
+pub fn file_fingerprint() -> Option<(u64, std::time::SystemTime)> {
+    let path = workspace_file()?;
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    Some((meta.len(), modified))
+}
+
 /// Restore `workspace.json` from the `.bak` backup.
 pub fn restore_workspace_backup() -> Result<(), String> {
     let path = workspace_file().ok_or("数据目录不可用")?;

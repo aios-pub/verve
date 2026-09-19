@@ -1263,6 +1263,9 @@ impl SshPanel {
                             let _ = terminal_clone.update(cx, |tv, cx| {
                                 tv.set_input_tx(tx);
                                 tv.status_connected();
+                                // A live input channel means we are (re)connected;
+                                // clear any stale "press any key to reconnect".
+                                tv.disarm_reconnect_trigger();
                                 cx.notify();
                             });
                         }
@@ -1429,9 +1432,12 @@ impl SshPanel {
                 }
 
                 if attempt >= max_attempts {
+                    // Auto-reconnect exhausted. Dead-ending here left every
+                    // keystroke falling into the dead channel (no response).
+                    // Instead, show a clear prompt and park until the user
+                    // presses any key, then start a fresh round of attempts.
                     let msg = format!(
-                        "\r\n✕ 重连失败（已尝试 {} 次）。请检查网络/主机地址/端口后重新连接。\r\n",
-                        max_attempts
+                        "\r\n✕ 重连失败（已尝试 {max_attempts} 次）。\r\n\r\n  已断开连接，按任意键重连…\r\n"
                     );
                     let _ = terminal_for_task.update(cx, |tv, cx| {
                         tv.feed(msg.as_bytes());
@@ -1451,7 +1457,30 @@ impl SshPanel {
                             }
                         });
                     }
-                    break;
+
+                    // Arm the "press any key to reconnect" handshake. The
+                    // terminal fires this oneshot on the next regular keystroke.
+                    let (reconnect_tx, reconnect_rx) =
+                        tokio::sync::oneshot::channel::<()>();
+                    let _ = terminal_for_task.update(cx, |tv, _cx| {
+                        tv.arm_reconnect_trigger(reconnect_tx);
+                    });
+                    match reconnect_rx.await {
+                        Ok(()) => {
+                            // User pressed a key → reset the attempt counter so
+                            // the loop runs a full fresh round of retries.
+                            log::info!(
+                                "SSH reconnect triggered by keypress for uid {}",
+                                session_uid
+                            );
+                            attempt = 0;
+                            continue;
+                        }
+                        Err(_) => {
+                            // Sender dropped (session closed / disarmed).
+                            break;
+                        }
+                    }
                 }
 
                 // Reflect the reconnecting attempt in the status bar.

@@ -57,6 +57,15 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
+        // If we are waiting for a keypress to reconnect, the first IME-typed
+        // character restarts the session instead of being dropped on a dead
+        // channel.
+        if let Ok(mut g) = self.reconnect_trigger.lock() {
+            if let Some(trigger) = g.take() {
+                let _ = trigger.send(());
+                return;
+            }
+        }
         // IME composition finished or direct text input.
         // Track last_marked_text to avoid double-sending characters that were
         // already sent incrementally via replace_and_mark_text_in_range.
@@ -251,6 +260,11 @@ pub struct TerminalView {
     /// Set by the SSH panel while an MFA/OTP prompt is awaiting input, so the
     /// OTP input field can keep focus instead of being stolen on every frame.
     pub suppress_auto_focus: bool,
+    /// When `Some`, the session has dropped and auto-reconnect gave up; the
+    /// terminal shows 已断开连接，按任意键重连. The next regular keystroke
+    /// (not a Cmd shortcut) fires this oneshot exactly once and clears it,
+    /// letting the SSH panel restart the connection. `None` = connected.
+    reconnect_trigger: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 impl TerminalView {
@@ -284,15 +298,29 @@ impl TerminalView {
             >,
         > = Arc::new(std::sync::Mutex::new(None));
 
+        // "Press any key to reconnect" trigger; cloned into the Tab interceptor
+        // below and stored on Self.
+        let reconnect_trigger: Arc<
+            std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        > = Arc::new(std::sync::Mutex::new(None));
+
         // Bounds (window-absolute rect) of the terminal div, written by the canvas
         // paint hook each frame and read by mouse handlers. Initialized to zero.
         let bounds: Arc<StdMutex<Bounds<Pixels>>> = Arc::new(StdMutex::new(Bounds::default()));
 
         let term_for_intercept = term_arc.clone();
         let tx_for_intercept = input_tx.clone();
+        let reconnect_for_intercept = reconnect_trigger.clone();
         let sub = cx.intercept_keystrokes(move |event, _window, _cx| {
             let ks = &event.keystroke;
             if ks.key == "tab" {
+                // Reconnect-on-keypress takes priority over sending a dead \t.
+                if let Ok(mut g) = reconnect_for_intercept.lock() {
+                    if let Some(trigger) = g.take() {
+                        let _ = trigger.send(());
+                        return;
+                    }
+                }
                 let bytes = b"\t".to_vec();
                 log::info!("INTERCEPT Tab → sending \\t");
                 // Same user-input bookkeeping as the key handler: clear the
@@ -336,6 +364,7 @@ impl TerminalView {
             last_feed_tail: std::sync::Mutex::new(Vec::new()),
             bounds_retry: 0,
             suppress_auto_focus: false,
+            reconnect_trigger,
         }
     }
 
@@ -1065,6 +1094,30 @@ impl TerminalView {
     /// Mark the session as connected (for UI status display).
     pub fn status_connected(&mut self) {
         // Connection is live; terminal is ready for input.
+    }
+
+    /// Arm the "已断开连接，按任意键重连" state. The next regular keystroke
+    /// (not a Cmd shortcut) fires `trigger` exactly once and clears it; the
+    /// SSH panel waits on the corresponding receiver to restart the session.
+    /// Any previously-armed trigger is dropped (its waiter sees Canceled).
+    pub fn arm_reconnect_trigger(
+        &self,
+        trigger: tokio::sync::oneshot::Sender<()>,
+    ) {
+        log::info!("ARM_RECONNECT_TRIGGER: waiting for keypress to reconnect");
+        if let Ok(mut g) = self.reconnect_trigger.lock() {
+            *g = Some(trigger);
+        }
+    }
+
+    /// Disarm a pending reconnect trigger (a new connection came up, so an old
+    /// "press any key" wait must not resurrect a dead session).
+    pub fn disarm_reconnect_trigger(&self) {
+        if let Ok(mut g) = self.reconnect_trigger.lock() {
+            if g.take().is_some() {
+                log::info!("DISARM_RECONNECT_TRIGGER: new connection established");
+            }
+        }
     }
 
     /// Set the resize sender (called when the connection is established).
@@ -2317,6 +2370,18 @@ impl Render for TerminalView {
                     } else {
                         false
                     };
+                    // Disconnected after auto-reconnect gave up: the first real
+                    // keystroke restarts the session instead of being dropped on
+                    // the dead channel. Local Cmd shortcuts above already ran.
+                    if let Ok(mut g) = this.reconnect_trigger.lock() {
+                        if let Some(trigger) = g.take() {
+                            let _ = trigger.send(());
+                            cx.notify();
+                            cx.stop_propagation();
+                            window.refresh();
+                            return;
+                        }
+                    }
                     let bytes = keystroke_to_bytes(&event.keystroke, app_cursor);
                     if !bytes.is_empty() {
                         // User keystrokes clear any selection and snap the

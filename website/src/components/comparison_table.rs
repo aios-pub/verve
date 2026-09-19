@@ -1,4 +1,4 @@
-//! Community vs Pro comparison table.
+//! Community vs Pioneer comparison table.
 
 use leptos::prelude::*;
 use crate::i18n::{t, t_string, use_i18n};
@@ -38,8 +38,8 @@ pub fn ComparisonTable() -> impl IntoView {
         (RowKey::Json, true, true),
         (RowKey::Hosts, true, true),
         (RowKey::DocShare, true, true),
-        (RowKey::Ssh, false, true),
-        (RowKey::Zmodem, false, true),
+        (RowKey::Ssh, true, true),
+        (RowKey::Zmodem, true, true),
         (RowKey::Docker, false, true),
         (RowKey::K8s, false, true),
         (RowKey::Stress, false, true),

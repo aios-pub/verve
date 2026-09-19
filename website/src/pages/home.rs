@@ -65,7 +65,7 @@ pub fn Home() -> impl IntoView {
                 <Reveal stagger=true>
                     <div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                         <FeatureCard icon="" title=t_string!(i18n, pillars.api)       description=t_string!(i18n, pillars.api_d)       screenshot=Some("api.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.terminal)   description=t_string!(i18n, pillars.terminal_d)   screenshot=Some("ssh-terminal.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.terminal)   description=t_string!(i18n, pillars.terminal_d)   screenshot=Some("ssh-terminal.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.testing)    description=t_string!(i18n, pillars.testing_d)    screenshot=Some("stress.png") pro=true />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.mock)       description=t_string!(i18n, pillars.mock_d)       screenshot=Some("mock.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.docs)       description=t_string!(i18n, pillars.docs_d)       screenshot=Some("doc.png") />

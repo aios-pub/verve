@@ -85,6 +85,7 @@ features:
   knowledge_title: "Knowledge & docs"
   testing_title: "Testing & cloud"
   relocate_title: "System tools"
+  cluster_title: "Containers & clusters"
   server_triage_note: "Scoped to the daily triage workflow — inspect, tail logs, exec into running targets. Not a full cluster lifecycle manager."
   ssh_d: "A real terminal for servers, with the protocols and safety you expect from a dedicated SSH client."
   docker_d: "Containers and images at a glance — stream logs, drop into a shell, drive a remote daemon."
@@ -99,14 +100,14 @@ editions:
   title: "Two editions"
   community: "Community"
   community_tag: "Free • AGPL-3.0"
-  community_d: "Open source. Covers everything an individual developer needs for daily API work: full HTTP debugging, capture, JSON, hosts, local mock, local document sharing, and Git cross-machine sync."
-  pro: "Pro"
+  community_d: "Open source. Covers everything an individual developer needs day to day: full HTTP debugging, capture, JSON, hosts, local mock, local document sharing, an SSH/SFTP terminal, and Git cross-machine sync."
+  pro: "Pioneer"
   pro_tag: "Sponsored • Proprietary"
-  pro_d: "Stacks server triage, testing, knowledge tools and cloud sharing on top of the Community edition."
+  pro_d: "Stacks container & cluster inspection (Docker / Kubernetes), testing, knowledge tools and cloud sharing on top of the Community edition."
 
 # ---- Comparison ---------------------------------------------------------
 compare:
-  title: "Community vs Pro"
+  title: "Community vs Pioneer"
   col_feature: "Capability"
   has: "✓"
   opensource: "Open source (AGPL-3.0)"
@@ -141,15 +142,15 @@ download:
 # ---- Pricing ------------------------------------------------------------
 pricing:
   title: "Pricing & sponsorship"
-  subtitle: "Community is free and open source. Pro is obtained via sponsorship."
+  subtitle: "Community is free and open source. Pioneer is obtained via sponsorship."
   most_popular: "Most popular"
   per_once: "one-time"
   cta_community: "Download Community"
-  cta_pro: "Sponsor for Pro"
+  cta_pro: "Sponsor for Pioneer"
   early_bird: "Early-bird"
   regular: "Regular"
   sponsor_qr_alt: "WeChat Official Account QR code"
-  sponsor_note: "Sponsor via the WeChat Official Account to unlock the Pro edition."
+  sponsor_note: "Sponsor via the WeChat Official Account to unlock the Pioneer edition."
 
 # ---- Docs ---------------------------------------------------------------
 docs:
@@ -158,7 +159,7 @@ docs:
   verve_server: "Self-host verve-server"
   cloud: "Cloud docs & collaboration"
 
-# ---- Cloud docs (Pro) ----------------------------------------------------
+# ---- Cloud docs (Pioneer) -------------------------------------------------
 clouddocs:
   crumb: "Cloud docs & collaboration"
   title: "Cloud docs & collaboration"

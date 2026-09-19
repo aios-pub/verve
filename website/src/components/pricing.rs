@@ -1,4 +1,4 @@
-//! Pricing cards: Community (free) vs Pro (sponsored).
+//! Pricing cards: Community (free) vs Pioneer (sponsored).
 
 use leptos::prelude::*;
 use crate::i18n::{t, t_string, use_i18n};
@@ -34,13 +34,13 @@ pub fn PricingCards() -> impl IntoView {
                 </a>
             </SpotlightCard>
 
-            // Pro
+            // Pioneer
             <SpotlightCard class="card relative flex flex-col overflow-hidden border-pro-500/30 p-8 before:absolute before:inset-0 before:bg-gradient-to-b before:from-pro-500/[0.08] before:to-transparent before:pointer-events-none" corners="pro">
                 <div class="relative">
                     <span class="absolute -top-1 right-0 rounded bg-pro-500/20 px-2.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
                         {move || t!(i18n, pricing.most_popular)}
                     </span>
-                    <span class="tech-label text-pro-400">"pro"</span>
+                    <span class="tech-label text-pro-400">"pioneer"</span>
                     <h3 class="mt-3 text-xl font-bold">{move || t!(i18n, editions.pro)}</h3>
                     <span class="mt-1.5 inline-flex w-fit items-center rounded bg-pro-500/15 px-2.5 py-0.5 font-mono text-[11px] font-medium text-pro-400 ring-1 ring-inset ring-pro-500/25">
                         {move || t!(i18n, editions.pro_tag)}

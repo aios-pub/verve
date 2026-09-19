@@ -11,7 +11,7 @@ pub fn FeatureCard(
     title: &'static str,
     description: &'static str,
     screenshot: Option<&'static str>,
-    /// Whether this is a Pro-only feature (adds a Pro badge).
+    /// Whether this is a Pioneer-edition feature (adds a Pioneer badge).
     #[prop(optional)]
     pro: bool,
 ) -> impl IntoView {
@@ -19,10 +19,10 @@ pub fn FeatureCard(
     view! {
         <SpotlightCard class="card group relative flex flex-col overflow-hidden p-5"
             corners=if pro { "pro" } else { "bolt" }>
-            // Pro badge
+            // Pioneer badge
             {pro.then(|| view! {
                 <span class="absolute right-4 top-4 z-10 rounded bg-pro-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
-                    "PRO"
+                    "PIONEER"
                 </span>
             })}
 
@@ -49,8 +49,8 @@ pub fn FeatureCard(
 }
 
 /// A larger, detailed feature group: title, one-line description, a bullet
-/// list of specs, and an optional screenshot. Used for the Pro server-triage
-/// capabilities (SSH / Docker / Kubernetes) and other headline Pro features.
+/// list of specs, and an optional screenshot. Used for the headline
+/// server-triage capabilities (Docker / Kubernetes) and other Pioneer features.
 #[component]
 pub fn FeatureGroup(
     title: &'static str,
@@ -58,7 +58,7 @@ pub fn FeatureGroup(
     /// Bullet-point specs (e.g. "Multi-tab sessions", "ANSI / xterm-256color").
     specs: Vec<&'static str>,
     screenshot: Option<&'static str>,
-    /// Whether this is a Pro-only feature (adds a Pro badge).
+    /// Whether this is a Pioneer-edition feature (adds a Pioneer badge).
     #[prop(optional)]
     pro: bool,
 ) -> impl IntoView {
@@ -68,7 +68,7 @@ pub fn FeatureGroup(
             corners=if pro { "pro" } else { "bolt" }>
             {pro.then(|| view! {
                 <span class="absolute right-5 top-5 z-10 rounded bg-pro-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/30">
-                    "PRO"
+                    "PIONEER"
                 </span>
             })}
 

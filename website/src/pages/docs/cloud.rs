@@ -1,4 +1,4 @@
-//! Cloud docs & collaboration (Pro): document the self-hosted `verve-server`
+//! Cloud docs & collaboration (Pioneer): document the self-hosted `verve-server`
 //! standalone mode, cloud document sharing, and the /admin Web UI.
 
 use leptos::prelude::*;
@@ -20,7 +20,7 @@ pub fn CloudDocs() -> impl IntoView {
                     <span class="text-ink-300">{move || t!(i18n, clouddocs.crumb)}</span>
                 </nav>
                 <div class="mt-4 flex items-center gap-3">
-                    <span class="rounded-full bg-pro-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/20">"Pro"</span>
+                    <span class="rounded-full bg-pro-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-pro-400 ring-1 ring-inset ring-pro-500/20">"Pioneer"</span>
                     <h1 class="text-3xl font-extrabold tracking-tight sm:text-4xl">
                         {move || t!(i18n, clouddocs.title)}
                     </h1>

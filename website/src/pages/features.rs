@@ -33,10 +33,10 @@ pub fn Features() -> impl IntoView {
                 <FeatureCard icon="" title="Themes & i18n"        description="22 built-in themes, zh-CN / English UI." screenshot=Some("theme.png") />
             </div>
 
-            // ── Pro: Server triage ───────────────────────────────────────
+            // ── Community: SSH terminal & file transfer ──────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
+                    <span class="text-bolt-300">{move || t!(i18n, editions.community)}</span>
                     <span class="text-ink-300">"·"</span>
                     <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, pillars.terminal)}</span>
                 </h3>
@@ -46,7 +46,7 @@ pub fn Features() -> impl IntoView {
             </div>
 
             <div class="mt-6 grid gap-5 lg:grid-cols-2">
-                <FeatureGroup pro=true
+                <FeatureGroup
                     title="SSH Terminal"
                     description=t_string!(i18n, features.ssh_d)
                     screenshot=Some("ssh-terminal.png")
@@ -55,13 +55,36 @@ pub fn Features() -> impl IntoView {
                         "ANSI / xterm-256color (true color)",
                         "Password / private-key auth",
                         "Jump host (ProxyJump, chained tunnels)",
-                        "SFTP — list / mkdir / upload / download",
                         "Zmodem in-terminal rz / sz",
                         "SSH local port forwarding (-L)",
                         "TOFU known_hosts verification",
                         "Secure vault — keychain + AES-256-GCM / Argon2id",
                     ]}
                 />
+                <FeatureGroup
+                    title="SFTP File Browser"
+                    description=t_string!(i18n, features.sftp_d)
+                    screenshot=Some("ssh-file.png")
+                    specs={vec![
+                        "List / new folder / rename",
+                        "Upload / download with progress",
+                        "Recursive rm -rf",
+                        "Drag-and-drop transfers",
+                        "Reuses the authenticated SSH session",
+                    ]}
+                />
+            </div>
+
+            // ── Pioneer: Containers & clusters ──────────────────────────
+            <div class="mt-20">
+                <h3 class="flex items-center gap-2 text-xl font-bold">
+                    <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
+                    <span class="text-ink-300">"·"</span>
+                    <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, features.cluster_title)}</span>
+                </h3>
+            </div>
+
+            <div class="mt-6 grid gap-5 lg:grid-cols-2">
                 <FeatureGroup pro=true
                     title="Docker"
                     description=t_string!(i18n, features.docker_d)
@@ -88,21 +111,9 @@ pub fn Features() -> impl IntoView {
                         "Direct (API server) or SSH-tunnel mode",
                     ]}
                 />
-                <FeatureGroup pro=true
-                    title="SFTP File Browser"
-                    description=t_string!(i18n, features.sftp_d)
-                    screenshot=Some("ssh-file.png")
-                    specs={vec![
-                        "List / new folder / rename",
-                        "Upload / download with progress",
-                        "Recursive rm -rf",
-                        "Drag-and-drop transfers",
-                        "Reuses the authenticated SSH session",
-                    ]}
-                />
             </div>
 
-            // ── Pro: Knowledge tools ─────────────────────────────────────
+            // ── Pioneer: Knowledge tools ─────────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
                     <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
@@ -138,7 +149,7 @@ pub fn Features() -> impl IntoView {
                 />
             </div>
 
-            // ── Pro: Testing & cloud ─────────────────────────────────────
+            // ── Pioneer: Testing & cloud ─────────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
                     <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>

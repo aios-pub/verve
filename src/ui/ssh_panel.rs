@@ -304,6 +304,9 @@ pub struct SshPanel {
     /// Cached InputState entities for the "add forward" form. Created lazily
     /// on first render (they require a `&Window`).
     pub fwd_inputs: Option<FwdInputs>,
+    /// Cached InputState for the host-picker search box (filters by name/host).
+    /// Created lazily on first render; its value persists across opens.
+    pub host_picker_search: Option<Entity<InputState>>,
     focus_handle: FocusHandle,
     _subs: Vec<gpui::Subscription>,
 }
@@ -334,6 +337,7 @@ impl SshPanel {
             show_host_grid: false,
             fwd_status: None,
             fwd_inputs: None,
+            host_picker_search: None,
             focus_handle,
             _subs: Vec::new(),
         }
@@ -364,7 +368,7 @@ impl SshPanel {
 }
 
 impl Render for SshPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.stale {
             self.reload(cx);
         }
@@ -388,7 +392,7 @@ impl Render for SshPanel {
         let show_picker = self.show_host_picker;
 
         if has_sessions {
-            let terminal_view = self.render_terminal_view(_window, cx, theme.clone());
+            let terminal_view = self.render_terminal_view(window, cx, theme.clone());
 
             if show_picker {
                 // Overlay: dimmed background + host card grid on top.
@@ -399,7 +403,7 @@ impl Render for SshPanel {
                     .bg(bg)
                     .text_color(fg)
                     .child(terminal_view)
-                    .child(self.render_host_picker_overlay(cx, theme))
+                    .child(self.render_host_picker_overlay(window, cx, theme))
                     .into_any_element();
             }
             return terminal_view.into_any_element();
@@ -1865,8 +1869,20 @@ impl SshPanel {
                             .small()
                             .icon(IconName::Plus)
                             .tooltip("新建连接")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _event, window, cx| {
                                 this.show_host_picker = true;
+                                // Clear any stale search so the full list shows.
+                                if let Some(s) = this.host_picker_search.as_ref() {
+                                    s.update(cx, |state, cx| state.set_value("", window, cx));
+                                }
+                                // Stop the terminal from stealing focus back from
+                                // the search box on every render frame.
+                                if let Some(s) = this.sessions.get(this.active_tab) {
+                                    s.terminal.update(cx, |tv, cx| {
+                                        tv.suppress_auto_focus = true;
+                                        cx.notify();
+                                    });
+                                }
                                 cx.notify();
                             })),
                     )
@@ -2960,9 +2976,23 @@ impl SshPanel {
         cx.notify();
     }
 
+    /// While the host-picker overlay is up, the terminal's per-render
+    /// `window.focus(...)` would steal focus from the search box every frame,
+    /// so we suppress it. Call `restore_terminal_focus` when the overlay closes.
+    fn restore_terminal_focus(&mut self, cx: &mut Context<Self>) {
+        if let Some(s) = self.sessions.get(self.active_tab) {
+            let terminal = s.terminal.clone();
+            terminal.update(cx, |tv, cx| {
+                tv.suppress_auto_focus = false;
+                cx.notify();
+            });
+        }
+    }
+
     /// Render a host-picker overlay for starting new connections.
     fn render_host_picker_overlay(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
         theme: gpui_component::Theme,
     ) -> impl IntoElement {
@@ -2970,6 +3000,41 @@ impl SshPanel {
         let border = theme.border;
         let muted = theme.muted_foreground;
         let panel = cx.entity();
+
+        // Lazily create the search input on first render (needs &mut Window).
+        if self.host_picker_search.is_none() {
+            let search = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("搜索名称或主机地址…")
+            });
+            cx.subscribe(
+                &search,
+                |_this: &mut Self,
+                 _src,
+                 ev: &gpui_component::input::InputEvent,
+                 cx: &mut Context<Self>| {
+                    if matches!(ev, gpui_component::input::InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
+            self.host_picker_search = Some(search);
+        }
+        let search_input = self.host_picker_search.clone().unwrap();
+        // Grab focus so the user can start typing immediately.
+        search_input.update(cx, |state, cx| state.focus(window, cx));
+        // Case-insensitive filter against name and host address (also port).
+        let query = search_input.read(cx).value().to_string().to_lowercase();
+        let filtered: Vec<&crate::ssh::models::SshHost> = self
+            .hosts
+            .iter()
+            .filter(|h| {
+                query.is_empty()
+                    || h.name.to_lowercase().contains(&query)
+                    || h.host.to_lowercase().contains(&query)
+                    || h.port.to_string().contains(&query)
+            })
+            .collect();
 
         v_flex()
             .absolute()
@@ -2983,6 +3048,7 @@ impl SshPanel {
                 MouseButton::Left,
                 cx.listener(|this, _event, _window, cx| {
                     this.show_host_picker = false;
+                    this.restore_terminal_focus(cx);
                     cx.notify();
                 }),
             )
@@ -3025,9 +3091,19 @@ impl SshPanel {
                                     .icon(IconName::Close)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.show_host_picker = false;
+                                        this.restore_terminal_focus(cx);
                                         cx.notify();
                                     })),
                             ),
+                    )
+                    // Search box: filters the host list below by name or host.
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1p5()
+                            .border_b_1()
+                            .border_color(border)
+                            .child(Input::new(&search_input).w_full().small()),
                     )
                     // Local terminal entry — the user's shell on this machine
                     // (Terminal.app replacement), no SSH involved.
@@ -3069,12 +3145,14 @@ impl SshPanel {
                                     cx.stop_propagation();
                                     let _ = panel_c.update(cx, |this, cx| {
                                         this.show_host_picker = false;
+                                        this.restore_terminal_focus(cx);
                                         this.start_local_session(cx);
                                     });
                                 },
                             )
                     })
-                    .children(self.hosts.iter().enumerate().map(|(i, host)| {
+                    .children({
+                        let host_rows = filtered.iter().enumerate().map(|(i, host)| {
                         let host_id = host.id.clone();
                         let host_name = host.name.clone();
                         let host_addr = host.address_summary();
@@ -3114,11 +3192,27 @@ impl SshPanel {
                                             this.pending_connect = Some(h);
                                         }
                                         this.show_host_picker = false;
+                                        this.restore_terminal_focus(cx);
                                         cx.notify();
                                     });
                                 },
                             )
-                    })),
+                    });
+                        let empty = if filtered.is_empty() && !query.is_empty() {
+                            Some(
+                                div()
+                                    .id("picker-empty")
+                                    .px_3()
+                                    .py_3()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("无匹配的主机"),
+                            )
+                        } else {
+                            None
+                        };
+                        host_rows.chain(empty)
+                    })
             )
     }
 }

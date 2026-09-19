@@ -17,6 +17,8 @@ pub mod terminal;
 pub mod vault;
 #[cfg(target_os = "windows")]
 pub mod windows_input;
+#[cfg(target_os = "windows")]
+mod win_conpty;
 pub mod zmodem;
 
 pub use port_forward::LocalForward;

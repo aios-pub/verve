@@ -15,10 +15,10 @@ Verve is built on **Rust + [GPUI](https://github.com/zed-industries/zed)** (the 
 <a href="https://aios-pub.github.io/verve/">
   <img src="https://img.shields.io/badge/website-verve.app-bolt?style=flat-square&labelColor=0a0c10&color=d4e317" alt="Official website" />
 </a>
-<a href="https://github.com/aios-pub/verve/releases/latest">
-  <img src="https://img.shields.io/github/v/release/aios-pub/verve?style=flat-square&label=latest%20release&labelColor=0a0c10&color=d4e317" alt="Latest release" />
+<a href="https://github.com/amosgeek/verve/releases/latest">
+  <img src="https://img.shields.io/github/v/release/amosgeek/verve?style=flat-square&label=latest%20release&labelColor=0a0c10&color=d4e317" alt="Latest release" />
 </a>
-<a href="https://github.com/aios-pub/verve">
+<a href="https://github.com/amosgeek/verve">
   <img src="https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Pioneer-d4e317?style=flat-square&labelColor=0a0c10" alt="License" />
 </a>
 

@@ -1,7 +1,7 @@
 //! GitHub-based auto-update mechanism.
 //!
 //! On startup (and via a manual "check for updates" button), the app queries
-//! the GitHub Releases API for the latest release of `aios-pub/verve`. If the
+//! the GitHub Releases API for the latest release of `amosgeek/verve`. If the
 //! latest version is newer than `CARGO_PKG_VERSION`, an [`UpdateInfo`] is
 //! surfaced to the UI so the user can open the release page and download the
 //! platform-appropriate installer.
@@ -38,7 +38,7 @@ use semver::Version;
 use serde::Deserialize;
 
 /// The GitHub repository slug used for update checks.
-pub const REPO: &str = "aios-pub/verve";
+pub const REPO: &str = "amosgeek/verve";
 
 /// The current application version, sourced from `Cargo.toml` at compile time.
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -163,8 +163,11 @@ russh-sftp = "2.3"
 zmodem2 = "0.7"
 alacritty_terminal = "0.24"
 # Local PTY for the SSH panel's "local terminal" mode (spawn the user's shell
-# in a pseudo-terminal, replacing the OS Terminal app). Unix: openpty via libc;
-# Windows: ConPTY. No OpenSSL / native-tls in the dependency tree.
+# in a pseudo-terminal, replacing the OS Terminal app). Unix: openpty via
+# portable-pty; Windows: our own ConPTY backend (`ssh/win_conpty.rs`) because
+# portable-pty 0.9's spawn shape leaves shells silent on current Win11 builds.
+# (Windows-only deps for that backend live in the target-specific table at the
+# end of this file.)
 portable-pty = "0.9"
 aes-gcm = "0.10"
 zeroize = "1"
@@ -346,3 +349,19 @@ unused_imports = "allow"
 unused_variables = "allow"
 
 [dev-dependencies]
+
+# Win32 bindings for the Windows ConPTY backend (ssh/win_conpty.rs). Direct
+# dep so the feature set we need does not rely on feature unification from
+# other crates in the tree.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "consoleapi",
+    "wincontypes",
+    "wincon",
+    "processthreadsapi",
+    "processenv",
+    "winbase",
+    "winnt",
+    "handleapi",
+    "synchapi",
+] }

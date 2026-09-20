@@ -7,7 +7,7 @@
 // Some serde data structs are fine to derive-impl via macros.
 #![allow(clippy::derivable_impls)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gpui::{img, *};
 use gpui_component::button::*;
@@ -18,6 +18,80 @@ use verve::assets::VerveAssets;
 use verve::state::persistence;
 use verve::ui::VerveApp;
 use verve::{mock, state, ui};
+
+/// Mirror env_logger output into `~/.verve/logs/verve.log`.
+///
+/// A GUI-subsystem binary on Windows has no console, so env_logger's stderr
+/// stream is simply lost — exactly when field diagnostics of terminal/PTY
+/// issues are needed. The file is opened lazily on the first record and
+/// rotated once past [`DualLogger::MAX_LOG_BYTES`] (verve.log → verve.log.old).
+struct DualLogger {
+    stderr: env_logger::Logger,
+    file: Mutex<Option<std::fs::File>>,
+}
+
+impl DualLogger {
+    const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+}
+
+impl log::Log for DualLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.stderr.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        self.stderr.log(record);
+        use std::io::Write as _;
+        let line = format!(
+            "{} [{}] [{}] {}\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            record.level(),
+            record.target(),
+            record.args()
+        );
+        let mut guard = match self.file.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if guard.is_none() {
+            *guard = open_log_file();
+        }
+        if let Some(file) = guard.as_mut() {
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
+    }
+
+    fn flush(&self) {
+        use std::io::Write as _;
+        self.stderr.flush();
+        if let Ok(mut guard) = self.file.lock() {
+            if let Some(file) = guard.as_mut() {
+                let _ = file.flush();
+            }
+        }
+    }
+}
+
+fn open_log_file() -> Option<std::fs::File> {
+    let dir = persistence::data_dir().ok()?.join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("verve.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > DualLogger::MAX_LOG_BYTES {
+            let _ = std::fs::remove_file(dir.join("verve.log.old"));
+            let _ = std::fs::rename(&path, dir.join("verve.log.old"));
+        }
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+}
 
 fn main() {
     // Headless CLI subcommands must be dispatched BEFORE any GUI setup. The
@@ -50,7 +124,7 @@ fn main() {
             std::env::set_var("RUST_LOG", "info");
         };
     }
-    let _ = env_logger::Builder::from_default_env()
+    let inner = env_logger::Builder::from_default_env()
         .format(|buf, record| {
             use std::io::Write as _;
             writeln!(
@@ -66,7 +140,19 @@ fn main() {
         // index write). Notes indexing runs on a background thread and is not
         // something the user needs to see at info level — surface only warnings.
         .filter_module("tantivy", log::LevelFilter::Warn)
-        .try_init();
+        .build();
+    let max_level = inner.filter();
+    // DualLogger keeps env_logger's stderr behavior AND persists the same
+    // records to ~/.verve/logs/verve.log — stderr alone is invisible for a
+    // Windows GUI process (no console attached).
+    if log::set_boxed_logger(Box::new(DualLogger {
+        stderr: inner,
+        file: Mutex::new(None),
+    }))
+    .is_ok()
+    {
+        log::set_max_level(max_level);
+    }
 
     // Install the process-default rustls crypto provider before any TLS use.
     // rustls 0.23 panics on auto-detection when more than one provider is

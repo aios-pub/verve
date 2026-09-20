@@ -1576,6 +1576,7 @@ impl SshPanel {
                 let term_weak = terminal.downgrade();
                 let panel = cx.entity().downgrade();
                 let uid_for_task = session_uid;
+                let shell_for_task = shell_name.clone();
                 cx.spawn(async move |_this, cx| {
                     use crate::ssh::local_pty::LocalPtyEvent;
                     while let Some(ev) = output_rx.recv().await {
@@ -1583,6 +1584,20 @@ impl SshPanel {
                             LocalPtyEvent::Data(data) => {
                                 let _ = term_weak.update(cx, |tv, cx| {
                                     tv.feed(&data);
+                                    cx.notify();
+                                });
+                            }
+                            LocalPtyEvent::Stall => {
+                                // Shell is alive but produced nothing at all
+                                // (hung profile, broken std handles, …).
+                                let _ = term_weak.update(cx, |tv, cx| {
+                                    tv.feed(
+                                        format!(
+                                            "\r\n\x1b[33m⚠ 本地 shell({shell_for_task})启动后 \
+                                             5 秒无输出，可关闭此标签页重试\x1b[0m\r\n"
+                                        )
+                                        .as_bytes(),
+                                    );
                                     cx.notify();
                                 });
                             }

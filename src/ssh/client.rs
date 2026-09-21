@@ -263,7 +263,16 @@ impl SshConnection {
         host: &SshHost,
         otp: Option<OtpPromptFn>,
     ) -> Result<Self, SshError> {
-        let config = Arc::new(client::Config::default());
+        // Detect dead connections promptly (network drop / host reboot /
+        // VPN restart) instead of hanging on TCP's multi-hour timeout: send a
+        // global keepalive every 15s, and abort the session if the server stays
+        // silent for 60s (~3 missed keepalives). The abort surfaces as a
+        // retryable error / Closed(None), which makes the UI reconnect and
+        // tell the user, rather than leaving a dead prompt that swallows keys.
+        let mut config = client::Config::default();
+        config.keepalive_interval = Some(std::time::Duration::from_secs(15));
+        config.inactivity_timeout = Some(std::time::Duration::from_secs(60));
+        let config = Arc::new(config);
 
         // Resolve the jump chain (bastions from outermost to target).
         let chain = host_store::jump_chain(host)

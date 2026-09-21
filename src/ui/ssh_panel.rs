@@ -1281,25 +1281,56 @@ impl SshPanel {
                             });
                         }
                         PumpMsg::Closed(code) => {
-                            let m = format!("\r\n[会话结束，退出码: {:?}]\r\n", code);
-                            let _ = terminal_clone.update(cx, |tv, cx| {
-                                tv.feed(m.as_bytes());
-                                cx.notify();
-                            });
-                            if let Some(panel) = panel_for_task.upgrade() {
-                                let uid = session_uid;
-                                let _ = panel.update(cx, move |this, cx| {
-                                    if let Some(s) = this
-                                        .sessions
-                                        .iter_mut()
-                                        .find(|s| s.session_uid == uid)
-                                    {
-                                        s.status = SessionStatus::Closed;
+                            // Some(exit_status) = the remote shell ran `exit` and
+                            // reported its exit code: a deliberate logout, leave it
+                            // closed. None = the channel dropped without an exit status
+                            // (network loss / host reboot / keepalive timeout): treat
+                            // as an abnormal disconnect and auto-reconnect, so the user
+                            // sees it instead of a dead prompt swallowing keystrokes.
+                            match code {
+                                Some(exit_status) => {
+                                    let m = format!(
+                                        "\r\n[会话结束，退出码: {}]\r\n",
+                                        exit_status
+                                    );
+                                    let _ = terminal_clone.update(cx, |tv, cx| {
+                                        tv.feed(m.as_bytes());
                                         cx.notify();
+                                    });
+                                    if let Some(panel) = panel_for_task.upgrade() {
+                                        let uid = session_uid;
+                                        let _ = panel.update(cx, move |this, cx| {
+                                            if let Some(s) = this.sessions.iter_mut().find(
+                                                |s| s.session_uid == uid,
+                                            ) {
+                                                s.status = SessionStatus::Closed;
+                                                cx.notify();
+                                            }
+                                        });
                                     }
-                                });
+                                    got_disconnected = false;
+                                }
+                                None => {
+                                    let m = "\r\n✕ 连接已断开，正在尝试重连…\r\n";
+                                    let _ = terminal_clone.update(cx, |tv, cx| {
+                                        tv.feed(m.as_bytes());
+                                        cx.notify();
+                                    });
+                                    if let Some(panel) = panel_for_task.upgrade() {
+                                        let uid = session_uid;
+                                        let _ = panel.update(cx, move |this, cx| {
+                                            if let Some(s) = this.sessions.iter_mut().find(
+                                                |s| s.session_uid == uid,
+                                            ) {
+                                                s.status = SessionStatus::Reconnecting(1);
+                                                cx.notify();
+                                            }
+                                        });
+                                    }
+                                    last_error_retryable = true;
+                                    got_disconnected = true;
+                                }
                             }
-                            got_disconnected = false;
                             break;
                         }
                         PumpMsg::Error { message, retryable } => {

@@ -198,3 +198,20 @@ winapi = { version = "0.3", features = [
     "handleapi",
     "synchapi",
 ] }
+
+# gpui is patched via our fork (amosgeek/zed). The `verve-force-csd` branch is
+# 1d217ee (the rev pinned above) plus one commit, "gpui_linux(x11): require
+# only a compositor for client-side decorations" (a50e7d671f):
+#   - deepin's kwin never lists _GTK_FRAME_EXTENTS in _NET_SUPPORTED, so
+#     gpui's X11 probe downgraded WindowDecorations::Client to Server and the
+#     WM stacked its own title bar ("Verve") on top of the app's drawn title
+#     bar. CSD works fine there (Motif undecorated hint + app-drawn
+#     shadow/resize), so the probe now only requires a compositor.
+# All four crates below must point at the same fork rev: they share one
+# source tree, and patching only some of them would pull two copies of the
+# zed workspace into the graph.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
+gpui_platform = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
+reqwest_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
+http_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }

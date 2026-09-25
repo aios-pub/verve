@@ -134,8 +134,22 @@ impl Protocol {
     }
 
     /// Whether this protocol uses an HTTP method selector.
+    ///
+    /// SSE also runs over HTTP (a streamed `text/event-stream` response), and
+    /// real-world SSE APIs (LLM chat/completions 等) are POST with a JSON body,
+    /// so the method must stay visible and editable there.
     pub fn uses_http_method(&self) -> bool {
-        matches!(self, Protocol::Http | Protocol::Graphql)
+        matches!(self, Protocol::Http | Protocol::Graphql | Protocol::Sse)
+    }
+
+    /// The HTTP method a new request of this protocol starts with. SSE APIs
+    /// are overwhelmingly POST-with-body (LLM chat/completions style), so SSE
+    /// defaults to POST; the rest keep GET.
+    pub fn default_method(&self) -> RequestMethod {
+        match self {
+            Protocol::Sse => RequestMethod::Post,
+            _ => RequestMethod::Get,
+        }
     }
 }
 
@@ -2239,5 +2253,34 @@ mod tests {
         assert!(entry.request_headers.is_empty());
         assert!(entry.response_body.is_none());
         assert!(!entry.response_truncated);
+    }
+
+    #[test]
+    fn sse_uses_http_method_selector_and_defaults_to_post() {
+        // SSE runs over HTTP, so the method selector must stay available and a
+        // new SSE request starts as POST (LLM chat/completions style).
+        assert!(Protocol::Sse.uses_http_method());
+        assert_eq!(Protocol::Sse.default_method(), RequestMethod::Post);
+        // Other protocols keep their previous behavior.
+        assert!(Protocol::Http.uses_http_method());
+        assert_eq!(Protocol::Http.default_method(), RequestMethod::Get);
+        assert!(!Protocol::WebSocket.uses_http_method());
+        assert_eq!(Protocol::WebSocket.default_method(), RequestMethod::Get);
+    }
+
+    #[test]
+    fn sse_request_body_round_trips_with_protocol_and_method() {
+        let json = r#"{
+            "id": "sse1",
+            "name": "AI讲题-测试",
+            "method": "GET",
+            "protocol": "sse",
+            "url": "{{baseUrl}}/v1/chat/completions"
+        }"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.protocol, Protocol::Sse);
+        assert_eq!(req.method, RequestMethod::Get);
+        // Body-less legacy SSE requests (EventSource style) stay GET.
+        assert!(req.body.is_empty());
     }
 }

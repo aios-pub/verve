@@ -46,7 +46,15 @@ impl IfaceEntry {
     pub(super) fn cell_text(&self, col: IfaceColumn) -> String {
         match col {
             IfaceColumn::Name => self.name.clone(),
-            IfaceColumn::Method => self.method.as_str().to_string(),
+            // SSE-protocol requests show the protocol, not their HTTP method
+            // (matches the tree/tab badges; see method_colors::badge_for).
+            IfaceColumn::Method => {
+                if self.protocol == Protocol::Sse {
+                    "SSE".to_string()
+                } else {
+                    self.method.as_str().to_string()
+                }
+            }
             IfaceColumn::Path => self.url.clone(),
             IfaceColumn::Folder => self.folder_name.clone(),
             IfaceColumn::CreatedBy => self.created_by.clone(),

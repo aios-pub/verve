@@ -12,7 +12,7 @@
 use gpui::Hsla;
 use gpui_component::ActiveTheme;
 
-use crate::state::models::RequestMethod;
+use crate::state::models::{Protocol, RequestMethod};
 
 /// A pair of colors for a method: a vivid badge color and a softer fill.
 pub struct MethodColor {
@@ -76,5 +76,26 @@ pub fn fill_color(method: RequestMethod, cx: &gpui::App) -> Hsla {
         gpui::hsla(c.h, c.s, 0.55, 1.0)
     } else {
         gpui::hsla(c.h, c.s * 0.9, 0.45, 1.0)
+    }
+}
+
+/// The SSE badge color (cyan), theme-adjusted like the method colors above.
+pub fn sse_color(cx: &gpui::App) -> Hsla {
+    if cx.theme().mode.is_dark() {
+        gpui::hsla(0.52, 0.70, 0.70, 1.0)
+    } else {
+        gpui::hsla(0.52, 0.70, 0.34, 1.0)
+    }
+}
+
+/// Badge label + color for a request row. SSE-protocol requests are labeled
+/// by protocol, not by their stored HTTP method: what distinguishes them on
+/// the wire is the streamed `text/event-stream` response, and their method
+/// (editable in the URL bar) varies per API — showing it in the tree read as
+/// a bug ("SSE 请求展示为 GET"). Other protocols keep the method badge.
+pub fn badge_for(protocol: Protocol, method: RequestMethod, cx: &gpui::App) -> (&'static str, Hsla) {
+    match protocol {
+        Protocol::Sse => ("SSE", sse_color(cx)),
+        _ => (method.badge_label(), badge_color(method, cx)),
     }
 }

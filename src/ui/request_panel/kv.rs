@@ -748,9 +748,12 @@ impl RequestPanel {
                                 })
                                 .children(page_entries.iter().enumerate().map(|(i, e)| {
                                     let is_sel = selected_req.as_deref() == Some(&e.id);
-                                    // Pre-compute the method badge color for this row.
-                                    let method_color = Some(crate::ui::method_colors::badge_color(e.method, cx));
-                                    let method_str = e.method.as_str().to_string();
+                                    // Pre-compute the badge (method, or protocol
+                                    // for SSE) label + color for this row.
+                                    let (badge_label, badge_color) =
+                                        crate::ui::method_colors::badge_for(e.protocol, e.method, cx);
+                                    let method_color = Some(badge_color);
+                                    let method_str = badge_label.to_string();
                                     let cells: Vec<(IfaceColumn, String, Option<Hsla>, bool)> = columns
                                         .iter()
                                         .map(|c| {

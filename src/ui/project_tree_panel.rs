@@ -511,16 +511,22 @@ impl Render for ProjectTreePanel {
                                 IconName::File
                             };
 
-                            // For requests, look up the method to render a
-                            // colored badge (postman-style). For folders show
-                            // the folder icon instead.
-                            let method = if !is_folder {
+                            // For requests, resolve the badge (label + color) to
+                            // render before the name (postman-style). SSE-protocol
+                            // requests badge as "SSE" rather than their HTTP method.
+                            let badge = if !is_folder {
                                 request_id.as_ref().and_then(|id| {
                                     view.read(cx)
                                         .state
                                         .read(cx)
                                         .active_project()
-                                        .and_then(|p| p.find_request(id).map(|(_, r)| r.method))
+                                        .and_then(|p| {
+                                            p.find_request(id).map(|(_, r)| {
+                                                crate::ui::method_colors::badge_for(
+                                                    r.protocol, r.method, cx,
+                                                )
+                                            })
+                                        })
                                 })
                             } else {
                                 None
@@ -552,9 +558,6 @@ impl Render for ProjectTreePanel {
                             };
                             let is_expanded = entry.is_expanded();
                             let view_for_add = view.clone();
-                            let badge_color =
-                                method.map(|m| crate::ui::method_colors::badge_color(m, cx));
-                            let badge_label = method.map(|m| m.badge_label().to_string());
 
                             // Each row gets a unique group so the "..." button can
                             // reveal only when this row is hovered.
@@ -658,18 +661,15 @@ impl Render for ProjectTreePanel {
                                         })
                                         // Spacer for request rows (aligns with chevron width).
                                         .when(!is_folder, |this| this.child(div().w(px(16.))))
-                                        .when_some(method, |this, _| {
-                                            // Colored method badge (right-aligned, fixed width).
+                                        .when_some(badge, |this, (label, color)| {
+                                            // Colored badge (method or protocol, fixed width).
                                             this.child(
                                                 div()
                                                     .w(px(34.))
                                                     .text_size(px(10.))
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(
-                                                        badge_color
-                                                            .unwrap_or(theme.muted_foreground),
-                                                    )
-                                                    .child(badge_label.unwrap_or_default()),
+                                                    .text_color(color)
+                                                    .child(label),
                                             )
                                         })
                                         .when(is_folder, |this| {
@@ -1409,8 +1409,11 @@ fn picker_card(
                     cx.notify();
                 });
             } else {
-                let mut req =
-                    crate::state::models::ApiRequest::new(name, RequestMethod::Get, "{{baseUrl}}");
+                let mut req = crate::state::models::ApiRequest::new(
+                    name,
+                    proto.default_method(),
+                    "{{baseUrl}}",
+                );
                 req.protocol = proto;
                 let req_id = req.id.clone();
                 let fid = folder_id.clone();
@@ -1871,8 +1874,11 @@ impl ProjectTreePanel {
             Protocol::Markdown => "New Markdown",
             Protocol::Directory => "New Folder",
         };
-        let mut req =
-            crate::state::models::ApiRequest::new(name, RequestMethod::Get, "{{baseUrl}}");
+        let mut req = crate::state::models::ApiRequest::new(
+            name,
+            protocol.default_method(),
+            "{{baseUrl}}",
+        );
         req.protocol = protocol;
         let req_id = req.id.clone();
         self.state.update(cx, |s, cx| {

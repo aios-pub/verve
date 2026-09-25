@@ -380,6 +380,18 @@ impl RequestPanel {
         pre_script: String,
         cx: &mut Context<Self>,
     ) {
+        // Legacy self-heal: SSE requests were created with GET and the method
+        // selector was hidden, so POST-style SSE APIs (JSON body, LLM
+        // chat/completions 等) could only go out as GET — a GET with a body
+        // is broken HTTP semantics and servers answer with an empty body.
+        // Upgrade to POST when a body is present; body-less SSE (classic
+        // EventSource style) keeps GET. The "实际请求" snapshot below shows
+        // the method that actually went on the wire.
+        let mut req = req;
+        if req.method == RequestMethod::Get && !req.body.is_empty() {
+            req.method = RequestMethod::Post;
+        }
+
         // Pre-request script (same as HTTP).
         let mut script_logs: Vec<String> = Vec::new();
         let mut vars = vars;

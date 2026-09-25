@@ -1972,14 +1972,14 @@ impl Render for RequestPanel {
         let active_tab = self.active_tab;
 
         // Read open tabs for the tab bar.
-        let open_tabs: Vec<(String, String, RequestMethod)> = {
+        let open_tabs: Vec<(String, String, RequestMethod, Protocol)> = {
             let st = self.state.read(cx);
             st.open_request_ids
                 .iter()
                 .filter_map(|id| {
                     st.active_project()
                         .and_then(|p| p.find_request(id))
-                        .map(|(_, r)| (r.id.clone(), r.name.clone(), r.method))
+                        .map(|(_, r)| (r.id.clone(), r.name.clone(), r.method, r.protocol))
                 })
                 .collect()
         };
@@ -2002,7 +2002,7 @@ impl Render for RequestPanel {
         // screen and Cmd+W closes the tab the user is looking at.
         let active_idx = open_tabs
             .iter()
-            .position(|(id, _, _)| active_tab_id.as_deref() == Some(id.as_str()));
+            .position(|(id, _, _, _)| active_tab_id.as_deref() == Some(id.as_str()));
         let visible: Vec<usize> = if !overflow {
             (0..open_tabs.len()).collect()
         } else {
@@ -2018,19 +2018,15 @@ impl Render for RequestPanel {
         };
         let hidden_count = open_tabs.len().saturating_sub(visible.len());
 
-        // Precompute per-tab metadata that needs `cx` (method color) up front so
-        // the builder closures below only use `cx.listener` (an immutable borrow)
-        // and don't conflict with each other or the sibling `.when(has_folder,…)`
-        // closure that borrows `self` mutably.
-        let tabs_meta: Vec<(String, String, gpui::Hsla, RequestMethod)> = open_tabs
+        // Precompute per-tab metadata that needs `cx` (badge label + color)
+        // up front so the builder closures below only use `cx.listener` (an
+        // immutable borrow) and don't conflict with each other or the sibling
+        // `.when(has_folder,…)` closure that borrows `self` mutably.
+        let tabs_meta: Vec<(String, String, gpui::Hsla, &'static str)> = open_tabs
             .iter()
-            .map(|(id, name, method)| {
-                (
-                    id.clone(),
-                    name.clone(),
-                    crate::ui::method_colors::badge_color(*method, cx),
-                    *method,
-                )
+            .map(|(id, name, method, protocol)| {
+                let (label, color) = crate::ui::method_colors::badge_for(*protocol, *method, cx);
+                (id.clone(), name.clone(), color, label)
             })
             .collect();
         let panel_entity = cx.entity();
@@ -2071,10 +2067,9 @@ impl Render for RequestPanel {
                                     visible
                                         .iter()
                                         .filter_map(|i| tabs_meta.get(*i).map(|t| (*i, t)))
-                                        .map(|(i, (id, name, method_color, method))| {
+                                        .map(|(i, (id, name, badge_color, badge_label))| {
                                             let is_active =
                                                 active_tab_id.as_deref() == Some(id.as_str());
-                                            let method_label = method.badge_label();
                                             let display_name = if name.chars().count() > 14 {
                                                 let truncated: String =
                                                     name.chars().take(14).collect();
@@ -2103,13 +2098,13 @@ impl Render for RequestPanel {
                                                         |s| s.bg(theme.accent.opacity(0.15)),
                                                     )
                                                 })
-                                                // Colored method badge.
+                                                // Colored badge (method or protocol).
                                                 .child(
                                                     div()
                                                         .text_size(px(10.))
                                                         .font_weight(FontWeight::BOLD)
-                                                        .text_color(*method_color)
-                                                        .child(method_label),
+                                                        .text_color(*badge_color)
+                                                        .child(*badge_label),
                                                 )
                                                 // Tab name.
                                                 .child(
@@ -2189,10 +2184,9 @@ impl Render for RequestPanel {
                                             .gap(px(1.))
                                             .children(
                                                 tabs_meta.iter().enumerate().map(
-                                                    |(i, (id, name, method_color, method))| {
+                                                    |(i, (id, name, badge_color, badge_label))| {
                                                         let is_active = active_tab_id.as_deref()
                                                             == Some(id.as_str());
-                                                        let method_label = method.badge_label();
                                                         let display_name =
                                                             if name.chars().count() > 24 {
                                                                 let truncated: String =
@@ -2227,8 +2221,8 @@ impl Render for RequestPanel {
                                                                 div()
                                                                     .text_size(px(10.))
                                                                     .font_weight(FontWeight::BOLD)
-                                                                    .text_color(*method_color)
-                                                                    .child(method_label),
+                                                                    .text_color(*badge_color)
+                                                                    .child(*badge_label),
                                                             )
                                                             .child(
                                                                 div()

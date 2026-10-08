@@ -222,13 +222,37 @@ impl DockerPanel {
     }
 
     pub fn open_add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_host_dialog(None, window, cx);
+    }
+
+    /// Open the Docker host dialog (add when `host_id` is None, edit
+    /// otherwise). While the modal is up over a shell session, the terminal's
+    /// per-render `window.focus(...)` would steal focus from the dialog's
+    /// input fields every frame (same failure as the SSH panel's overlays —
+    /// see `TerminalView::suppress_auto_focus`), so suppress it and restore
+    /// via `restore_terminal_focus` on save / dismiss.
+    fn open_host_dialog(
+        &mut self,
+        host_id: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editing = host_id.and_then(find_host);
         let panel = cx.entity();
+        self.suppress_terminal_auto_focus(cx);
+        let panel_for_dismiss = panel.clone();
         docker_host_dialog::open_dialog(
-            None,
+            editing.as_ref(),
             move |_host: DockerHost, _window, cx: &mut App| {
                 let _ = panel.update(cx, |this, cx| {
                     this.reload_hosts();
                     cx.notify();
+                    this.restore_terminal_focus(cx);
+                });
+            },
+            move |_window, cx: &mut App| {
+                let _ = panel_for_dismiss.update(cx, |this, cx| {
+                    this.restore_terminal_focus(cx);
                 });
             },
             window,
@@ -314,6 +338,41 @@ impl DockerPanel {
         self.sessions
             .iter()
             .position(|s| session_key(&s.container_id, s.kind.clone()) == *key)
+    }
+
+    /// While the host dialog modal is up, the visible session's terminal must
+    /// not re-focus itself every render (see `open_host_dialog`). Pair with
+    /// `restore_terminal_focus` when the dialog closes. No-op when no shell
+    /// session is visible (e.g. on the Hosts page).
+    fn suppress_terminal_auto_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.active_session_idx() else {
+            return;
+        };
+        // Bounds-checked per AGENTS.md; a connecting session may have no
+        // terminal yet.
+        if let Some(s) = self.sessions.get(idx) {
+            if let Some(terminal) = &s.terminal {
+                terminal.update(cx, |tv, cx| {
+                    tv.suppress_auto_focus = true;
+                    cx.notify();
+                });
+            }
+        }
+    }
+
+    /// Re-enable the terminal's auto-focus after the host dialog closes.
+    fn restore_terminal_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.active_session_idx() else {
+            return;
+        };
+        if let Some(s) = self.sessions.get(idx) {
+            if let Some(terminal) = &s.terminal {
+                terminal.update(cx, |tv, cx| {
+                    tv.suppress_auto_focus = false;
+                    cx.notify();
+                });
+            }
+        }
     }
 
     // ---- blocking work runner ------------------------------------------------
@@ -1127,12 +1186,7 @@ impl DockerPanel {
                             .icon(IconName::Plus)
                             .label("添加主机")
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                docker_host_dialog::open_dialog(
-                                    None,
-                                    |_host: DockerHost, _window, _cx| {},
-                                    window,
-                                    cx,
-                                );
+                                this.open_host_dialog(None, window, cx);
                                 this.reload_hosts();
                                 cx.notify();
                             })),
@@ -1247,12 +1301,9 @@ impl DockerPanel {
                                         .ghost()
                                         .label("编辑")
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            let editing = find_host(&id_edit);
-                                            if let Some(host) = editing {
-                                                let host_clone = host.clone();
-                                                docker_host_dialog::open_dialog(
-                                                    Some(&host_clone),
-                                                    |_h: DockerHost, _window, _cx| {},
+                                            if find_host(&id_edit).is_some() {
+                                                this.open_host_dialog(
+                                                    Some(&id_edit),
                                                     window,
                                                     cx,
                                                 );

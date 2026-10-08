@@ -382,6 +382,45 @@ impl K8sPanel {
             .position(|s| session_key(&s.pod_name, &s.namespace, &s.kind) == *key)
     }
 
+    /// While the cluster dialog modal is up, the visible session's terminal
+    /// must not re-focus itself every render — it would steal focus from the
+    /// dialog's input fields (same failure as the SSH/Docker panels, see
+    /// `TerminalView::suppress_auto_focus`). Pair with
+    /// `restore_terminal_focus` when the dialog closes. No-op when no session
+    /// tab is visible (e.g. on the Contexts/Pods pages). `pub(crate)`: the
+    /// title bar's "add cluster" button opens the dialog with `window.defer`
+    /// and must suppress from outside the panel.
+    pub(crate) fn suppress_terminal_auto_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.active_session_idx() else {
+            return;
+        };
+        // Bounds-checked per AGENTS.md; a connecting session may have no
+        // terminal yet.
+        if let Some(s) = self.sessions.get(idx) {
+            if let Some(terminal) = &s.terminal {
+                terminal.update(cx, |tv, cx| {
+                    tv.suppress_auto_focus = true;
+                    cx.notify();
+                });
+            }
+        }
+    }
+
+    /// Re-enable the terminal's auto-focus after the cluster dialog closes.
+    pub(crate) fn restore_terminal_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(idx) = self.active_session_idx() else {
+            return;
+        };
+        if let Some(s) = self.sessions.get(idx) {
+            if let Some(terminal) = &s.terminal {
+                terminal.update(cx, |tv, cx| {
+                    tv.suppress_auto_focus = false;
+                    cx.notify();
+                });
+            }
+        }
+    }
+
     fn start_exec_for(
         &mut self,
         pod: String,
@@ -877,12 +916,23 @@ impl K8sPanel {
                             .icon(IconName::Plus)
                             .label("添加集群")
                             .on_click(cx.listener(|this, _, window, cx| {
+                                // Keep the visible session terminal from
+                                // stealing focus while the dialog is up;
+                                // restore on save / dismiss.
+                                this.suppress_terminal_auto_focus(cx);
                                 let ent = cx.entity().downgrade();
+                                let ent_for_dismiss = ent.clone();
                                 k8s_cluster_dialog::open_dialog(
                                     None,
                                     move |_window, cx| {
                                         let _ = ent.update(cx, |panel, cx| {
                                             panel.refresh_config(cx);
+                                            panel.restore_terminal_focus(cx);
+                                        });
+                                    },
+                                    move |_window, cx| {
+                                        let _ = ent_for_dismiss.update(cx, |panel, cx| {
+                                            panel.restore_terminal_focus(cx);
                                         });
                                     },
                                     window,
@@ -982,8 +1032,12 @@ impl K8sPanel {
                                 .ghost()
                                 .label("编辑")
                                 .tooltip("编辑集群")
-                                .on_click(cx.listener(move |_this, _, window, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    // Same focus-steal guard as the add
+                                    // dialog; restore on save / dismiss.
+                                    this.suppress_terminal_auto_focus(cx);
                                     let ent = cx.entity().downgrade();
+                                    let ent_for_dismiss = ent.clone();
                                     let edit_c = edit_cluster.clone();
                                     let close_id = delete_id.clone();
                                     k8s_cluster_dialog::open_dialog(
@@ -993,6 +1047,12 @@ impl K8sPanel {
                                                 // Close any open tunnel for this cluster before refreshing
                                                 crate::k8s::kubectl::close_ssh_tunnel(&close_id);
                                                 panel.refresh_config(cx);
+                                                panel.restore_terminal_focus(cx);
+                                            });
+                                        },
+                                        move |_window, cx| {
+                                            let _ = ent_for_dismiss.update(cx, |panel, cx| {
+                                                panel.restore_terminal_focus(cx);
                                             });
                                         },
                                         window,

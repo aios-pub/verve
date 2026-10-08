@@ -147,11 +147,23 @@ impl Render for DockerHostDialogState {
 }
 
 /// Open the host dialog. `on_save` receives the finalized `DockerHost`.
-pub fn open_dialog<F>(editing: Option<&DockerHost>, on_save: F, window: &mut Window, cx: &mut App)
-where
+///
+/// `on_dismissed` runs when the dialog is closed via the X button / Esc key /
+/// dialog chrome — the 保存 button closes programmatically and invokes
+/// `on_save` instead. Callers use it to undo UI suppression taken while the
+/// modal was up (e.g. the terminal's `suppress_auto_focus`).
+pub fn open_dialog<F, G>(
+    editing: Option<&DockerHost>,
+    on_save: F,
+    on_dismissed: G,
+    window: &mut Window,
+    cx: &mut App,
+) where
     F: Fn(DockerHost, &mut Window, &mut App) + 'static,
+    G: Fn(&mut Window, &mut App) + 'static,
 {
     let on_save: std::sync::Arc<F> = std::sync::Arc::new(on_save);
+    let on_dismissed: std::sync::Arc<G> = std::sync::Arc::new(on_dismissed);
     let state = DockerHostDialogState::new(editing, window, cx);
     let title_text = if editing.is_some() {
         "编辑 Docker 主机"
@@ -164,10 +176,14 @@ where
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let on_save = on_save.clone();
+        let on_dismissed = on_dismissed.clone();
 
         dialog
             .title(title_text)
             .w(px(600.))
+            .on_close(move |_ev, window, cx| {
+                on_dismissed(window, cx);
+            })
             .content(move |content, window, cx| {
                 let s = state_for_content.read(cx);
                 let tls_verify = s.tls_verify;

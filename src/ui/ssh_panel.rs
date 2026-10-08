@@ -719,12 +719,25 @@ impl SshPanel {
         let editing_host = editing.and_then(|id| host_store::find_host(id));
         let available = self.hosts.clone();
         let panel = cx.entity();
+        // While the modal is up, TerminalView::render re-focuses the terminal
+        // on every frame (any PTY output triggers a render), stealing focus
+        // from the dialog's input fields so nothing can be typed — same
+        // failure as the MFA bar / host-picker overlay. Restore via
+        // `restore_terminal_focus` on save / dismiss.
+        self.suppress_terminal_auto_focus(cx);
+        let panel_for_dismiss = panel.clone();
         crate::ui::ssh_host_dialog::open_dialog(
             editing_host.as_ref(),
             available,
             move |_host, _window, cx: &mut App| {
                 let _ = panel.update(cx, |this, cx| {
                     this.reload(cx);
+                    this.restore_terminal_focus(cx);
+                });
+            },
+            move |_window, cx: &mut App| {
+                let _ = panel_for_dismiss.update(cx, |this, cx| {
+                    this.restore_terminal_focus(cx);
                 });
             },
             window,
@@ -739,10 +752,22 @@ impl SshPanel {
             .unwrap_or_else(|| id.to_string());
         let id_del = id.to_string();
         let panel = cx.entity();
+        let panel_for_close = panel.clone();
+        // Keep the terminal from stealing focus while the confirm dialog is
+        // up (otherwise Esc cannot close it — the dialog never holds focus).
+        self.suppress_terminal_auto_focus(cx);
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let host_name = host_name.clone();
+            let panel_for_close = panel_for_close.clone();
             dialog
                 .title("确认删除")
+                // X button / Esc path; the 确认删除 button closes
+                // programmatically and restores below.
+                .on_close(move |_ev, _window, cx| {
+                    let _ = panel_for_close.update(cx, |this, cx| {
+                        this.restore_terminal_focus(cx);
+                    });
+                })
                 .content(move |content, _, _| {
                     content.child(
                         v_flex().p_4().w(px(360.)).gap_2().child(
@@ -768,6 +793,7 @@ impl SshPanel {
                             host_store::remove_host(&id);
                             let _ = panel.update(cx, |this, cx| {
                                 this.reload(cx);
+                                this.restore_terminal_focus(cx);
                             });
                         })
                 })
@@ -3022,9 +3048,19 @@ impl SshPanel {
         cx.notify();
     }
 
-    /// While the host-picker overlay is up, the terminal's per-render
-    /// `window.focus(...)` would steal focus from the search box every frame,
-    /// so we suppress it. Call `restore_terminal_focus` when the overlay closes.
+    /// While an overlay that needs keyboard focus is up (host-picker search
+    /// box, new/edit host dialog, confirm dialog), the terminal's per-render
+    /// `window.focus(...)` would steal focus every frame, so we suppress it.
+    /// Call `restore_terminal_focus` when the overlay closes.
+    fn suppress_terminal_auto_focus(&mut self, cx: &mut Context<Self>) {
+        if let Some(s) = self.sessions.get(self.active_tab) {
+            s.terminal.update(cx, |tv, cx| {
+                tv.suppress_auto_focus = true;
+                cx.notify();
+            });
+        }
+    }
+
     fn restore_terminal_focus(&mut self, cx: &mut Context<Self>) {
         if let Some(s) = self.sessions.get(self.active_tab) {
             let terminal = s.terminal.clone();

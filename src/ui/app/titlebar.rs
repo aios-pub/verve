@@ -1144,11 +1144,28 @@ impl VerveApp {
                         let panel = k8s_add.clone();
                         // k8s_cluster_dialog::open_dialog takes &mut App.
                         window.defer(cx, move |window, cx| {
+                            // Suppress the visible session terminal's
+                            // auto-focus while the dialog is up (it would
+                            // steal focus from the dialog's inputs every
+                            // frame); restore on save / dismiss.
+                            let panel_for_suppress = panel.clone();
+                            let _ = panel_for_suppress.update(cx, |p, cx| {
+                                p.suppress_terminal_auto_focus(cx);
+                            });
                             let panel_for_cb = panel.clone();
+                            let panel_for_dismiss = panel.clone();
                             crate::ui::k8s_cluster_dialog::open_dialog(
                                 None,
                                 move |_window, cx| {
-                                    let _ = panel_for_cb.update(cx, |p, cx| p.refresh_current(cx));
+                                    let _ = panel_for_cb.update(cx, |p, cx| {
+                                        p.refresh_current(cx);
+                                        p.restore_terminal_focus(cx);
+                                    });
+                                },
+                                move |_window, cx| {
+                                    let _ = panel_for_dismiss.update(cx, |p, cx| {
+                                        p.restore_terminal_focus(cx);
+                                    });
                                 },
                                 window,
                                 cx,

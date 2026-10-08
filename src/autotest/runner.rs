@@ -278,14 +278,14 @@ async fn execute_request_step(step: &RequestStep, ctx: &mut RunContext<'_>) {
         &req.auth,
         &req.body,
         &step_scope,
-        30,
+        http::DEFAULT_TIMEOUT_SECS,
     ) {
         Ok(p) => (Some(p), None),
         Err(e) => (None, Some(format!("prepare: {e}"))),
     };
 
     let mut response = if let Some(p) = prepared {
-        http::client::execute(ctx.http_client, p, 30).await
+        http::client::execute(ctx.http_client, p, http::DEFAULT_TIMEOUT_SECS).await
     } else {
         Response {
             status: 0,

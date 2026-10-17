@@ -17,11 +17,9 @@ use crate::ui::k8s_panel::K8sPanel;
 use crate::ui::markdown_panel::MarkdownPanel;
 use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::notes_panel::NotesPanel;
-use crate::ui::pdf_panel::PdfPanel;
 use crate::ui::project_manage_panel::ProjectManagePanel;
 use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::proxy_panel::ProxyPanel;
-use crate::ui::relocate_panel::RelocatePanel;
 use crate::ui::request_panel::RequestPanel;
 use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_panel::{ShareEvent, SharePanel};
@@ -152,8 +150,6 @@ impl VerveApp {
         let notes = cx.new(|cx| NotesPanel::new(state.clone(), window, cx));
         let markdown = cx.new(|cx| MarkdownPanel::new(state.clone(), window, cx));
         let json = cx.new(|cx| JsonPanel::new(window, cx));
-        let pdf = cx.new(|cx| PdfPanel::new(window, cx));
-        let relocate = cx.new(|cx| RelocatePanel::new(window, cx));
 
         // Document-sharing: load configs and start the local HTTP server if any
         // shares already exist. The server resolves projects from disk
@@ -236,8 +232,6 @@ impl VerveApp {
             notes,
             markdown,
             json,
-            pdf,
-            relocate,
             help_window: None,
             help_close_subscription: None,
             share_server,

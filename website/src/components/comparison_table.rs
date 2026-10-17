@@ -22,7 +22,6 @@ enum RowKey {
     Notes,
     MdEditor,
     Server,
-    Relocate,
 }
 
 #[component]
@@ -47,7 +46,6 @@ pub fn ComparisonTable() -> impl IntoView {
         (RowKey::Notes, false, true),
         (RowKey::MdEditor, false, true),
         (RowKey::Server, false, true),
-        (RowKey::Relocate, false, true),
     ];
 
     // Render the label reactively (a String) so it follows the current locale.
@@ -69,7 +67,6 @@ pub fn ComparisonTable() -> impl IntoView {
             RowKey::Notes => t_string!(i18n, compare.r_notes),
             RowKey::MdEditor => t_string!(i18n, compare.r_mdeditor),
             RowKey::Server => t_string!(i18n, compare.r_server),
-            RowKey::Relocate => t_string!(i18n, compare.r_relocate),
         }
         .to_string()
     };

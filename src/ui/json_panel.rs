@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::resizable::{h_resizable, resizable_panel};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Sizable as _, button::{Button, ButtonVariants as _},
@@ -105,7 +105,7 @@ enum RowHighlight {
 }
 
 pub struct JsonPanel {
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     /// Latest (possibly compacted) parsed value, kept for expand/collapse rebuilds and copy.
     value: Option<serde_json::Value>,
     /// Pretty-printed form, computed lazily only when the user copies — NOT on every parse
@@ -163,8 +163,7 @@ pub struct JsonPanel {
 impl JsonPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
-                .multi_line(true)
+            let mut s = TextareaState::new(window, cx)
                 .placeholder(rust_i18n::t!("json.input_ph").to_string());
             s.set_value(String::new(), window, cx);
             s
@@ -1006,7 +1005,7 @@ impl Render for JsonPanel {
                     .border_color(theme.border)
                     .rounded(px(4.))
                     .overflow_hidden()
-                    .child(Input::new(&self.input).small().h_full()),
+                    .child(Textarea::new(&self.input).small().h_full()),
             )
             .when_some(self.error.as_ref(), |flex, err| {
                 flex.child(div().text_sm().text_color(theme.danger).child(err.clone()))

@@ -66,7 +66,7 @@ impl Editor {
         if !self.show_unsaved_changes_dialog {
             self.close_dialog_restore_focus = self.document.focused_block_entity_id(window, cx);
             self.show_unsaved_changes_dialog = true;
-            window.blur();
+            window.blur(cx);
             cx.notify();
         }
 

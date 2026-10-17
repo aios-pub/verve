@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, EditorState, Input, InputState};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -59,7 +59,7 @@ const VALUE_UNIT_PX: f32 = 8.0;
 pub struct KvRow {
     pub enabled: bool,
     pub key: Entity<InputState>,
-    pub value: Entity<InputState>,
+    pub value: Entity<EditorState>,
     pub file_path: Option<String>,
     pub field_type: FieldType,
     pub required: bool,
@@ -74,16 +74,16 @@ impl KvRow {
             s
         });
         let value = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
+            // Editor mode: multi-line + soft_wrap so a focused, overflowing
+            // value can expand to wrap and reveal its full content (a short
+            // value stays a single line at the natural `small` height), and
+            // the only mode that accepts a completion provider.
+            let mut s = EditorState::new(window, cx)
                 .placeholder("value")
-                // multi_line + soft_wrap so a focused, overflowing value can
-                // expand to wrap and reveal its full content. A short value
-                // stays a single line at the natural `small` height.
-                .multi_line(true)
                 .soft_wrap(true);
             s.set_value(kv.value.clone(), window, cx);
             // Offer {{var}} completions (dynamic + user variables) when typing.
-            s.lsp.completion_provider = Some(Rc::new(VarCompletionProvider::new(state.clone())));
+            s.lsp_mut().completion_provider = Some(Rc::new(VarCompletionProvider::new(state.clone())));
             s
         });
         let description = cx.new(|cx| {
@@ -335,9 +335,9 @@ impl RenderOnce for KvTable {
                                     })
                                     .into_any_element()
                             } else {
-                                let input = Input::new(&row.value)
-                                    .small()
-                                    .appearance(false);
+                                let input = Editor::new(&row.value)
+                                    .appearance(false)
+                                    .text_size(px(13.));
                                 let input = if value_focused && overflows {
                                     // ~20px per wrapped line + 4px padding,
                                     // capped at 8 lines; taller content scrolls

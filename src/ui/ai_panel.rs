@@ -8,7 +8,7 @@ use std::path::Path;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Sizable as _, button::{Button, ButtonVariants as _},
@@ -270,7 +270,7 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 pub struct AiPanel {
     pub session: Entity<AgentSession>,
     /// Composer input (multi-line, Enter sends / Shift+Enter newline).
-    pub input: Entity<InputState>,
+    pub input: Entity<TextareaState>,
     pub provider_select: Entity<SelectState<Vec<String>>>,
     pub model_select: Entity<SelectState<Vec<String>>>,
     /// Session usage detail popover.
@@ -324,9 +324,11 @@ impl AiPanel {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session = cx.new(|cx| AgentSession::new(state.clone(), window, cx));
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(3, 12)
+                // Plain Enter submits (PressEnter fires without inserting a
+                // newline); Shift+Enter inserts the newline.
+                .submit_on_enter(true)
                 .placeholder("描述需求、粘贴 cURL / 文档 / 接口文本…（Enter 发送，Shift+Enter 换行）")
         });
         let settings = config::load_ai_settings();
@@ -504,7 +506,7 @@ impl AiPanel {
 
     fn on_input_event(
         &mut self,
-        _src: Entity<InputState>,
+        _src: Entity<TextareaState>,
         ev: &InputEvent,
         cx: &mut Context<Self>,
     ) {
@@ -1266,7 +1268,7 @@ impl AiPanel {
                             .tooltip("附加图片 / Word / PDF / Excel / PPT / 文本（也可直接粘贴文件或截图）")
                             .on_click(cx.listener(|this, _, _, cx| this.pick_attachment(cx))),
                     )
-                    .child(div().flex_1().min_w_0().child(Input::new(&self.input).small()))
+                    .child(div().flex_1().min_w_0().child(Textarea::new(&self.input).small()))
                     .child(if running {
                         Button::new("ai-send-disabled")
                             .small()

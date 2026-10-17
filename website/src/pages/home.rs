@@ -70,7 +70,7 @@ pub fn Home() -> impl IntoView {
                         <FeatureCard icon="" title=t_string!(i18n, pillars.mock)       description=t_string!(i18n, pillars.mock_d)       screenshot=Some("mock.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.docs)       description=t_string!(i18n, pillars.docs_d)       screenshot=Some("doc.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.notes)      description=t_string!(i18n, pillars.notes_d)      screenshot=Some("note.png") pro=true />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.mdeditor)   description=t_string!(i18n, pillars.mdeditor_d)   screenshot=Some("pdf.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.mdeditor)   description=t_string!(i18n, pillars.mdeditor_d)   screenshot=None pro=true />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.hosts)      description=t_string!(i18n, pillars.hosts_d)      screenshot=Some("hosts.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.json)       description=t_string!(i18n, pillars.json_d)       screenshot=Some("json-format.png") />
                     </div>

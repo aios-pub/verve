@@ -785,20 +785,36 @@ impl Render for ProjectTreePanel {
                                     cx.new(|_| drag.clone())
                                 })
                                 // Highlight while dragging over this row.
-                                .on_drag_hover(move |hovering: &bool, _window, cx: &mut App| {
-                                    let _ = view_hover.update(cx, |this, cx| {
-                                        if this.dragging_node.is_some() && *hovering {
-                                            this.drop_target = Some(drag_node_for_hover.clone());
-                                            cx.notify();
-                                        } else if !*hovering
-                                            && this.drop_target.as_deref()
-                                                == Some(drag_node_for_hover.as_str())
-                                        {
-                                            this.drop_target = None;
-                                            cx.notify();
-                                        }
-                                    });
-                                })
+                                // (The fork-only ListItem::on_drag_hover is
+                                // gone upstream; on_drag_move fires for every
+                                // mouse move during a TreeDrag with this row's
+                                // hitbox bounds, so containment replicates the
+                                // enter/exit semantics.)
+                                .on_drag_move::<TreeDrag>(
+                                    move |ev: &gpui::DragMoveEvent<TreeDrag>,
+                                          _window,
+                                          cx: &mut App| {
+                                        let hovering =
+                                            ev.bounds.contains(&ev.event.position);
+                                        let _ = view_hover.update(cx, |this, cx| {
+                                            if hovering && this.dragging_node.is_some() {
+                                                if this.drop_target.as_deref()
+                                                    != Some(drag_node_for_hover.as_str())
+                                                {
+                                                    this.drop_target =
+                                                        Some(drag_node_for_hover.clone());
+                                                    cx.notify();
+                                                }
+                                            } else if !hovering
+                                                && this.drop_target.as_deref()
+                                                    == Some(drag_node_for_hover.as_str())
+                                            {
+                                                this.drop_target = None;
+                                                cx.notify();
+                                            }
+                                        });
+                                    },
+                                )
                                 // Drop handler: move source relative to target.
                                 .on_drop(move |drag: &TreeDrag, _window, cx: &mut App| {
                                     let _ = view_drop.update(cx, |this, cx| {
@@ -1909,7 +1925,9 @@ impl ProjectTreePanel {
         self.collapsed_folders.clear();
         self.rebuild_tree(cx);
         self.tree.update(cx, |t, cx| {
-            t.ensure_visible(&node.clone().into(), cx);
+            // reveal_item = expand ancestors + scroll to the node (upstream
+            // replacement for the old fork-only ensure_visible).
+            t.reveal_item(&node.clone().into(), gpui::ScrollStrategy::Top, cx);
         });
         cx.notify();
     }

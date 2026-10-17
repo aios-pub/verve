@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::Icon;
 use gpui_component::WindowExt as _;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
@@ -110,16 +110,16 @@ pub struct RequestPanel {
     pub path_rows: Vec<KvRow>,
     pub cookie_rows: Vec<KvRow>,
     pub body_rows: Vec<KvRow>,
-    pub body_editor: Entity<InputState>,
+    pub body_editor: Entity<EditorState>,
     pub body_lang_select: Entity<SelectState<Vec<String>>>,
     pub body_type_select: Entity<SelectState<Vec<String>>>,
-    pub pre_script_editor: Entity<InputState>,
-    pub tests_editor: Entity<InputState>,
+    pub pre_script_editor: Entity<TextareaState>,
+    pub tests_editor: Entity<TextareaState>,
     // --- mock fields
     pub mock_enabled: bool,
     pub mock_status_input: Entity<InputState>,
     pub mock_delay_input: Entity<InputState>,
-    pub mock_body_editor: Entity<InputState>,
+    pub mock_body_editor: Entity<EditorState>,
     pub mock_headers_rows: Vec<KvRow>,
     pub mock_match_method_select: Entity<SelectState<Vec<String>>>,
     pub mock_path_pattern_select: Entity<SelectState<Vec<String>>>,
@@ -172,7 +172,7 @@ pub struct RequestPanel {
     // --- folder detail view state (rebuilt when the selected folder changes)
     pub folder_id: Option<String>,
     pub folder_name: Entity<InputState>,
-    pub folder_desc: Entity<InputState>,
+    pub folder_desc: Entity<TextareaState>,
     /// Whether the folder base URL Popover is open.
     pub folder_baseurl_open: bool,
     pub folder_param_rows: Vec<KvRow>,
@@ -260,8 +260,8 @@ impl RequestPanel {
             )
         });
         let body_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(RawLanguage::Json.highlight())
+            EditorState::new(window, cx)
+                .language(RawLanguage::Json.highlight())
                 .placeholder("Request body (JSON, XML, ...)")
                 .default_value("{}")
         });
@@ -295,12 +295,11 @@ impl RequestPanel {
         // React to body-type changes.
         let bt_sub = cx.subscribe(&body_type_select, Self::on_body_type_change);
         let pre_script_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .placeholder("// 预执行脚本：apt.setVariable(k,v) · apt.getVariable(k)")
         });
         let tests_editor = cx.new(|cx| {
-            InputState::new(window, cx).multi_line(true).placeholder(
+            TextareaState::new(window, cx).placeholder(
                 "// 后执行脚本：response.{status,body,json,headers,time} · apt.assert(cond,msg)",
             )
         });
@@ -316,12 +315,10 @@ impl RequestPanel {
                 .default_value("0")
         });
         let mock_body_editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(RawLanguage::Json.highlight())
+            EditorState::new(window, cx)
+                .language(RawLanguage::Json.highlight())
                 .placeholder("{}")
                 .default_value("{}")
-                .multi_line(true)
-                .rows(8)
         });
         let method_options: Vec<String> = RequestMethod::all()
             .iter()
@@ -378,8 +375,7 @@ impl RequestPanel {
         // Folder-detail editors.
         let folder_name = cx.new(|cx| InputState::new(window, cx).placeholder("目录名称"));
         let folder_desc = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .rows(4)
                 .placeholder("目录描述（可选）：说明该目录下接口的用途、归属模块等")
         });
@@ -466,22 +462,22 @@ impl RequestPanel {
         let auth_target_sub = cx.subscribe(&panel.auth_target_select, Self::on_auth_change);
         let mut subs = vec![sub, bt_sub, auth_type_sub, auth_target_sub];
         // Subscribe to each input's blur to commit edits back to the model.
-        subs.push(cx.subscribe(&panel.url.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.name.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.body_editor.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.pre_script_editor.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.tests_editor.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.mock_status_input.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.mock_delay_input.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.mock_body_editor.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.mock_match_path_input.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.auth_token.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.auth_username.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.auth_password.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.auth_key.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.auth_value.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.folder_name.clone(), Self::on_input_blur));
-        subs.push(cx.subscribe(&panel.folder_desc.clone(), Self::on_input_blur));
+        subs.push(cx.subscribe(&panel.url.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.name.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.body_editor.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.pre_script_editor.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.tests_editor.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.mock_status_input.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.mock_delay_input.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.mock_body_editor.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.mock_match_path_input.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.auth_token.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.auth_username.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.auth_password.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.auth_key.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.auth_value.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.folder_name.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
+        subs.push(cx.subscribe(&panel.folder_desc.clone(), |this, _, ev: &InputEvent, cx| this.on_input_blur(ev, cx)));
         let mut panel = panel;
         panel._subs = subs;
         panel.load_active_request(window, cx);
@@ -567,12 +563,7 @@ impl RequestPanel {
     /// On input change/blur, commit the editors back into the active model
     /// (request or folder) so edits apply live (name/path/etc. update in the
     /// tree and lists as you type). Saving is debounced inside notify_edited.
-    pub(super) fn on_input_blur(
-        &mut self,
-        _src: Entity<InputState>,
-        ev: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn on_input_blur(&mut self, ev: &InputEvent, cx: &mut Context<Self>) {
         if matches!(ev, InputEvent::Blur | InputEvent::Change) {
             // If a folder is selected, commit the folder editors; otherwise
             // commit the request editors.
@@ -586,7 +577,7 @@ impl RequestPanel {
 
     /// All KV row `value` InputState entities across every KV table the panel
     /// owns. Used to (re)subscribe for focus-driven value expansion.
-    fn collect_kv_value_entities(&self) -> Vec<Entity<InputState>> {
+    fn collect_kv_value_entities(&self) -> Vec<Entity<EditorState>> {
         let mut v = Vec::new();
         for rows in [
             &self.params_rows,
@@ -621,7 +612,7 @@ impl RequestPanel {
         }
         let subs = ents
             .into_iter()
-            .map(|e| cx.subscribe(&e, Self::on_kv_value_focus))
+            .map(|e| cx.subscribe(&e, |this, _, ev: &InputEvent, cx| this.on_kv_value_focus(ev, cx)))
             .collect();
         self.kv_focus_subs = subs;
         self.kv_focus_ids = new_ids;
@@ -629,12 +620,7 @@ impl RequestPanel {
 
     /// Focus/Blur on a KV value input: just trigger a re-render so each row's
     /// height is recomputed from its current focus state.
-    fn on_kv_value_focus(
-        &mut self,
-        _src: Entity<InputState>,
-        _ev: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_kv_value_focus(&mut self, _ev: &InputEvent, cx: &mut Context<Self>) {
         cx.notify();
     }
 
@@ -663,17 +649,26 @@ impl RequestPanel {
             self.query_tab_ingested = true;
             self.ingest_url_query_into_params(window, cx);
         }
-        let ents: Vec<Entity<InputState>> = self
+        // Keys are single-line InputState, values are EditorState — subscribe
+        // each kind separately; both just re-render.
+        let new_ids: HashSet<gpui::EntityId> = self
             .params_rows
             .iter()
-            .flat_map(|r| [r.key.clone(), r.value.clone()])
+            .flat_map(|r| [r.key.entity_id(), r.value.entity_id()])
             .collect();
-        let new_ids: HashSet<gpui::EntityId> = ents.iter().map(|e| e.entity_id()).collect();
         if new_ids != self.kv_query_sync_ids {
-            self.kv_query_sync_subs = ents
-                .into_iter()
-                .map(|e| cx.subscribe(&e, Self::on_kv_query_change))
-                .collect();
+            let mut subs = Vec::with_capacity(self.params_rows.len() * 2);
+            for r in &self.params_rows {
+                subs.push(cx.subscribe(
+                    &r.key,
+                    |this, _, ev: &InputEvent, cx| this.on_kv_query_change(ev, cx),
+                ));
+                subs.push(cx.subscribe(
+                    &r.value,
+                    |this, _, ev: &InputEvent, cx| this.on_kv_query_change(ev, cx),
+                ));
+            }
+            self.kv_query_sync_subs = subs;
             self.kv_query_sync_ids = new_ids;
         }
         // Idempotent: skips `set_value` when the input already shows exactly
@@ -683,12 +678,7 @@ impl RequestPanel {
 
     /// Any edit in the params table just re-renders; `reconcile_kv_query_sync`
     /// recomposes the URL bar from the fresh rows on the next frame.
-    fn on_kv_query_change(
-        &mut self,
-        _src: Entity<InputState>,
-        _ev: &InputEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_kv_query_change(&mut self, _ev: &InputEvent, cx: &mut Context<Self>) {
         cx.notify();
     }
 

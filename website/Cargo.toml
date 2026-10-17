@@ -7,8 +7,8 @@ license = "AGPL-3.0"
 publish = false
 
 # Independent crate — deliberately NOT a member of the root workspace.
-# The main `verve` crate pulls in GPUI + heavy native bindings (pdfium,
-# tree-sitter, …); building the website against those would be wasteful.
+# The main `verve` crate pulls in GPUI + heavy native bindings (tree-sitter,
+# …); building the website against those would be wasteful.
 # `cargo-leptos` builds this crate on its own.
 
 [dependencies]

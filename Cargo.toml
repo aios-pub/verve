@@ -40,12 +40,8 @@ copyright = "2026, Verve"
 depends = ["libssl3 | libssl1.1", "libc6 (>= 2.31)"]
 section = "devel"
 priority = "optional"
-# Ship the bundled libpdfium.so under /usr/lib/verve/; a wrapper script at
-# /usr/bin/verve sets LD_LIBRARY_PATH before exec-ing the real binary so that
-# the $ORIGIN rpath baked into the binary is not the only search path.
 assets = [
     ["target/release/verve", "usr/bin/", "755"],
-    ["target/release/libpdfium.so", "usr/lib/verve/", "644"],
     ["assets/icons/verve.png", "usr/share/icons/hicolor/512x512/apps/verve.png", "644"],
     ["assets/verve.desktop", "usr/share/applications/verve.desktop", "644"],
 ]
@@ -73,27 +69,36 @@ name = "verve-server"
 path = "src/bin/verve_server.rs"
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = [
+# GPUI comes from the `gpui-pre-*` snapshot crates published on crates.io by
+# the gpui-kit project (snapshots of zed's gpui, lib names unchanged: gpui,
+# gpui_platform, http_client, reqwest_client). The =0.3.9 pin MUST match the
+# snapshot gpui-component 0.7.3 was built against — a caret range would let a
+# future snapshot break the build (see gpui-kit's script/check-gpui-pin.ts).
+# Bump all four together, and together with gpui-component below.
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
-# gpui-component is pulled from our fork (lijingrs/gpui-component). The
-# `verve-fork-v2` branch is based on the rev that carries the patches verve
-# compiles against (drag-and-drop list/tree APIs) and locks gpui to the same
-# rev as the direct dependency above (1d217ee). Patches not yet in upstream:
-#   - ListItem::on_drag/on_drop/on_drag_hover (drag-and-drop for list/tree rows)
-#   - TreeState::ensure_visible/index_of (scroll-to-node)
-#   - TitleBar: skip drawn min/max/close under Linux server-side decorations
-#     (prevents double close buttons when the WM provides its own title bar)
-# Upstream PRs: https://github.com/longbridge/gpui-component/pull/2553 (#2554)
-# When those merge, switch back to the upstream repo.
-gpui-component = { git = "https://github.com/lijingrs/gpui-component", rev = "0ea2ca91" }
-gpui-component-assets = { git = "https://github.com/lijingrs/gpui-component", rev = "0ea2ca91" }
-reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.9" }
+http_client = { package = "gpui-pre-http-client", version = "=0.3.9" }
+# gpui-component 0.7.3 from upstream (longbridge/gpui-kit repo, tag v0.7.3).
+# The three verve-fork patches are now covered upstream / app-side:
+#   - ListItem drag-and-drop: ListItem implements InteractiveElement and
+#     StatefulInteractiveElement (delegating to its base div), so native gpui
+#     on_drag/on_drop/on_drag_move work directly on ListItem rows.
+#   - TreeState::ensure_visible -> TreeState::reveal_item / index_of +
+#     scroll_to_item (moved to gpui-base, re-exported via gpui_component::tree).
+#   - TitleBar under Linux server-side decorations: upstream now skips drawn
+#     window controls when the WM draws its own (title_bar.rs).
+# Note: on deepin/kwin, vanilla gpui's X11 CSD probe (compositor AND
+# _GTK_FRAME_EXTENTS) downgrades to server decorations; the old amosgeek/zed
+# fork forced client-side there. With 0.7.3's TitleBar that yields a single
+# WM-drawn title bar (no double controls), just not the app-drawn chrome.
+gpui-component = "0.7.3"
+gpui-kit-assets = "0.7.3"
 futures = "0.3"
 url = "2"
 # http types (Uri) for the kube K8s client Config.
@@ -116,11 +121,9 @@ anyhow = "1"
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
-# Recursive directory walker for the relocate module's directory-size scan +
-# cancel-aware recursive copy.
+# Recursive directory walker; the SFTP module uses it to enumerate skipped
+# entries when uploading a local directory.
 walkdir = "2.5"
-# Optional SHA-256 integrity verification for migrated directories.
-sha2 = "0.10"
 # QR code generation for the document-sharing "二维码" share method (pure Rust).
 qrcode = "0.14"
 regex = "1"
@@ -136,9 +139,11 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 # CompletionProvider (variable hints in kv tables) — versions aligned with gpui-component.
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
-rust-i18n = "=4.0.0"
-# Pin to match rust-i18n 4.0.0's non-feature-gated try_load_locales API.
-rust-i18n-support = "=4.0.0"
+# 4.2 required by gpui-component 0.7.3 (workspace uses rust-i18n ^4.2.0);
+# keep verve and gpui-component on one copy. Verve only uses the i18n! macro
+# and set_locale, both stable across 4.x.
+rust-i18n = "=4.2.4"
+rust-i18n-support = "=4.2.4"
 
 # WebSocket (real) + a dedicated tokio runtime for it.
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
@@ -181,9 +186,7 @@ rfd = "0.15"
 # CJK glyphs render via the OS-installed system fonts (macOS PingFang, Windows
 # YaHei, Linux Noto CJK); see `notes_pdf.rs`.
 mdxport = { version = "0.3", default-features = false }
-# PDF rendering via Pdfium (bundled native library, extracted at build time)
-pdfium-render = "0.8"
-# Pixel-buffer / image types for handing rendered PDF pages to GPUI.
+# Pixel-buffer / image decoding for AI-panel attachments and captured images.
 image = "0.25"
 # Semantic version comparison for the auto-update check.
 semver = "1"
@@ -366,19 +369,7 @@ winapi = { version = "0.3", features = [
     "synchapi",
 ] }
 
-# gpui is patched via our fork (amosgeek/zed). The `verve-force-csd` branch is
-# 1d217ee (the rev pinned above) plus one commit, "gpui_linux(x11): require
-# only a compositor for client-side decorations" (a50e7d671f):
-#   - deepin's kwin never lists _GTK_FRAME_EXTENTS in _NET_SUPPORTED, so
-#     gpui's X11 probe downgraded WindowDecorations::Client to Server and the
-#     WM stacked its own title bar ("Verve") on top of the app's drawn title
-#     bar. CSD works fine there (Motif undecorated hint + app-drawn
-#     shadow/resize), so the probe now only requires a compositor.
-# All four crates below must point at the same fork rev: they share one
-# source tree, and patching only some of them would pull two copies of the
-# zed workspace into the graph.
-[patch."https://github.com/zed-industries/zed"]
-gpui = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-gpui_platform = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-reqwest_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-http_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
+# gpuiPlatform/gpui crates above are versioned snapshots on crates.io, so the
+# old [patch."https://github.com/zed-industries/zed"] section (amosgeek/zed
+# fork, X11 client-side-decoration probe fix) is gone. See the gpui-component
+# comment above for the deepin/kwin note.

@@ -16,7 +16,7 @@ hero:
   badge: "Rust + GPUI · 原生一体化 · 非 Electron"
   title: "开发者所需的"
   title_accent: "一体化原生工作台"
-  subtitle: "Verve 把接口调试、抓包，SSH 终端与 SFTP、Docker 与 Kubernetes 日志查看及 shell exec，压测与自动化测试、Mock、Markdown 笔记与独立编辑器、PDF、磁盘迁移，融为一个由 GPU 渲染的原生窗口——秒级启动、内存不到 100MB，告别 Electron 臃肿。"
+  subtitle: "Verve 把接口调试、抓包，SSH 终端与 SFTP、Docker 与 Kubernetes 日志查看及 shell exec，压测与自动化测试、Mock、Markdown 笔记与独立编辑器，融为一个由 GPU 渲染的原生窗口——秒级启动、内存不到 100MB，告别 Electron 臃肿。"
   cta_download: "免费下载"
   cta_features: "查看功能"
   platform_macos: "macOS"
@@ -74,7 +74,7 @@ pillars:
   notes: "笔记"
   notes_d: "Markdown 块编辑器、笔记树（文件夹/置顶/标签）、实时预览画布，导出 PDF。"
   mdeditor: "Markdown 编辑器"
-  mdeditor_d: "独立 .md 文件编辑器（多标签，Finder 双击 / verve file.md），替代 MarkText；内置 PDF 查看与批注。"
+  mdeditor_d: "独立 .md 文件编辑器（多标签，Finder 双击 / verve file.md），替代 MarkText。"
   hosts: "Hosts"
   hosts_d: "管理 Hosts 配置组，无需改动系统文件。"
   json: "JSON"
@@ -84,7 +84,6 @@ pillars:
 features:
   knowledge_title: "知识工具"
   testing_title: "测试与云端"
-  relocate_title: "系统工具"
   cluster_title: "容器与集群观测"
   server_triage_note: "聚焦日常排障工作流——查看、读日志、exec 进运行中的目标，不是完整的集群生命周期管理工具。"
   ssh_d: "面向服务器的真实终端，具备专业 SSH 客户端应有的协议与安全能力。"
@@ -92,8 +91,6 @@ features:
   k8s_d: "查看 Pod 与命名空间、读日志、exec 与端口转发，无需离开应用。"
   sftp_d: "基于已认证的 SSH 会话浏览与传输文件，终端内支持 Zmodem。"
   md_d: "写笔记、编辑 Markdown 文件——块编辑器、笔记树与 PDF 导出，一站式。"
-  pdf_d: "基于 Pdfium 原生查看与批注 PDF，替代独立 PDF 编辑器。"
-  relocate_d: "通过符号链接把大目录迁移到外置 NVMe 硬盘，释放内置 SSD 空间，全程可回滚。"
 
 # ---- 版本 ---------------------------------------------------------------
 editions:
@@ -127,7 +124,6 @@ compare:
   r_notes: "Markdown 笔记（块编辑器 + PDF 导出）"
   r_mdeditor: "独立 Markdown 文件编辑器"
   r_server: "自托管 verve-server"
-  r_relocate: "磁盘迁移（系统工具）"
 
 # ---- 下载 ---------------------------------------------------------------
 download:

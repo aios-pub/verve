@@ -56,7 +56,7 @@ impl Editor {
             if !self.show_drop_replace_dialog {
                 self.drop_replace_restore_focus = self.document.focused_block_entity_id(window, cx);
                 self.show_drop_replace_dialog = true;
-                window.blur();
+                window.blur(cx);
             }
             cx.notify();
             return;

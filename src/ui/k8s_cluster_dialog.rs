@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::{ActiveTheme, Selectable as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 
@@ -83,15 +83,15 @@ pub struct K8sClusterDialogState {
     /// Map from select label -> ssh host id (built on construction).
     pub ssh_label_to_id: HashMap<String, String>,
     // --- Tab 1: Import kubeconfig ---
-    pub kubeconfig_text: Entity<InputState>,
+    pub kubeconfig_text: Entity<TextareaState>,
     pub parsed_contexts: Vec<KubeconfigContextInfo>,
     pub selected_context: Option<usize>,
     // --- Tab 2: Manual entry ---
     pub server: Entity<InputState>,
     pub auth_kind: AuthKind,
     pub token: Entity<InputState>,
-    pub cert_data: Entity<InputState>,
-    pub key_data: Entity<InputState>,
+    pub cert_data: Entity<TextareaState>,
+    pub key_data: Entity<TextareaState>,
     pub username: Entity<InputState>,
     pub password: Entity<InputState>,
     /// Validation error message (displayed at top of form when non-empty).
@@ -195,8 +195,7 @@ impl K8sClusterDialogState {
             s
         });
         let cert_data = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
-                .multi_line(true)
+            let mut s = TextareaState::new(window, cx)
                 .placeholder("base64 编码的 PEM 证书数据");
             if !init_cert.is_empty() {
                 s.set_value(&init_cert, window, cx);
@@ -204,8 +203,7 @@ impl K8sClusterDialogState {
             s
         });
         let key_data = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
-                .multi_line(true)
+            let mut s = TextareaState::new(window, cx)
                 .placeholder("base64 编码的 PEM 私钥数据");
             if !init_key.is_empty() {
                 s.set_value(&init_key, window, cx);
@@ -227,8 +225,7 @@ impl K8sClusterDialogState {
             s
         });
         let kubeconfig_text = cx.new(|cx| {
-            let mut s = InputState::new(window, cx)
-                .multi_line(true)
+            let mut s = TextareaState::new(window, cx)
                 .placeholder("粘贴 kubeconfig YAML 内容，或点击\"选择文件\"按钮导入");
             // If editing and has raw kubeconfig, preload it
             if let Some(e) = &existing {
@@ -518,7 +515,7 @@ pub fn open_dialog<F, G>(
                                 v_flex()
                                     .gap_1()
                                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("KubeConfig YAML"))
-                                    .child(Input::new(&s.kubeconfig_text).small().h(px(140.)))
+                                    .child(Textarea::new(&s.kubeconfig_text).small().h(px(140.)))
                                     .child(div().text_xs().text_color(muted).child("粘贴 kubeconfig YAML 内容或点击\"选择文件\"导入。选择文件导入后会自动解析；粘贴 YAML 后可点击\"解析\"列出可用 Context"))
                             );
 
@@ -843,10 +840,10 @@ pub fn open_dialog<F, G>(
                                 .when(auth_kind == AuthKind::ClientCert, |col| {
                                     col.child(v_flex().gap_1()
                                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Client Certificate Data (base64 PEM) *"))
-                                        .child(Input::new(&s.cert_data).small().h(px(70.))))
+                                        .child(Textarea::new(&s.cert_data).small().h(px(70.))))
                                        .child(v_flex().gap_1()
                                         .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Client Key Data (base64 PEM) *"))
-                                        .child(Input::new(&s.key_data).small().h(px(70.))))
+                                        .child(Textarea::new(&s.key_data).small().h(px(70.))))
                                 })
                                 .when(auth_kind == AuthKind::BasicAuth, |col| {
                                     col.child(h_flex().gap_2()

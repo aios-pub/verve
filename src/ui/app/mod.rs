@@ -105,8 +105,8 @@ pub fn rail_slot_keybindings(modifier: &str) -> Vec<KeyBinding> {
         .collect()
 }
 use crate::assets::{
-    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
-    K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
+    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, HISTORY, IMPORT, K8S as K8S_ICON,
+    KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
 };
 use gpui_component::Size::Medium;
 use gpui_component::select::{SelectEvent, SelectState};
@@ -137,11 +137,9 @@ use crate::ui::k8s_panel::{K8sPanel, View as K8sView};
 use crate::ui::markdown_panel::MarkdownPanel;
 use crate::ui::mock_console_panel::{MockConsoleEvent, MockConsolePanel};
 use crate::ui::notes_panel::NotesPanel;
-use crate::ui::pdf_panel::PdfPanel;
 use crate::ui::project_manage_panel::ProjectManagePanel;
 use crate::ui::project_tree_panel::ProjectTreePanel;
 use crate::ui::proxy_panel::ProxyPanel;
-use crate::ui::relocate_panel::RelocatePanel;
 use crate::ui::request_panel::RequestPanel;
 use crate::ui::response_panel::ResponsePanel;
 use crate::ui::share_dialog;
@@ -201,10 +199,6 @@ pub struct VerveApp {
     pub markdown: Entity<MarkdownPanel>,
     /// JSON formatter / pretty printer panel.
     pub json: Entity<JsonPanel>,
-    /// PDF viewer / editor panel.
-    pub pdf: Entity<PdfPanel>,
-    /// Disk-directory migration panel (relocate).
-    pub relocate: Entity<RelocatePanel>,
     /// Handle of the open help-center window, if any. The rail button and
     /// ⌘/ bring the existing window to the front instead of opening a
     /// duplicate; the handle goes stale when that window is closed, which
@@ -372,10 +366,6 @@ pub enum SideView {
     MarkdownEditor,
     /// JSON formatter / pretty printer with collapsible tree.
     JsonFormat,
-    /// PDF viewer / editor.
-    PdfEditor,
-    /// Disk-directory migration (relocate) to external SSD.
-    Relocate,
 }
 
 impl SideView {
@@ -399,9 +389,7 @@ impl SideView {
         SideView::Proxy,
         SideView::Docker,
         SideView::K8s,
-        SideView::PdfEditor,
         SideView::History,
-        SideView::Relocate,
     ];
 
     /// The commonly-used views with dedicated rail-switch shortcuts
@@ -433,8 +421,6 @@ impl SideView {
             SideView::Notes => "Notes",
             SideView::MarkdownEditor => "MarkdownEditor",
             SideView::JsonFormat => "JsonFormat",
-            SideView::PdfEditor => "PdfEditor",
-            SideView::Relocate => "Relocate",
         }
     }
 
@@ -455,8 +441,6 @@ impl SideView {
             "Notes" => SideView::Notes,
             "MarkdownEditor" => SideView::MarkdownEditor,
             "JsonFormat" => SideView::JsonFormat,
-            "PdfEditor" => SideView::PdfEditor,
-            "Relocate" => SideView::Relocate,
             _ => SideView::Api,
         }
     }
@@ -479,8 +463,6 @@ impl SideView {
             SideView::Notes => rust_i18n::t!("view.notes").to_string(),
             SideView::MarkdownEditor => rust_i18n::t!("view.markdown_editor").to_string(),
             SideView::JsonFormat => rust_i18n::t!("view.json_format").to_string(),
-            SideView::PdfEditor => rust_i18n::t!("view.pdf_editor").to_string(),
-            SideView::Relocate => "磁盘迁移".to_string(),
         }
     }
 }
@@ -661,12 +643,8 @@ impl Render for VerveApp {
         if let Some((scope, target_id, target_name)) = self.pending_share.take() {
             self.open_share_dialog(scope, target_id, target_name, _window, cx);
         }
-        // Fetch the overlay layers BEFORE building the rest of the tree. The
-        // gpui-component Root does not auto-render these in its own render();
-        // the consumer must attach them so dialogs/sheets/notifications paint.
-        let sheet_layer = gpui_component::Root::render_sheet_layer(_window, cx);
-        let dialog_layer = gpui_component::Root::render_dialog_layer(_window, cx);
-        let notification_layer = gpui_component::Root::render_notification_layer(_window, cx);
+        // Overlay layers (dialogs/sheets/notifications) are mounted by the
+        // gpui-component Root itself since 0.7.0 — no consumer wiring needed.
 
         let theme = cx.theme().clone();
         let show_console = self.show_console;
@@ -720,8 +698,6 @@ impl Render for VerveApp {
             | SideView::Notes
             | SideView::MarkdownEditor
             | SideView::JsonFormat
-            | SideView::PdfEditor
-            | SideView::Relocate
             | SideView::Mock => {
                 tree.into_any_element() // unused (exclusive branch)
             }
@@ -800,8 +776,6 @@ impl Render for VerveApp {
                 | SideView::Notes
                 | SideView::MarkdownEditor
                 | SideView::JsonFormat
-                | SideView::PdfEditor
-                | SideView::Relocate
         );
 
         // Exclusive views: rail + title bar visible, body taken over by the panel.
@@ -819,8 +793,6 @@ impl Render for VerveApp {
                 | SideView::Notes
                 | SideView::MarkdownEditor
                 | SideView::JsonFormat
-                | SideView::PdfEditor
-                | SideView::Relocate
                 | SideView::Mock
         );
 
@@ -879,8 +851,6 @@ impl Render for VerveApp {
                             SideView::Notes => self.notes.clone().into_any_element(),
                             SideView::MarkdownEditor => self.markdown.clone().into_any_element(),
                             SideView::JsonFormat => self.json.clone().into_any_element(),
-                            SideView::PdfEditor => self.pdf.clone().into_any_element(),
-                            SideView::Relocate => self.relocate.clone().into_any_element(),
                             SideView::Mock => self.mock_console.clone().into_any_element(),
                             _ => div().into_any_element(),
                         };
@@ -922,13 +892,9 @@ impl Render for VerveApp {
                         )
                     }),
             )
-            // Overlay layers: dialogs, sheets, notifications. MUST be attached
-            // (the gpui-component Root doesn't auto-render them). Wrapped in a
-            // relative container so the deferred/anchored overlays position
-            // correctly over the whole window.
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
+            // Overlay layers are Root-owned since gpui-component 0.7.0; the
+            // relative container is kept for the other window-level overlays
+            // below (AI panel, editor toolbar dropdown).
             // Floating AI assistant panel (renders nothing when closed).
             .child(self.ai.clone())
             // Editor toolbar dropdown overlay (rendered at root so the title

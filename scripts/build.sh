@@ -217,26 +217,8 @@ build_macos() {
         echo "⚠️  assets/macos/Info.plist not found — skipping document-type injection"
     fi
 
-    # ── Bundle libpdfium.dylib next to the binary inside the .app ───────────
-    # cargo-bundle does not automatically collect dylibs that the binary links
-    # via @rpath; build.rs only copies libpdfium.dylib to target/release/.
-    # Copy it into Contents/MacOS/ (same directory as the verve executable) so
-    # the @loader_path/ rpath can resolve it at runtime.
-    MACOS_DIR="$APP_DIR/Contents/MacOS"
-    PDFIUM_SRC="$TARGET_DIR/release/libpdfium.dylib"
-    if [ -f "$PDFIUM_SRC" ]; then
-        cp "$PDFIUM_SRC" "$MACOS_DIR/libpdfium.dylib"
-        # Remove quarantine + ad-hoc sign the bundled dylib so Gatekeeper is
-        # happy when the .app is launched after being downloaded / unsigned.
-        xattr -d com.apple.quarantine "$MACOS_DIR/libpdfium.dylib" 2>/dev/null || true
-        codesign --force --sign - "$MACOS_DIR/libpdfium.dylib" 2>/dev/null || true
-        echo "✅ Bundled libpdfium.dylib into Contents/MacOS/"
-    else
-        echo "⚠️  libpdfium.dylib not found at $PDFIUM_SRC"
-    fi
-
-    # Re-sign the whole .app ad-hoc so the updated bundle contents (added
-    # dylib) don't invalidate any existing signature.
+    # Re-sign the whole .app ad-hoc so the updated bundle contents (injected
+    # plist) don't invalidate any existing signature.
     codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
 
     # Mirror the finished .app back into the project-local target/ so users
@@ -352,12 +334,6 @@ build_linux() {
 
     build_release ""
 
-    # Make sure libpdfium.so sits next to the binary in the target dir.
-    # (build.rs copies it, but verify for safety.)
-    if [ ! -f "$TARGET_DIR/release/libpdfium.so" ]; then
-        echo "⚠️  libpdfium.so not found in $TARGET_DIR/release/"
-    fi
-
     # Build .deb
     if cargo install --list 2>/dev/null | grep -q cargo-deb; then
         echo "📦 Creating .deb package..."
@@ -369,10 +345,9 @@ build_linux() {
         echo "⚠️  cargo-deb not installed. Install with: cargo install cargo-deb"
     fi
 
-    # Copy binary + libpdfium + icon + desktop entry for a portable tarball / manual install.
+    # Copy binary + icon + desktop entry for a portable tarball / manual install.
     mkdir -p "$TARGET_DIR/release/dist"
     cp "$TARGET_DIR/release/verve" "$TARGET_DIR/release/dist/"
-    cp "$TARGET_DIR/release/libpdfium.so" "$TARGET_DIR/release/dist/" 2>/dev/null || true
     cp "$PROJECT_DIR/assets/icons/verve.png" "$TARGET_DIR/release/dist/"
     cp "$PROJECT_DIR/assets/verve.desktop" "$TARGET_DIR/release/dist/"
     # Include install script for convenience.
@@ -381,10 +356,6 @@ build_linux() {
 set -e
 cd "$(dirname "$0")"
 sudo install -m 755 verve /usr/bin/verve
-sudo install -m 644 libpdfium.so /usr/lib/verve/libpdfium.so 2>/dev/null || {
-    sudo mkdir -p /usr/lib/verve
-    sudo install -m 644 libpdfium.so /usr/lib/verve/libpdfium.so
-}
 sudo install -m 644 verve.png /usr/share/icons/hicolor/512x512/apps/verve.png
 sudo install -m 644 verve.desktop /usr/share/applications/verve.desktop
 echo "✅ Verve installed to /usr/bin/verve"
@@ -393,7 +364,7 @@ EOF
 
     # Portable tar.gz
     tar -C "$TARGET_DIR/release/dist" -czf "$TARGET_DIR/release/Verve-$VERSION-linux-x86_64.tar.gz" \
-        verve libpdfium.so verve.png verve.desktop install.sh 2>/dev/null || \
+        verve verve.png verve.desktop install.sh 2>/dev/null || \
         echo "⚠️  tarball creation failed"
 
     # Mirror dist/ into project-local target/ if using custom target dir.
@@ -459,23 +430,17 @@ build_windows() {
         echo "ℹ️  Skipping .msi (requires native Windows + WiX toolchain)."
     fi
 
-    # Collect binary + pdfium.dll + icon into dist/ for a portable zip.
+    # Collect binary + icon into dist/ for a portable zip.
     mkdir -p "$TARGET_DIR/release/dist"
     if [ -f "$BINDIR/verve.exe" ]; then
         cp "$BINDIR/verve.exe" "$TARGET_DIR/release/dist/"
     else
         echo "❌ verve.exe not found at $BINDIR/verve.exe"
     fi
-    # The runtime dll is extracted by build.rs into the same target dir.
-    if [ -f "$BINDIR/pdfium.dll" ]; then
-        cp "$BINDIR/pdfium.dll" "$TARGET_DIR/release/dist/"
-    else
-        echo "⚠️  pdfium.dll not found (PDF rendering will be unavailable)"
-    fi
     cp "$PROJECT_DIR/assets/icons/verve.ico" "$TARGET_DIR/release/dist/"
 
     # Portable zip.
-    (cd "$TARGET_DIR/release/dist" && zip -q "../Verve-$VERSION-windows-x86_64.zip" verve.exe pdfium.dll verve.ico 2>/dev/null) || \
+    (cd "$TARGET_DIR/release/dist" && zip -q "../Verve-$VERSION-windows-x86_64.zip" verve.exe verve.ico 2>/dev/null) || \
         echo "⚠️  zip creation failed (install zip to enable)"
 
     # Mirror back to project-local target/ if using a custom target dir.
@@ -490,7 +455,7 @@ build_windows() {
     fi
 
     echo "✅ Windows build complete (target/release/dist/ + .zip)"
-    echo "   Portable build: target/release/dist/ — copy verve.exe + pdfium.dll together"
+    echo "   Portable build: target/release/dist/"
 }
 
 # ─── Install: copy built .app to /Applications (macOS) ─────────────────────

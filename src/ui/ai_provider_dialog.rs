@@ -6,7 +6,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_component::select::{Select, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Sizable as _, TitleBar,
@@ -38,7 +38,7 @@ pub struct AiProviderDialog {
     base_url: Entity<InputState>,
     model: Entity<InputState>,
     /// All model ids, one per line (multi-line input).
-    models: Entity<InputState>,
+    models: Entity<TextareaState>,
     api_key: Entity<InputState>,
     input_price: Entity<InputState>,
     output_price: Entity<InputState>,
@@ -119,9 +119,8 @@ impl AiProviderDialog {
             })
             .unwrap_or_default();
         let models = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .default_value(models_init)
-                .multi_line(true)
                 .auto_grow(3, 8)
         });
         let key_was_set = draft.as_ref().map(|p| p.api_key_set).unwrap_or(false);
@@ -418,6 +417,13 @@ impl Render for AiProviderDialog {
                 .child(div().text_sm().text_color(muted).child(label.to_string()))
                 .child(Input::new(state).small())
         };
+        // Multi-row field: same layout, renders a Textarea-backed control.
+        let area_field = |state: &Entity<TextareaState>, label: &str| {
+            v_flex()
+                .gap_1()
+                .child(div().text_sm().text_color(muted).child(label.to_string()))
+                .child(Textarea::new(state).small())
+        };
 
         v_flex()
             .size_full()
@@ -447,7 +453,7 @@ impl Render for AiProviderDialog {
                     .child(field(&self.name, "名称"))
                     .child(field(&self.base_url, "Base URL（OpenAI 兼容）"))
                     .child(field(&self.model, "模型（当前使用，对话中可切换）"))
-                    .child(field(&self.models, "模型列表（每行一个；文本/图像/视频模型均可填，切换即时生效）"))
+                    .child(area_field(&self.models, "模型列表（每行一个；文本/图像/视频模型均可填，切换即时生效）"))
                     .child(field(&self.api_key, "API Key（加密存储于本地保险库）"))
                     .child(
                         h_flex()

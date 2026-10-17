@@ -5,8 +5,8 @@
 use super::widgets::vicon;
 use super::{PendingDialog, RailDrag, SideView, VerveApp};
 use crate::assets::{
-    BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, FILE_PDF, HELP, HISTORY, K8S as K8S_ICON, KANBAN,
-    MARKDOWN, NOTEBOOK, SERVER,
+    BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, HELP, HISTORY, K8S as K8S_ICON, KANBAN, MARKDOWN,
+    NOTEBOOK, SERVER,
 };
 use crate::state::AppEvent;
 use gpui::prelude::FluentBuilder as _;
@@ -68,11 +68,9 @@ impl VerveApp {
             SideView::MarkdownEditor => vicon(MARKDOWN),
             SideView::ProjectManage => vicon(KANBAN),
             SideView::JsonFormat => vicon(BRACES_JSON),
-            SideView::PdfEditor => vicon(FILE_PDF),
             SideView::Mock => IconName::Cpu.into(),
             SideView::History => vicon(HISTORY),
             SideView::Ssh => IconName::SquareTerminal.into(),
-            SideView::Relocate => IconName::HardDrive.into(),
         }
     }
 

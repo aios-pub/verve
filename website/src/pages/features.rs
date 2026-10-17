@@ -122,7 +122,7 @@ pub fn Features() -> impl IntoView {
                 </h3>
             </div>
 
-            <div class="mt-6 grid gap-5 lg:grid-cols-2">
+            <div class="mt-6">
                 <FeatureGroup pro=true
                     title="Markdown Editor"
                     description=t_string!(i18n, features.md_d)
@@ -134,17 +134,6 @@ pub fn Features() -> impl IntoView {
                         "Standalone .md file editor (multi-tab)",
                         "Open via Finder double-click or `verve file.md`",
                         "Replaces MarkText-style tools",
-                    ]}
-                />
-                <FeatureGroup pro=true
-                    title="PDF Viewer & Editor"
-                    description=t_string!(i18n, features.pdf_d)
-                    screenshot=Some("pdf.png")
-                    specs={vec![
-                        "Pdfium-powered native rendering",
-                        "Text / image / erase annotations",
-                        "Page insert / delete / reorder",
-                        "Replaces a standalone PDF editor",
                     ]}
                 />
             </div>
@@ -168,30 +157,6 @@ pub fn Features() -> impl IntoView {
                 <FeatureCard pro=true icon="" title="verve-server"
                     description="Self-host cloud sharing: push a project → public /s/<id> URL, /admin Web UI."
                     screenshot=None />
-            </div>
-
-            // ── Disk relocation (system tool) ────────────────────────────
-            <div class="mt-20">
-                <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-bolt-300">{move || t!(i18n, features.relocate_title)}</span>
-                </h3>
-            </div>
-
-            <div class="mt-6">
-                <FeatureGroup pro=true
-                    title="Disk Relocation"
-                    description=t_string!(i18n, features.relocate_d)
-                    screenshot=None
-                    specs={vec![
-                        "macOS — internal SSD ⇋ Thunderbolt/USB4 external NVMe",
-                        "Auto-scan & smart-cluster large directories",
-                        "Absolute-path symlinks (apps stay unaware)",
-                        "Custom directories + auto-grouped tasks",
-                        "Pause / resume, live speed & progress",
-                        "Full transactional rollback (write-back + cleanup)",
-                        "External-disk detection & space pre-check",
-                    ]}
-                />
             </div>
 
             // ── CTA ──────────────────────────────────────────────────────

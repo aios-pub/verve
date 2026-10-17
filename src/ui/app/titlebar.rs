@@ -1,13 +1,13 @@
 //! All view title bars: the API workbench bar (workspace/project/env
 //! switchers, sync, import/export, update, language), the shared rail
 //! toggle / update / export / language pickers, and the per-view bars
-//! (SSH, Docker, K8s, Notes, JSON, Relocate, PDF, Markdown, AutoTest).
+//! (SSH, Docker, K8s, Notes, JSON, Markdown, AutoTest).
 
 use super::widgets::{menu_item, menu_separator, vicon};
 use super::{PendingDialog, SideView, VerveApp};
 use crate::assets::{
-    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, FILE_PDF, HISTORY, IMPORT,
-    K8S as K8S_ICON, KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
+    BRACES, BRACES_JSON, DOCKER as DOCKER_ICON, DOCS, EXPORT, HISTORY, IMPORT, K8S as K8S_ICON,
+    KANBAN, MARKDOWN, NOTEBOOK, REFRESH_CW, SAVE, SAVE_AS, SERVER, SHARE,
 };
 use crate::share::models::ShareScope;
 use crate::state::{AppEvent, AppState};
@@ -51,9 +51,7 @@ impl VerveApp {
             SideView::Notes => self.render_notes_title_bar(cx).into_any_element(),
             SideView::MarkdownEditor => self.render_markdown_title_bar(cx).into_any_element(),
             SideView::JsonFormat => self.render_json_title_bar(cx).into_any_element(),
-            SideView::PdfEditor => self.render_pdf_title_bar(cx).into_any_element(),
             SideView::AutoTest => self.render_autotest_title_bar(cx).into_any_element(),
-            SideView::Relocate => self.render_relocate_title_bar(cx).into_any_element(),
             _ => self.render_api_title_bar(cx).into_any_element(),
         };
         // The gpui-component TitleBar owns the cross-platform window chrome:
@@ -1478,105 +1476,6 @@ impl VerveApp {
                         })),
                 )
             })
-            .child(self.render_update_button(cx))
-            .child(self.render_lang_picker(cx))
-    }
-
-    /// Relocate title bar: rail toggle + disk icon + title + quick actions.
-    /// The heavy controls live in the panel body; the title bar keeps a light
-    /// summary (target disk + reclaimed space) and a "选择磁盘" shortcut.
-    pub(super) fn render_relocate_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let eng = self.relocate.read(cx).engine.read(cx);
-        let target_label = eng
-            .target_root
-            .as_ref()
-            .map(|p| {
-                p.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "未选择磁盘".to_string());
-        let reclaimed = crate::relocate::types::human_bytes(eng.reclaimed_bytes());
-
-        let relocate = self.relocate.clone();
-
-        h_flex()
-            .h_full()
-            .w_full()
-            .min_w_0()
-            .pr_3()
-            .gap_2()
-            .items_center()
-            .child(self.render_rail_toggle(cx))
-            .child(
-                h_flex()
-                    .gap(px(6.))
-                    .items_center()
-                    .child(div().text_color(theme.primary).child(IconName::HardDrive))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("磁盘迁移"),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .px(px(6.))
-                    .py(px(2.))
-                    .rounded(px(4.))
-                    .bg(theme.accent.opacity(0.18))
-                    .text_color(theme.foreground)
-                    .child(format!("已释放 {}", reclaimed)),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.muted_foreground)
-                    .child(format!("目标：{}", target_label)),
-            )
-            .child(title_bar_control(
-                "relocate-title-rescan-hitbox",
-                Button::new("relocate-title-rescan")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Redo)
-                    .label("重新扫描")
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        relocate.update(cx, |p, cx| p.engine.update(cx, |e, cx| e.scan_async(cx)));
-                    })),
-            ))
-    }
-
-    /// PDF Editor title bar: rail toggle + file icon + title.
-    pub(super) fn render_pdf_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-
-        h_flex()
-            .h_full()
-            .w_full()
-            .min_w_0()
-            .pr_3()
-            .gap_2()
-            .items_center()
-            .child(self.render_rail_toggle(cx))
-            // Icon + title
-            .child(
-                h_flex()
-                    .gap(px(6.))
-                    .items_center()
-                    .child(div().text_color(theme.primary).child(vicon(FILE_PDF)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(rust_i18n::t!("pdf.title").to_string()),
-                    ),
-            )
-            .child(div().flex_1())
             .child(self.render_update_button(cx))
             .child(self.render_lang_picker(cx))
     }

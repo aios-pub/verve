@@ -235,8 +235,6 @@ fn view_desc(view: SideView) -> String {
         SideView::Notes => rust_i18n::t!("help.view_desc.notes"),
         SideView::MarkdownEditor => rust_i18n::t!("help.view_desc.markdowneditor"),
         SideView::JsonFormat => rust_i18n::t!("help.view_desc.jsonformat"),
-        SideView::PdfEditor => rust_i18n::t!("help.view_desc.pdfeditor"),
-        SideView::Relocate => rust_i18n::t!("help.view_desc.relocate"),
     }
     .to_string()
 }
@@ -703,10 +701,6 @@ impl Render for HelpCenter {
         let active = self.active_section;
         let browsing = self.query.trim().is_empty();
 
-        let sheet_layer = gpui_component::Root::render_sheet_layer(window, cx);
-        let dialog_layer = gpui_component::Root::render_dialog_layer(window, cx);
-        let notification_layer = gpui_component::Root::render_notification_layer(window, cx);
-
         // Secondary nav, same look as the settings window.
         let mut nav = v_flex()
             .w(px(160.))
@@ -830,12 +824,6 @@ impl Render for HelpCenter {
                             .child(content),
                     ),
             )
-            // Overlay layers (dialogs/sheets/notifications) must be attached
-            // by the consumer; the help window itself uses none, but keep
-            // them wired for consistency with the settings window.
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }
 

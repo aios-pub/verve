@@ -4017,7 +4017,7 @@ mod tests {
             block.update(cx, |block, _cx| {
                 block.focus_handle.focus(window, _cx);
             });
-            window.draw(cx).clear();
+            window.draw(cx).clear(cx);
         });
         cx.run_until_parked();
 

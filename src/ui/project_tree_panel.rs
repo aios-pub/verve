@@ -909,12 +909,15 @@ fn render_folder_add_overlay(
             .left_0()
             .size_full()
             .bg(gpui::black().opacity(0.3))
-            .on_mouse_down(MouseButton::Left, move |_, _window, cx: &mut App| {
-                let _ = panel_close.update(cx, |this, cx| {
-                    this.folder_add_popover_open = false;
-                    this.pending_folder_add = None;
-                    cx.notify();
-                });
+            .on_mouse_down(MouseButton::Left, {
+                let panel_close = panel_close.clone();
+                move |_, _window, cx: &mut App| {
+                    let _ = panel_close.update(cx, |this, cx| {
+                        this.folder_add_popover_open = false;
+                        this.pending_folder_add = None;
+                        cx.notify();
+                    });
+                }
             })
             .child(
                 v_flex()
@@ -934,9 +937,24 @@ fn render_folder_add_overlay(
                             .border_1()
                             .border_color(theme.border)
                             .shadow_md()
+                            .debug_selector(|| "folder-add-card".into())
                             // Stop propagation so clicking the card doesn't close.
                             .on_mouse_down(MouseButton::Left, |_, _window, cx: &mut App| {
                                 cx.stop_propagation();
+                            })
+                            // The dim backdrop only spans this panel, so clicks
+                            // in the main editor area never reach it and the
+                            // picker stayed open. Dismiss on any window-wide
+                            // click outside the card (capture phase).
+                            .on_mouse_down_out({
+                                let panel_close = panel_close.clone();
+                                move |_, _window, cx: &mut App| {
+                                    let _ = panel_close.update(cx, |this, cx| {
+                                        this.folder_add_popover_open = false;
+                                        this.pending_folder_add = None;
+                                        cx.notify();
+                                    });
+                                }
                             })
                             .child(new_request_picker(state, panel, folder_id)),
                     ),
@@ -1020,11 +1038,14 @@ fn render_move_picker_overlay(
             .left_0()
             .size_full()
             .bg(gpui::black().opacity(0.3))
-            .on_mouse_down(MouseButton::Left, move |_, _window, cx: &mut App| {
-                let _ = panel_close.update(cx, |this, cx| {
-                    this.move_picker_node = None;
-                    cx.notify();
-                });
+            .on_mouse_down(MouseButton::Left, {
+                let panel_close = panel_close.clone();
+                move |_, _window, cx: &mut App| {
+                    let _ = panel_close.update(cx, |this, cx| {
+                        this.move_picker_node = None;
+                        cx.notify();
+                    });
+                }
             })
             .child(
                 v_flex()
@@ -1044,9 +1065,22 @@ fn render_move_picker_overlay(
                             .border_1()
                             .border_color(theme.border)
                             .shadow_md()
+                            .debug_selector(|| "move-card".into())
                             // Stop propagation so clicking the card doesn't close.
                             .on_mouse_down(MouseButton::Left, |_, _window, cx: &mut App| {
                                 cx.stop_propagation();
+                            })
+                            // Same panel-scoped-backdrop issue as the
+                            // folder-add picker: dismiss on any window-wide
+                            // click outside the card (capture phase).
+                            .on_mouse_down_out({
+                                let panel_close = panel_close.clone();
+                                move |_, _window, cx: &mut App| {
+                                    let _ = panel_close.update(cx, |this, cx| {
+                                        this.move_picker_node = None;
+                                        cx.notify();
+                                    });
+                                }
                             })
                             .child(
                                 v_flex()
@@ -1457,15 +1491,17 @@ fn picker_card(
         })
 }
 
-/// An import-source card. Clicking runs `on_open` (typically opening the AI
-/// assistant) and closes the dialog. Cards without a flow pass a logging
-/// closure.
+/// An import-source card. Clicking closes the picker that hosts it (the "+"
+/// popover and the folder-add overlay are both panel state; `close_dialog`
+/// would be a no-op for them) and runs `on_open` (typically opening the AI
+/// assistant). Cards without a flow pass a logging closure.
 fn import_card(
     id: &'static str,
     icon_bg: gpui::Hsla,
     icon_label: &'static str,
     title: &'static str,
     full_width: bool,
+    panel: gpui::Entity<ProjectTreePanel>,
     on_open: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
@@ -1483,7 +1519,12 @@ fn import_card(
         .child(proto_icon(icon_bg, icon_label))
         .child(div().text_size(px(12.)).child(title.to_string()))
         .on_click(move |_, window, cx: &mut App| {
-            window.close_dialog(cx);
+            let _ = panel.update(cx, |this, cx| {
+                this.new_popover_open = false;
+                this.folder_add_popover_open = false;
+                this.pending_folder_add = None;
+                cx.notify();
+            });
             on_open(window, cx);
         })
 }
@@ -1665,6 +1706,7 @@ fn new_request_picker(
                         "AI",
                         "AI 智能提取 API 文档",
                         false,
+                        panel.clone(),
                         open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
@@ -1674,6 +1716,7 @@ fn new_request_picker(
                         "{}",
                         "cURL 导入",
                         false,
+                        panel.clone(),
                         open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
@@ -1685,6 +1728,7 @@ fn new_request_picker(
                         "PST",
                         "粘贴接口/文本",
                         false,
+                        panel.clone(),
                         open_ai_extractor(state.clone(), folder_id.clone()),
                     )
                     .into_any_element(),
@@ -1694,6 +1738,7 @@ fn new_request_picker(
                         "IJ",
                         "IDEA 上传",
                         false,
+                        panel.clone(),
                         |_, _| log::info!("导入功能「IDEA 上传」开发中"),
                     )
                     .into_any_element(),
@@ -1705,6 +1750,7 @@ fn new_request_picker(
                         "↓",
                         "其他文件导入",
                         true,
+                        panel.clone(),
                         |_, _| log::info!("导入功能「其他文件导入」开发中"),
                     )
                     .into_any_element(),
@@ -2566,5 +2612,305 @@ mod tests {
         kv.enabled = false;
         let out = build_curl(&r, &std::collections::BTreeMap::new(), &[], &[kv], &[]);
         assert!(!out.contains("request:"), "{out}");
+    }
+}
+
+/// Integration tests (gpui test harness) for the "+" new-request popover.
+/// Replicates the exact controlled-popover wiring from `render()` so the
+/// open/dismiss lifecycle can be exercised headlessly.
+#[cfg(all(test, feature = "wysiwyg-gpui-tests"))]
+mod new_popover_tests {
+    use super::new_request_picker;
+    use super::{render_folder_add_overlay, render_move_picker_overlay};
+    use super::{AppState, ProjectTreePanel};
+    // NOTE: no `use gpui::*` here — gpui re-exports its own `test` attribute
+    // macro at the crate root, and a glob would make the `#[test]` that
+    // `#[gpui::test]` emits resolve back to gpui::test, recursing forever.
+    use gpui::prelude::FluentBuilder as _;
+    use gpui::{
+        App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+        point, px,
+    };
+    use gpui_component::button::{Button, ButtonVariants as _};
+    use gpui_component::popover::Popover;
+    use gpui_component::{IconName, Sizable as _};
+    use crate::state::models::{Project, WorkspaceData};
+
+    struct NewPopoverHarness {
+        panel: gpui::Entity<ProjectTreePanel>,
+        state: gpui::Entity<AppState>,
+    }
+
+    impl gpui::Render for NewPopoverHarness {
+        fn render(&mut self, _: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+            let open = self.panel.read(cx).new_popover_open;
+            let panel = self.panel.clone();
+            let state = self.state.clone();
+            let panel_for_content = self.panel.clone();
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(100.))
+                        .top(px(100.))
+                        .child(
+                            Popover::new("new-request-popover")
+                                .anchor(gpui::Anchor::TopCenter)
+                                .open(open)
+                                .on_open_change(move |open, _, cx: &mut App| {
+                                    let _ = panel.update(cx, |this, cx| {
+                                        this.new_popover_open = *open;
+                                        cx.notify();
+                                    });
+                                })
+                                .trigger(
+                                    Button::new("new-request")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Plus),
+                                )
+                                .p(px(6.))
+                                .max_w(px(460.))
+                                .child(
+                                    div()
+                                        .id("new-pop-content-wrap")
+                                        .debug_selector(|| "new-pop-content".into())
+                                        .child(new_request_picker(
+                                            state,
+                                            panel_for_content,
+                                            None,
+                                        )),
+                                ),
+                        ),
+                )
+        }
+    }
+
+    fn init_test_app(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::GlobalState::init(cx);
+            gpui_component::init(cx);
+            cx.set_global(gpui_component::Theme::default());
+        });
+    }
+
+    fn build_harness(
+        window: &mut Window,
+        cx: &mut Context<NewPopoverHarness>,
+    ) -> NewPopoverHarness {
+        let state = cx.new(|_| AppState {
+            data: WorkspaceData {
+                projects: vec![Project::new("P")],
+                history: Vec::new(),
+                active_project_id: None,
+            },
+            active_project: 0,
+            active_workspace_id: None,
+            selected_request: None,
+            selected_folder: None,
+            open_request_ids: Vec::new(),
+            active_tab_id: None,
+            sending: None,
+            dirty: false,
+            save_timer: None,
+            mock_rules: None,
+            disk_fingerprint: None,
+        });
+        let panel = cx.new(|cx| ProjectTreePanel::new(state.clone(), window, cx));
+        NewPopoverHarness { panel, state }
+    }
+
+    /// Two draw passes let the popup's bounds-capture canvas run its
+    /// first-capture animation-frame dance, mirroring the component's own
+    /// popover tests.
+    fn draw_two_frames(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    #[gpui::test]
+    async fn popover_closes_on_outside_click(cx: &mut TestAppContext) {
+        init_test_app(cx);
+        let (harness, cx) = cx.add_window_view(build_harness);
+        draw_two_frames(cx);
+
+        // The trigger container sits at (100, 100); its small icon button is
+        // ~24px, so the center is (112, 112).
+        cx.simulate_click(point(px(112.), px(112.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("new-pop-content").is_some(),
+            "picker should be open after clicking the + trigger"
+        );
+        assert!(cx.update(|_, cx| harness.read(cx).panel.read(cx).new_popover_open));
+
+        // Click above the surface (the surface hangs below y≈130): outside.
+        cx.simulate_click(point(px(20.), px(20.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("new-pop-content").is_none(),
+            "picker should close on outside click"
+        );
+        assert!(
+            !cx.update(|_, cx| harness.read(cx).panel.read(cx).new_popover_open),
+            "on_open_change(false) must reach the panel state"
+        );
+    }
+
+    #[gpui::test]
+    async fn popover_closes_when_trigger_clicked_again(cx: &mut TestAppContext) {
+        init_test_app(cx);
+        let (harness, cx) = cx.add_window_view(build_harness);
+        draw_two_frames(cx);
+
+        cx.simulate_click(point(px(112.), px(112.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("new-pop-content").is_some());
+
+        // Second click on the same trigger toggles it closed.
+        cx.simulate_click(point(px(112.), px(112.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("new-pop-content").is_none(),
+            "picker should close when the trigger is clicked again"
+        );
+        assert!(!cx.update(|_, cx| harness.read(cx).panel.read(cx).new_popover_open));
+    }
+
+    /// An overlay picker hosted inside a 200x200 "panel" div so clicks beyond
+    /// its bounds simulate clicking into the main editor area. `move_picker`
+    /// selects the 移动至 picker instead of the folder-add one.
+    struct OverlayHarness {
+        panel: gpui::Entity<ProjectTreePanel>,
+        state: gpui::Entity<AppState>,
+        move_picker: bool,
+        _subs: Vec<gpui::Subscription>,
+    }
+
+    impl Render for OverlayHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let (folder_open, move_node) = {
+                let p = self.panel.read(cx);
+                (p.folder_add_popover_open, p.move_picker_node.clone())
+            };
+            let overlay: Option<gpui::AnyElement> = if self.move_picker {
+                move_node.map(|node| {
+                    render_move_picker_overlay(
+                        self.panel.clone(),
+                        self.state.clone(),
+                        node,
+                        cx,
+                    )
+                    .into_any_element()
+                })
+            } else {
+                folder_open.then(|| {
+                    render_folder_add_overlay(
+                        self.panel.clone(),
+                        self.state.clone(),
+                        None,
+                        cx,
+                    )
+                    .into_any_element()
+                })
+            };
+            div().size_full().child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(px(200.))
+                    .h(px(200.))
+                    .children(overlay),
+            )
+        }
+    }
+
+    fn build_overlay_harness(
+        window: &mut Window,
+        cx: &mut Context<OverlayHarness>,
+    ) -> OverlayHarness {
+        let state = cx.new(|_| AppState {
+            data: WorkspaceData {
+                projects: vec![Project::new("P")],
+                history: Vec::new(),
+                active_project_id: None,
+            },
+            active_project: 0,
+            active_workspace_id: None,
+            selected_request: None,
+            selected_folder: None,
+            open_request_ids: Vec::new(),
+            active_tab_id: None,
+            sending: None,
+            dirty: false,
+            save_timer: None,
+            mock_rules: None,
+            disk_fingerprint: None,
+        });
+        let panel = cx.new(|cx| ProjectTreePanel::new(state.clone(), window, cx));
+        let sub = cx.observe(&panel, |_, _, cx| cx.notify());
+        OverlayHarness {
+            panel,
+            state,
+            move_picker: false,
+            _subs: vec![sub],
+        }
+    }
+
+    #[gpui::test]
+    async fn folder_add_overlay_closes_on_click_outside_panel(cx: &mut TestAppContext) {
+        init_test_app(cx);
+        let (harness, cx) = cx.add_window_view(|window, cx| {
+            let harness = build_overlay_harness(window, cx);
+            harness.panel.update(cx, |panel, cx| {
+                panel.folder_add_popover_open = true;
+                panel.pending_folder_add = None;
+                cx.notify();
+            });
+            harness
+        });
+        draw_two_frames(cx);
+        assert!(cx.debug_bounds("folder-add-card").is_some());
+
+        // (400, 400) is far outside the 200x200 panel — previously it missed
+        // the panel-scoped backdrop entirely and the overlay stayed open.
+        cx.simulate_click(point(px(400.), px(400.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("folder-add-card").is_none(),
+            "overlay should close on clicks outside the tree panel"
+        );
+        assert!(!cx.update(|_, cx| {
+            harness.read(cx).panel.read(cx).folder_add_popover_open
+        }));
+    }
+
+    #[gpui::test]
+    async fn move_picker_overlay_closes_on_click_outside_panel(cx: &mut TestAppContext) {
+        init_test_app(cx);
+        let (harness, cx) = cx.add_window_view(|window, cx| {
+            let mut harness = build_overlay_harness(window, cx);
+            harness.move_picker = true;
+            harness.panel.update(cx, |panel, cx| {
+                panel.move_picker_node = Some("request:test".to_string());
+                cx.notify();
+            });
+            harness
+        });
+        draw_two_frames(cx);
+        assert!(cx.debug_bounds("move-card").is_some());
+
+        cx.simulate_click(point(px(400.), px(400.)), Default::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("move-card").is_none(),
+            "move picker should close on clicks outside the tree panel"
+        );
+        assert!(!cx.update(|_, cx| {
+            harness.read(cx).panel.read(cx).move_picker_node.is_some()
+        }));
     }
 }

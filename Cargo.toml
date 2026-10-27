@@ -61,24 +61,36 @@ upgrade-guid = "12345678-1234-1234-1234-123456789012"
 icon = "assets/icons/verve.ico"
 
 [dependencies]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = [
+# GPUI comes from the `gpui-pre-*` snapshot crates published on crates.io by
+# the gpui-kit project (snapshots of zed's gpui, lib names unchanged: gpui,
+# gpui_platform, http_client, reqwest_client). The =0.3.9 pin MUST match the
+# snapshot gpui-component 0.7.3 was built against — a caret range would let a
+# future snapshot break the build (see gpui-kit's script/check-gpui-pin.ts).
+# Bump all four together, and together with gpui-component below.
+gpui = { package = "gpui-pre", version = "=0.3.9" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
-# gpui-component is pulled from our fork (lijingrs/gpui-component) at the
-# `verve-fork` branch. This fork locks gpui to the same rev as the direct
-# dependency above (1d217ee) and adds two patches not yet in upstream:
-#   - ListItem::on_drag/on_drop/on_drag_hover (drag-and-drop for list/tree rows)
-#   - TreeState::ensure_visible/index_of (scroll-to-node)
-# Upstream PRs: https://github.com/longbridge/gpui-component/pull/2553 (#2554)
-# When those merge, switch back to the upstream repo.
-gpui-component = { git = "https://github.com/lijingrs/gpui-component", rev = "0ea2ca91" }
-gpui-component-assets = { git = "https://github.com/lijingrs/gpui-component", rev = "0ea2ca91" }
-reqwest_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-http_client = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.9" }
+http_client = { package = "gpui-pre-http-client", version = "=0.3.9" }
+# gpui-component 0.7.3 from upstream (longbridge/gpui-kit repo, tag v0.7.3).
+# The three verve-fork patches are now covered upstream / app-side:
+#   - ListItem drag-and-drop: ListItem implements InteractiveElement and
+#     StatefulInteractiveElement (delegating to its base div), so native gpui
+#     on_drag/on_drop/on_drag_move work directly on ListItem rows.
+#   - TreeState::ensure_visible -> TreeState::reveal_item / index_of +
+#     scroll_to_item (moved to gpui-base, re-exported via gpui_component::tree).
+#   - TitleBar under Linux server-side decorations: upstream now skips drawn
+#     window controls when the WM draws its own (title_bar.rs).
+# Note: on deepin/kwin, vanilla gpui's X11 CSD probe (compositor AND
+# _GTK_FRAME_EXTENTS) downgrades to server decorations; the old amosgeek/zed
+# fork forced client-side there. With 0.7.3's TitleBar that yields a single
+# WM-drawn title bar (no double controls), just not the app-drawn chrome.
+gpui-component = "0.7.3"
+gpui-kit-assets = "0.7.3"
 futures = "0.3"
 url = "2"
 # Pure-Rust ECMAScript engine for pre/post-request scripts (PRD §5.2 `apt` API).
@@ -93,14 +105,18 @@ qrcode = "0.14"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: JSON 面板按索引删除对象属性时需要 Map 保序（shift_remove）。
+# 该特性此前由依赖传递启用，这里显式声明以免依赖变化后悄悄丢失。
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 smol = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v7"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
-rust-i18n = "=4.0.0"
-# Pin to match rust-i18n 4.0.0's non-feature-gated try_load_locales API.
-rust-i18n-support = "=4.0.0"
+# 4.2 required by gpui-component 0.7.3 (workspace uses rust-i18n ^4.2.0);
+# keep verve and gpui-component on one copy. Verve only uses the i18n! macro
+# and set_locale, both stable across 4.x.
+rust-i18n = "=4.2.4"
+rust-i18n-support = "=4.2.4"
 
 # WebSocket (real) + a dedicated tokio runtime for it.
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
@@ -196,19 +212,7 @@ winapi = { version = "0.3", features = [
     "synchapi",
 ] }
 
-# gpui is patched via our fork (amosgeek/zed). The `verve-force-csd` branch is
-# 1d217ee (the rev pinned above) plus one commit, "gpui_linux(x11): require
-# only a compositor for client-side decorations" (a50e7d671f):
-#   - deepin's kwin never lists _GTK_FRAME_EXTENTS in _NET_SUPPORTED, so
-#     gpui's X11 probe downgraded WindowDecorations::Client to Server and the
-#     WM stacked its own title bar ("Verve") on top of the app's drawn title
-#     bar. CSD works fine there (Motif undecorated hint + app-drawn
-#     shadow/resize), so the probe now only requires a compositor.
-# All four crates below must point at the same fork rev: they share one
-# source tree, and patching only some of them would pull two copies of the
-# zed workspace into the graph.
-[patch."https://github.com/zed-industries/zed"]
-gpui = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-gpui_platform = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-reqwest_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
-http_client = { git = "https://github.com/amosgeek/zed", rev = "a50e7d671fafd357774846f64693443e0b267ea7" }
+# gpuiPlatform/gpui crates above are versioned snapshots on crates.io, so the
+# old [patch."https://github.com/zed-industries/zed"] section (amosgeek/zed
+# fork, X11 client-side-decoration probe fix) is gone. See the gpui-component
+# comment above for the deepin/kwin note.

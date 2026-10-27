@@ -57,7 +57,7 @@ impl CompletionProvider for VarCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        cx: &mut gpui::Context<InputState>,
+        cx: &mut gpui::App,
     ) -> Task<Result<CompletionResponse>> {
         // Text before the cursor. `offset` is the cursor's byte offset (always a
         // UTF-8 boundary); copy to a String and slice with `.get` for boundary
@@ -106,12 +106,7 @@ impl CompletionProvider for VarCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut gpui::Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut gpui::App) -> bool {
         if new_text.is_empty() {
             return false;
         }

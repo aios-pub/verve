@@ -550,12 +550,8 @@ impl Render for VerveApp {
         if let Some((scope, target_id, target_name)) = self.pending_share.take() {
             self.open_share_dialog(scope, target_id, target_name, _window, cx);
         }
-        // Fetch the overlay layers BEFORE building the rest of the tree. The
-        // gpui-component Root does not auto-render these in its own render();
-        // the consumer must attach them so dialogs/sheets/notifications paint.
-        let sheet_layer = gpui_component::Root::render_sheet_layer(_window, cx);
-        let dialog_layer = gpui_component::Root::render_dialog_layer(_window, cx);
-        let notification_layer = gpui_component::Root::render_notification_layer(_window, cx);
+        // Overlay layers (dialogs/sheets/notifications) are mounted by the
+        // gpui-component Root itself since 0.7.0 — no consumer wiring needed.
 
         let theme = cx.theme().clone();
         let show_console = self.show_console;
@@ -748,9 +744,6 @@ impl Render for VerveApp {
             // (the gpui-component Root doesn't auto-render them). Wrapped in a
             // relative container so the deferred/anchored overlays position
             // correctly over the whole window.
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }
 

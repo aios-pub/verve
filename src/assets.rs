@@ -1,14 +1,13 @@
-//! Composite asset source: bundles gpui-component's stock icon set together
-//! with Verve-specific Lucide SVG icons stored under `assets/verve_icons/`.
+//! Composite asset source: bundles gpui-kit's stock icon set together with
+//! Verve-specific Lucide SVG icons stored under `assets/verve_icons/`.
 //!
-//! The built-in [`gpui_component_assets::Assets`] is queried first (it ships
-//! the icon set that backs [`gpui_component::IconName`]). When a requested
-//! path lives under `icons/verve/`, we fall back to the icons embedded by
-//! [`VerveIcons`] — this lets the UI render custom icons without touching the
-//! upstream fork.
+//! The built-in [`gpui_kit_assets::Assets`] is queried first (it ships the
+//! icon catalog behind [`gpui_component::IconName`]). When a requested path
+//! lives under `icons/verve/`, we fall back to the icons embedded by
+//! [`VerveIcons`].
 
 use gpui::{AssetSource, Result, SharedString};
-use gpui_component_assets::Assets as StockAssets;
+use gpui_kit_assets::Assets as StockAssets;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 
@@ -45,7 +44,6 @@ pub const EXPORT: &str = "icons/verve/export.svg";
 pub const SERVER: &str = "icons/verve/server.svg";
 pub const NOTEBOOK: &str = "icons/verve/notebook-pen.svg";
 pub const BRACES_JSON: &str = "icons/verve/braces-json.svg";
-pub const FILE_PDF: &str = "icons/verve/file-pdf.svg";
 pub const MARKDOWN: &str = "icons/verve/markdown.svg";
 pub const SAVE: &str = "icons/verve/save.svg";
 pub const SAVE_AS: &str = "icons/verve/save-as.svg";

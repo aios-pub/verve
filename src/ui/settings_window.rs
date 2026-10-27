@@ -326,9 +326,7 @@ impl Render for SettingsWindow {
         let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let border = theme.border;
-        let sheet_layer = gpui_component::Root::render_sheet_layer(window, cx);
-        let dialog_layer = gpui_component::Root::render_dialog_layer(window, cx);
-        let notification_layer = gpui_component::Root::render_notification_layer(window, cx);
+        // Overlay layers are Root-owned since gpui-component 0.7.0.
 
         let active = self.active_section;
         // Re-read persisted settings on each render so external changes (or
@@ -933,8 +931,5 @@ impl Render for SettingsWindow {
                             }),
                     ),
             )
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }

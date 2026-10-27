@@ -2,7 +2,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, EditorState};
 use gpui_component::{
     ActiveTheme, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -15,11 +15,11 @@ use crate::state::{AppEvent, AppState};
 
 pub struct ResponsePanel {
     pub state: Entity<AppState>,
-    pub body_view: Entity<InputState>,
+    pub body_view: Entity<EditorState>,
     /// Selectable/copyable text of the 实际请求 tab (the request that was
     /// actually sent + the equivalent curl). Reconciled from the model during
     /// render; see [`ResponsePanel::reconcile_actual_request`].
-    pub actual_view: Entity<InputState>,
+    pub actual_view: Entity<EditorState>,
     /// Pretty or raw body rendering.
     pub pretty: bool,
     /// Active response sub-tab.
@@ -30,11 +30,11 @@ pub struct ResponsePanel {
     /// Editable body editor for the (single) success example, rebuilt only
     /// when the example's `saved_at` version changes (e.g. autosave), so user
     /// edits keep focus and aren't clobbered mid-typing.
-    pub success_editor: Option<Entity<InputState>>,
+    pub success_editor: Option<Entity<EditorState>>,
     /// `saved_at` snapshot used to detect external success-example changes.
     pub success_version: Option<String>,
     /// Editable body editors for failure examples, one per example.
-    pub fail_editors: Vec<Entity<InputState>>,
+    pub fail_editors: Vec<Entity<EditorState>>,
     /// `saved_at` snapshots parallel to `fail_editors`, for change detection.
     pub fail_versions: Vec<String>,
     /// The request id the editors were last reconciled against. A change here
@@ -107,13 +107,13 @@ impl RespTab {
 impl ResponsePanel {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let body_view = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .placeholder("响应体将在发送后显示。")
         });
         let actual_view = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("text")
+            EditorState::new(window, cx)
+                .language("text")
                 .placeholder("发送请求后，此处显示实际发送的请求（变量已替换）。")
         });
         let sub = cx.subscribe(&state, Self::on_state_event);
@@ -312,7 +312,7 @@ impl ResponsePanel {
             match &snap.success {
                 Some((body, ver)) => {
                     let editor = cx.new(|cx| {
-                        let mut s = InputState::new(window, cx).code_editor("json");
+                        let mut s = EditorState::new(window, cx).language("json");
                         s.set_value(body, window, cx);
                         s
                     });
@@ -332,7 +332,7 @@ impl ResponsePanel {
                 .iter()
                 .map(|(body, _)| {
                     cx.new(|cx| {
-                        let mut s = InputState::new(window, cx).code_editor("json");
+                        let mut s = EditorState::new(window, cx).language("json");
                         s.set_value(body, window, cx);
                         s
                     })
@@ -499,7 +499,7 @@ impl ResponsePanel {
 }
 
 /// Display metadata for a saved example (everything except the body, which is
-/// edited live in an `InputState` editor).
+/// edited live in an `EditorState` editor).
 #[derive(Clone)]
 struct ExampleMeta {
     status: u16,
@@ -560,7 +560,7 @@ fn example_card(
     meta: Option<&ExampleMeta>,
     kind: GroupKind,
     index: usize,
-    editor: &Entity<InputState>,
+    editor: &Entity<EditorState>,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let badge_bg = match kind {
@@ -620,7 +620,7 @@ fn example_card(
                 .border_color(theme.border)
                 .rounded_md()
                 .child(
-                    Input::new(editor)
+                    Editor::new(editor)
                         .h(px(220.))
                         .bordered(false)
                         .appearance(false)
@@ -826,7 +826,7 @@ impl Render for ResponsePanel {
                                     .child(div().text_sm().child("请求中…"))
                                     .into_any_element()
                             } else {
-                                Input::new(&self.body_view)
+                                Editor::new(&self.body_view)
                                     .h_full()
                                     .bordered(false)
                                     .appearance(false)
@@ -844,7 +844,7 @@ impl Render for ResponsePanel {
                         RespTab::ActualRequest => {
                             self.reconcile_actual_request(&active_request, &response, window, cx);
                             if actual_request_text(&active_request, &response).is_some() {
-                                Input::new(&self.actual_view)
+                                Editor::new(&self.actual_view)
                                     .h_full()
                                     .bordered(false)
                                     .appearance(false)

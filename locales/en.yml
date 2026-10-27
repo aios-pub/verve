@@ -11,7 +11,6 @@ view:
   notes: Notepad
   markdown_editor: Markdown Editor
   json_format: JSON Formatter
-  pdf_editor: PDF Editor
 
 json:
   title: JSON Formatter
@@ -29,18 +28,6 @@ json:
   parsing: Parsing JSON…
   delete_tip: Delete this property
   deleted: Property deleted; input synced
-
-pdf:
-  title: PDF Editor
-  open_btn: Open PDF
-  save_btn: Save
-  prev_page: Previous
-  next_page: Next
-  no_file: No file opened
-  click_to_open: Click here to open a PDF file
-  page: Page %{current}/%{total}
-  loading: Loading PDF...
-  pdfium_missing: PDF support requires Pdfium library. Please install via `brew install pdfium`
 
 hosts:
   title: Hosts Quick Editor
@@ -456,7 +443,7 @@ help:
   start_t4: "Environment variables"
   start_p4: "Reference environment / global variables with {{key}} placeholders in request URLs, headers and bodies; switch environments from the top bar and manage them in Settings → Environments. Renaming a key auto-syncs its placeholders."
   start_t5: "Data & sync"
-  start_p5: "Workspace data is auto-saved as a local git repository (interval configurable in Settings) with full history; the Relocate view moves the data directory to an external disk."
+  start_p5: "Workspace data is auto-saved as a local git repository (interval configurable in Settings) with full history."
   start_t6: "Customization"
   start_p6: "Open settings from the ⚙ at the bottom-left: UI language, theme, home view, hidden rail items, editor shortcut customization and more."
   view_desc_intro: "Every feature view in the app (matching the left activity rail):"
@@ -476,8 +463,6 @@ help:
     notes: "Notepad: lightweight Markdown notes (WYSIWYG) with autosave, search and a note tree. While a block is focused, ⌘1..⌘6 / ⌘0 act as heading/paragraph formatting; press Esc to leave the block and restore global view switching."
     markdowneditor: "Markdown editor: open .md files in tabs, WYSIWYG editing, source mode, find & replace, PDF export. While a block is focused, ⌘1..⌘6 / ⌘0 act as heading/paragraph formatting; press Esc to leave the block and restore global view switching."
     jsonformat: "JSON formatter: paste raw JSON to format instantly; collapsible tree, array compaction preview, copy node values."
-    pdfeditor: "PDF editor: open and view PDFs, edit pages and save."
-    relocate: "Relocate: migrate the workspace data directory to an external disk or another location."
   group_global: "Global"
   group_rail: "View switching"
   group_editor: "Markdown / Notes editor"

@@ -6,7 +6,7 @@ use crate::ui::kv_table::KvRow;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::WindowExt as _;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::{Editor, Input, InputState, Textarea};
 use gpui_component::select::Select;
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
@@ -188,7 +188,7 @@ impl RequestPanel {
                                                 .flex_1()
                                                 .min_h_0()
                                                 .child(
-                                                    Input::new(&self.body_editor)
+                                                    Editor::new(&self.body_editor)
                                                         .h_full()
                                                         .font_family(theme.mono_font_family.clone())
                                                         .text_size(theme.mono_font_size)
@@ -240,7 +240,7 @@ impl RequestPanel {
                         .flex_1()
                         .min_h_0()
                         .child(
-                            Input::new(&self.pre_script_editor)
+                            Textarea::new(&self.pre_script_editor)
                                 .h_full()
                                 .font_family(theme.mono_font_family.clone())
                                 .text_size(theme.mono_font_size),
@@ -264,7 +264,7 @@ impl RequestPanel {
                         .flex_1()
                         .min_h_0()
                         .child(
-                            Input::new(&self.tests_editor)
+                            Textarea::new(&self.tests_editor)
                                 .h_full()
                                 .font_family(theme.mono_font_family.clone())
                                 .text_size(theme.mono_font_size),
@@ -640,7 +640,7 @@ impl RequestPanel {
                                         .child("响应体"),
                                 )
                                 .child(
-                                    Input::new(&self.mock_body_editor)
+                                    Editor::new(&self.mock_body_editor)
                                         .flex_1()
                                         .font_family(theme.mono_font_family.clone())
                                         .text_size(theme.mono_font_size),

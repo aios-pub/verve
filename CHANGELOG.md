@@ -2,6 +2,47 @@
 
 All notable changes to Verve will be documented in this file.
 
+## [0.8.7] - 2026-10-27
+
+### ⬆️ Dependency stack migration (synced from upstream a5d854f)
+
+- **GPUI now ships from crates.io** — the four zed-source crates (`gpui`,
+  `gpui_platform`, `reqwest_client`, `http_client`) switch from the
+  `amosgeek/zed` fork to the `gpui-pre-*` snapshot crates (`=0.3.9`), and
+  `gpui-component` moves from the `lijingrs/gpui-component` fork to the
+  official **0.7.3** release. All three fork patches are covered upstream /
+  app-side: ListItem drag-and-drop works via native gpui `on_drag/on_drop/
+  on_drag_move`, `TreeState::ensure_visible` became `reveal_item`, and 0.7's
+  `TitleBar` skips drawn window controls when the WM draws its own. The
+  `[patch."…zed"]` section is gone.
+- **Editor component split** — gpui-component 0.7 separates single-line
+  `Input`, multi-line `Textarea`, and code `Editor` states; the request body /
+  response body / mock body editors, KV value cells and the JSON formatter
+  migrate accordingly (`code_editor()` → `EditorState::language()`,
+  `multi_line(true)` → `TextareaState`).
+
+### 🔧 Enhancements (synced from upstream)
+
+- **Request timeout raised 30 s → 3000 s** — the shared `DEFAULT_TIMEOUT_SECS`
+  applies to HTTP/GraphQL/SSE/gRPC-Web send paths (long LLM SSE streams no
+  longer time out client-side).
+- **Popup dismissal fixed** — the folder "+" new-request picker and the
+  "move to" picker now close on any click outside their card (`on_mouse_down_out`),
+  and picking an import card closes the picker itself (`close_dialog` was a
+  no-op for these panel-popovers).
+- **SSH dialogs no longer lose focus to the terminal** — the host dialog and
+  MFA prompt suppress the session terminal's auto-focus while open and restore
+  it on save / dismiss.
+- **rust-i18n 4.0 → 4.2.4, uuid +v7, serde_json `preserve_order` pinned
+  explicitly** — matching gpui-component 0.7.3's workspace.
+
+### 🧹 Removed
+
+- **PDF editor leftovers** — upstream removed the PDF editor entirely (the
+  notes → PDF export via Typst stays a Pioneer feature). The unused
+  `file-pdf.svg` icon, `pdf.png` screenshot, and the `pdf.*` locale keys are
+  dropped; READMEs no longer advertise a standalone PDF viewer/editor.
+
 ## [0.8.6] - 2026-09-25
 
 ### 🐛 Fixes (synced from upstream)

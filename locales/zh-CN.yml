@@ -11,7 +11,6 @@ view:
   notes: 记事本
   markdown_editor: Markdown 编辑器
   json_format: JSON 格式化
-  pdf_editor: PDF 编辑器
 
 json:
   title: JSON 格式化工具
@@ -29,18 +28,6 @@ json:
   parsing: 正在解析 JSON…
   delete_tip: 删除该属性
   deleted: 已删除属性，并同步到左侧输入
-
-pdf:
-  title: PDF 编辑器
-  open_btn: 打开 PDF
-  save_btn: 保存
-  prev_page: 上一页
-  next_page: 下一页
-  no_file: 未打开文件
-  click_to_open: 点击此处打开 PDF 文件
-  page: 第 %{current}/%{total} 页
-  loading: 正在加载 PDF...
-  pdfium_missing: PDF 功能需要 Pdfium 库，请通过 `brew install pdfium` 安装
 
 hosts:
   title: Hosts 快速编辑器
@@ -456,7 +443,7 @@ help:
   start_t4: 环境变量
   start_p4: 在请求的 URL、Header、Body 中用 {{变量名}} 占位符引用环境变量 / 全局变量；顶栏切换环境，设置 → 环境管理中维护变量，重命名变量时占位符会自动同步。
   start_t5: 数据与同步
-  start_p5: 工作区数据以本地 git 仓库自动保存（间隔可在设置中调整），支持历史回溯；「磁盘迁移」视图可将数据目录迁移到外置磁盘。
+  start_p5: 工作区数据以本地 git 仓库自动保存（间隔可在设置中调整），支持历史回溯。
   start_t6: 自定义
   start_p6: 左下角 ⚙ 打开设置：界面语言、主题、首页视图、隐藏菜单项、编辑器快捷键自定义等。
   view_desc_intro: 应用内的每个功能视图（对应左侧功能栏）：
@@ -476,8 +463,6 @@ help:
     notes: 记事本：轻量 Markdown 笔记（WYSIWYG 编辑），自动保存、搜索与笔记树管理。编辑块聚焦时 ⌘1..⌘6 / ⌘0 用作标题与正文格式，按 Esc 退出块焦点后恢复全局视图切换。
     markdowneditor: Markdown 编辑器：多标签打开 .md 文件，所见即所得编辑、源码模式、查找替换、导出 PDF。编辑块聚焦时 ⌘1..⌘6 / ⌘0 用作标题与正文格式，按 Esc 退出块焦点后恢复全局视图切换。
     jsonformat: JSON 格式化：粘贴原始 JSON 即时格式化，可折叠树浏览、数组精简预览、复制节点值。
-    pdfeditor: PDF 编辑器：打开查看 PDF，页面编辑与保存。
-    relocate: 磁盘迁移：把工作区数据目录迁移到外置磁盘等其他位置。
   group_global: 全局
   group_rail: 视图切换
   group_editor: Markdown / 记事本编辑器

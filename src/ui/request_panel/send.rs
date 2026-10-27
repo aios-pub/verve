@@ -147,7 +147,7 @@ impl RequestPanel {
             &req_clone.auth,
             &req_clone.body,
             &vars,
-            30,
+            http::DEFAULT_TIMEOUT_SECS,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -210,7 +210,7 @@ impl RequestPanel {
             .active_project()
             .and_then(|p| p.active_environment.clone());
         cx.spawn(async move |this, cx| {
-            let mut resp = http::execute(client.as_ref(), prepared, 30).await;
+            let mut resp = http::execute(client.as_ref(), prepared, http::DEFAULT_TIMEOUT_SECS).await;
             resp.actual_request = Some(actual_request);
             resp.actual_curl = Some(actual_curl);
 
@@ -417,7 +417,7 @@ impl RequestPanel {
             &req.auth,
             &req.body,
             &vars,
-            30,
+            http::DEFAULT_TIMEOUT_SECS,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -465,7 +465,7 @@ impl RequestPanel {
             let mut stream_fut = Box::pin(crate::http::sse::stream(
                 client.clone(),
                 prepared,
-                30,
+                http::DEFAULT_TIMEOUT_SECS,
                 stop.clone(),
                 acc_for_stream,
             ));
@@ -769,7 +769,7 @@ impl RequestPanel {
                 &headers,
                 &body_json,
                 &vars,
-                30,
+                http::DEFAULT_TIMEOUT_SECS,
             )
             .await;
 

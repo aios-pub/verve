@@ -124,17 +124,25 @@ impl Render for SshHostDialogState {
 }
 
 /// Open the host dialog. `on_save` receives the finalized `SshHost`.
-pub fn open_dialog<F>(
+///
+/// `on_dismissed` runs when the dialog is closed via the X button / Esc key /
+/// dialog chrome — the 保存 button closes programmatically and invokes
+/// `on_save` instead. Callers use it to undo UI suppression taken while the
+/// modal was up (e.g. the terminal's `suppress_auto_focus`).
+pub fn open_dialog<F, G>(
     editing: Option<&SshHost>,
     available_hosts: Vec<SshHost>,
     on_save: F,
+    on_dismissed: G,
     window: &mut Window,
     cx: &mut App,
 ) where
     F: Fn(SshHost, &mut Window, &mut App) + 'static,
+    G: Fn(&mut Window, &mut App) + 'static,
 {
-    // Wrap in Arc so the Fn closure can clone it per build.
+    // Wrap in Arc so the Fn closures can clone them per build.
     let on_save: std::sync::Arc<F> = std::sync::Arc::new(on_save);
+    let on_dismissed: std::sync::Arc<G> = std::sync::Arc::new(on_dismissed);
     let state = SshHostDialogState::new(editing, &available_hosts, window, cx);
     let title_text = if editing.is_some() {
         "编辑主机"
@@ -148,10 +156,14 @@ pub fn open_dialog<F>(
         let muted = theme.muted_foreground;
         let border = theme.border;
         let on_save = on_save.clone();
+        let on_dismissed = on_dismissed.clone();
 
         dialog
             .title(title_text)
             .w(px(520.))
+            .on_close(move |_ev, window, cx| {
+                on_dismissed(window, cx);
+            })
             .content(move |content, _window, cx| {
                 let s = state_for_content.read(cx);
                 let auth_type = s.auth_type;

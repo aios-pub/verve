@@ -785,20 +785,36 @@ impl Render for ProjectTreePanel {
                                     cx.new(|_| drag.clone())
                                 })
                                 // Highlight while dragging over this row.
-                                .on_drag_hover(move |hovering: &bool, _window, cx: &mut App| {
-                                    let _ = view_hover.update(cx, |this, cx| {
-                                        if this.dragging_node.is_some() && *hovering {
-                                            this.drop_target = Some(drag_node_for_hover.clone());
-                                            cx.notify();
-                                        } else if !*hovering
-                                            && this.drop_target.as_deref()
-                                                == Some(drag_node_for_hover.as_str())
-                                        {
-                                            this.drop_target = None;
-                                            cx.notify();
-                                        }
-                                    });
-                                })
+                                // (The fork-only ListItem::on_drag_hover is
+                                // gone upstream; on_drag_move fires for every
+                                // mouse move during a TreeDrag with this row's
+                                // hitbox bounds, so containment replicates the
+                                // enter/exit semantics.)
+                                .on_drag_move::<TreeDrag>(
+                                    move |ev: &gpui::DragMoveEvent<TreeDrag>,
+                                          _window,
+                                          cx: &mut App| {
+                                        let hovering =
+                                            ev.bounds.contains(&ev.event.position);
+                                        let _ = view_hover.update(cx, |this, cx| {
+                                            if hovering && this.dragging_node.is_some() {
+                                                if this.drop_target.as_deref()
+                                                    != Some(drag_node_for_hover.as_str())
+                                                {
+                                                    this.drop_target =
+                                                        Some(drag_node_for_hover.clone());
+                                                    cx.notify();
+                                                }
+                                            } else if !hovering
+                                                && this.drop_target.as_deref()
+                                                    == Some(drag_node_for_hover.as_str())
+                                            {
+                                                this.drop_target = None;
+                                                cx.notify();
+                                            }
+                                        });
+                                    },
+                                )
                                 // Drop handler: move source relative to target.
                                 .on_drop(move |drag: &TreeDrag, _window, cx: &mut App| {
                                     let _ = view_drop.update(cx, |this, cx| {
@@ -893,12 +909,15 @@ fn render_folder_add_overlay(
             .left_0()
             .size_full()
             .bg(gpui::black().opacity(0.3))
-            .on_mouse_down(MouseButton::Left, move |_, _window, cx: &mut App| {
-                let _ = panel_close.update(cx, |this, cx| {
-                    this.folder_add_popover_open = false;
-                    this.pending_folder_add = None;
-                    cx.notify();
-                });
+            .on_mouse_down(MouseButton::Left, {
+                let panel_close = panel_close.clone();
+                move |_, _window, cx: &mut App| {
+                    let _ = panel_close.update(cx, |this, cx| {
+                        this.folder_add_popover_open = false;
+                        this.pending_folder_add = None;
+                        cx.notify();
+                    });
+                }
             })
             .child(
                 v_flex()
@@ -918,9 +937,24 @@ fn render_folder_add_overlay(
                             .border_1()
                             .border_color(theme.border)
                             .shadow_md()
+                            .debug_selector(|| "folder-add-card".into())
                             // Stop propagation so clicking the card doesn't close.
                             .on_mouse_down(MouseButton::Left, |_, _window, cx: &mut App| {
                                 cx.stop_propagation();
+                            })
+                            // The dim backdrop only spans this panel, so clicks
+                            // in the main editor area never reach it and the
+                            // picker stayed open. Dismiss on any window-wide
+                            // click outside the card (capture phase).
+                            .on_mouse_down_out({
+                                let panel_close = panel_close.clone();
+                                move |_, _window, cx: &mut App| {
+                                    let _ = panel_close.update(cx, |this, cx| {
+                                        this.folder_add_popover_open = false;
+                                        this.pending_folder_add = None;
+                                        cx.notify();
+                                    });
+                                }
                             })
                             .child(new_request_picker(state, panel, folder_id)),
                     ),
@@ -1004,11 +1038,14 @@ fn render_move_picker_overlay(
             .left_0()
             .size_full()
             .bg(gpui::black().opacity(0.3))
-            .on_mouse_down(MouseButton::Left, move |_, _window, cx: &mut App| {
-                let _ = panel_close.update(cx, |this, cx| {
-                    this.move_picker_node = None;
-                    cx.notify();
-                });
+            .on_mouse_down(MouseButton::Left, {
+                let panel_close = panel_close.clone();
+                move |_, _window, cx: &mut App| {
+                    let _ = panel_close.update(cx, |this, cx| {
+                        this.move_picker_node = None;
+                        cx.notify();
+                    });
+                }
             })
             .child(
                 v_flex()
@@ -1028,9 +1065,22 @@ fn render_move_picker_overlay(
                             .border_1()
                             .border_color(theme.border)
                             .shadow_md()
+                            .debug_selector(|| "move-card".into())
                             // Stop propagation so clicking the card doesn't close.
                             .on_mouse_down(MouseButton::Left, |_, _window, cx: &mut App| {
                                 cx.stop_propagation();
+                            })
+                            // Same panel-scoped-backdrop issue as the
+                            // folder-add picker: dismiss on any window-wide
+                            // click outside the card (capture phase).
+                            .on_mouse_down_out({
+                                let panel_close = panel_close.clone();
+                                move |_, _window, cx: &mut App| {
+                                    let _ = panel_close.update(cx, |this, cx| {
+                                        this.move_picker_node = None;
+                                        cx.notify();
+                                    });
+                                }
                             })
                             .child(
                                 v_flex()
@@ -1409,12 +1459,11 @@ fn picker_card(
                     cx.notify();
                 });
             } else {
-                let mut req =
-                    crate::state::models::ApiRequest::new(
-                        name,
-                        proto.default_method(),
-                        "{{baseUrl}}",
-                    );
+                let mut req = crate::state::models::ApiRequest::new(
+                    name,
+                    proto.default_method(),
+                    "{{baseUrl}}",
+                );
                 req.protocol = proto;
                 let req_id = req.id.clone();
                 let fid = folder_id.clone();
@@ -1442,14 +1491,17 @@ fn picker_card(
         })
 }
 
-/// An import-source card. Clicking shows a "coming soon" note and closes the
-/// dialog (import flows are wired separately via the top toolbar).
+/// An import-source card. Clicking closes the picker that hosts it (the "+"
+/// popover and the folder-add overlay are both panel state; `close_dialog`
+/// would be a no-op for them). The import flows themselves are wired
+/// separately via the top toolbar; picking a card logs a placeholder note.
 fn import_card(
     id: &'static str,
     icon_bg: gpui::Hsla,
     icon_label: &'static str,
     title: &'static str,
     full_width: bool,
+    panel: gpui::Entity<ProjectTreePanel>,
 ) -> impl IntoElement {
     div()
         .id("import-card-".to_string() + id)
@@ -1465,9 +1517,14 @@ fn import_card(
         .hover(|this| this.bg(gpui::hsla(0., 0., 0.20, 1.0)))
         .child(proto_icon(icon_bg, icon_label))
         .child(div().text_size(px(12.)).child(title.to_string()))
-        .on_click(move |_, window, cx: &mut App| {
+        .on_click(move |_, _window, cx: &mut App| {
+            let _ = panel.update(cx, |this, cx| {
+                this.new_popover_open = false;
+                this.folder_add_popover_open = false;
+                this.pending_folder_add = None;
+                cx.notify();
+            });
             log::info!("导入功能「{title}」开发中");
-            window.close_dialog(cx);
         })
 }
 
@@ -1632,6 +1689,7 @@ fn new_request_picker(
                         "AI",
                         "AI 智能提取 API 文档",
                         false,
+                        panel.clone(),
                     )
                     .into_any_element(),
                     import_card(
@@ -1640,6 +1698,7 @@ fn new_request_picker(
                         "{}",
                         "cURL 导入",
                         false,
+                        panel.clone(),
                     )
                     .into_any_element(),
                 ))
@@ -1650,6 +1709,7 @@ fn new_request_picker(
                         "PST",
                         "粘贴接口/文本",
                         false,
+                        panel.clone(),
                     )
                     .into_any_element(),
                     import_card(
@@ -1658,6 +1718,7 @@ fn new_request_picker(
                         "IJ",
                         "IDEA 上传",
                         false,
+                        panel.clone(),
                     )
                     .into_any_element(),
                 ))
@@ -1668,6 +1729,7 @@ fn new_request_picker(
                         "↓",
                         "其他文件导入",
                         true,
+                        panel.clone(),
                     )
                     .into_any_element(),
                 ),
@@ -1887,7 +1949,9 @@ impl ProjectTreePanel {
         self.collapsed_folders.clear();
         self.rebuild_tree(cx);
         self.tree.update(cx, |t, cx| {
-            t.ensure_visible(&node.clone().into(), cx);
+            // reveal_item = expand ancestors + scroll to the node (upstream
+            // replacement for the old fork-only ensure_visible).
+            t.reveal_item(&node.clone().into(), gpui::ScrollStrategy::Top, cx);
         });
         cx.notify();
     }
@@ -2163,10 +2227,7 @@ fn request_effective_vars(
     let mut system = std::collections::BTreeMap::new();
     system.insert(
         "mock_server".to_string(),
-        format!(
-            "http://127.0.0.1:{}",
-            crate::share::server::DEFAULT_PORT
-        ),
+        format!("http://127.0.0.1:{}", crate::share::server::DEFAULT_PORT),
     );
     let mut map = crate::state::models::effective_variables(
         &system,

@@ -14,7 +14,7 @@ Verve 基于 **Rust + [GPUI](https://github.com/zed-industries/zed)**（与 Zed 
 
 <br/>
 
-> 🚫 **告别 Postman + Termius 这类 SSH 客户端 + Swagger + 笔记软件 + MarkText 类 Markdown 编辑器 + PDF 编辑器 + JSON 格式化器 + Hosts 编辑器……的来回切换。**
+> 🚫 **告别 Postman + Termius 这类 SSH 客户端 + Swagger + 笔记软件 + MarkText 类 Markdown 编辑器 + JSON 格式化器 + Hosts 编辑器……的来回切换。**
 > Verve 把日常开发高频操作融为一体的原生窗口——基于 Rust + GPUI 构建，专为拒绝 Electron 臃肿的开发者而生。
 
 <br/>
@@ -74,7 +74,7 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 
 ### 💎 先锋版 —— 赞助获取
 
-**先锋版**通过**赞助**获取（早鸟 **¥99**，原价 **¥199**）。它叠加的是单一用途工具覆盖不到的进阶能力：容器与集群观测（**Docker / Kubernetes Pod**）、**压力测试**与**自动化测试套件**、**Markdown 笔记与文件编辑器**（替代 MarkText 类工具）、**PDF 查看/编辑器**，以及**云端文档分享**（推送到自托管 `verve-server` 获取公网链接）。
+**先锋版**通过**赞助**获取（早鸟 **¥99**，原价 **¥199**）。它叠加的是单一用途工具覆盖不到的进阶能力：容器与集群观测（**Docker / Kubernetes Pod**）、**压力测试**与**自动化测试套件**、**Markdown 笔记与文件编辑器**（替代 MarkText 类工具），以及**云端文档分享**（推送到自托管 `verve-server` 获取公网链接）。
 
 → 完整功能对比：[社区版 vs 先锋版](#-社区版-vs-先锋版)
 → 如何获取：[先锋版获取](#-先锋版--赞助获取)
@@ -163,7 +163,6 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 | 文档分享 —— 字段级显示开关（9 个开关） | ✅ | ✅ |
 | **Markdown 笔记** —— 块编辑器、笔记树（文件夹/置顶/标签）、实时预览画布 | ❌ | 💎 |
 | **笔记导出 PDF**（内置字体，标题/代码块/列表/链接） | ❌ | 💎 |
-| **PDF 查看 / 编辑**（Pdfium 原生，文字/图片/擦除/页面操作）—— 替代独立 PDF 编辑器 | ❌ | 💎 |
 | **独立 Markdown 文件编辑器**（多标签，Finder 双击 / `verve file.md`）—— 替代 MarkText 类工具 | ❌ | 💎 |
 
 ### 🌍 云端分享（先锋版专属）
@@ -195,7 +194,7 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 ### 我该选哪个？
 
 - **社区版** —— 你是个人开发者 / 学生，日常就是调试接口（含 gRPC/WebSocket/SSE）、经 SSH/SFTP 在服务器上工作（跳板机、端口转发、Zmodem）、抓包、格式化 JSON、管 Hosts、做本地 Mock、本地分享文档、跨机器同步工作区；想要一个快速、开源、免费、能完全替代单一接口客户端和 SSH 终端工具的原生工具箱。
-- **先锋版** —— 你还需要看 Docker/K8s 日志、跑压测和自动化测试、用 Markdown 记笔记/编辑 Markdown 与 PDF 文件，或把文档分享到公网云端链接。
+- **先锋版** —— 你还需要看 Docker/K8s 日志、跑压测和自动化测试、用 Markdown 记笔记/编辑 Markdown 文件，或把文档分享到公网云端链接。
 
 ---
 
@@ -420,22 +419,16 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 - **变量提取器** —— JsonPath（点路径）· Header · StatusCode · ResponseTime · Body；提取的变量对后续步骤可见，跨迭代持续
 - **脚本 API** —— `apt.variables` / `apt.environment` / `apt.setVariable` / `apt.assert` / `apt.echo` / `console.log`，绑定 `response` 对象
 
-### 🗒️ Markdown 笔记 & PDF 编辑器
+### 🗒️ Markdown 笔记编辑器
 
 <div align="center">
   <img src="./assets/verve_demo/note.png" width="850" alt="Markdown 笔记" />
   <br/>
   <em>笔记 + 实时预览</em>
 </div>
-<div align="center">
-  <img src="./assets/verve_demo/pdf.png" width="850" alt="PDF 查看 / 导出" />
-  <br/>
-  <em>PDF 查看与导出</em>
-</div>
 
 - 笔记树（文件夹、置顶、标签），**实时预览画布**
 - 笔记导出为 **PDF**（内置字体，标题、代码块、列表、链接）
-- **PDF 查看 / 编辑器** —— Pdfium 原生，文字 / 图片 / 擦除 / 页面操作（替代独立 PDF 编辑器）
 - **独立 Markdown 文件编辑器** —— 多标签，Finder 双击 / `verve file.md`（替代 MarkText 类工具）
 
 ### 📦 自托管 `verve-server`（云端分享）
@@ -573,7 +566,7 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 
 > ⚠️ **限时首发价 —— 即将结束！**
 
-**先锋版**解锁社区版之外的全部能力——Docker / Kubernetes Pod 排障、压测与自动化测试、Markdown 笔记与文件编辑器、PDF 编辑器，以及经自托管 `verve-server` 的云端文档分享。通过 **赞助** 模式获取，以下价格为 **限时早鸟价**。
+**先锋版**解锁社区版之外的全部能力——Docker / Kubernetes Pod 排障、压测与自动化测试、Markdown 笔记与文件编辑器，以及经自托管 `verve-server` 的云端文档分享。通过 **赞助** 模式获取，以下价格为 **限时早鸟价**。
 
 ### 🔥 早鸟特惠 —— 赞助 **99 元**
 
@@ -581,7 +574,7 @@ Verve 提供两个版本，使用同一个原生应用、同一套日常接口�
 
 > **今日赞助 99 元起** 即可解锁 先锋版，包含：
 >
-> - ✅ 全部先锋版能力（Docker / K8s Pod 排障 / 压测 / 自动化测试 / Markdown 笔记与编辑器 / PDF 编辑器 / 云端文档分享）
+> - ✅ 全部先锋版能力（Docker / K8s Pod 排障 / 压测 / 自动化测试 / Markdown 笔记与编辑器 / 云端文档分享）
 > - ✅ 所有正式版功能更新（每个未来版本，免费）
 > - ✅ 优先技术支持
 > - ✅ 新功能优先体验

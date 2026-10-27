@@ -10,7 +10,7 @@ use crate::ui::kv_table::{self, KvRow};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::WindowExt as _;
-use gpui_component::input::Input;
+use gpui_component::input::{Input, Textarea};
 use gpui_component::{
     ActiveTheme, Disableable as _, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -455,7 +455,7 @@ impl RequestPanel {
                                             ),
                                     )
                                     .child(
-                                        Input::new(&self.folder_desc)
+                                        Textarea::new(&self.folder_desc)
                                             .small(),
                                     ),
                             )

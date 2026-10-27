@@ -26,7 +26,7 @@ Verve is built on **Rust + [GPUI](https://github.com/zed-industries/zed)** (the 
 
 <br/>
 
-> 🚫 **Stop juggling Postman + an SSH client like Termius + Swagger + a notes app + a Markdown editor like MarkText + a PDF editor + a JSON formatter + a hosts editor…**
+> 🚫 **Stop juggling Postman + an SSH client like Termius + Swagger + a notes app + a Markdown editor like MarkText + a JSON formatter + a hosts editor…**
 > Verve absorbs the high-frequency dev workflow into one native window — built in Rust + GPUI for developers who refuse to settle for sluggish Electron bloat.
 
 <br/>
@@ -74,7 +74,7 @@ The **Community Edition** is free and released under the **AGPL-3.0** license. I
 
 ### 💎 Pioneer Edition — Sponsor to Unlock
 
-The **Pioneer Edition** is obtained via **sponsorship** (early-bird **¥99**, regular **¥199**). It layers on the advanced capabilities a single-purpose tool doesn't cover: container & cluster inspection (**Docker / Kubernetes pods**), **stress testing** and **automated test suites**, a **Markdown notes & file editor** (replaces tools like MarkText), a **PDF viewer/editor**, and **cloud document sharing** (push to a self-hosted `verve-server` for a public URL).
+The **Pioneer Edition** is obtained via **sponsorship** (early-bird **¥99**, regular **¥199**). It layers on the advanced capabilities a single-purpose tool doesn't cover: container & cluster inspection (**Docker / Kubernetes pods**), **stress testing** and **automated test suites**, a **Markdown notes & file editor** (replaces tools like MarkText), and **cloud document sharing** (push to a self-hosted `verve-server` for a public URL).
 
 → Full feature comparison: [Community vs Pioneer](#-community-vs-pioneer)
 → How to get it: [Pioneer Edition](#-pioneer-edition--sponsor-to-unlock)
@@ -163,7 +163,6 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 | Document sharing — field-level display toggles (9 switches) | ✅ | ✅ |
 | **Markdown notes** — block editor, notes tree (folders/pin/tags), live preview canvas | ❌ | 💎 |
 | **Notes → PDF export** (built-in fonts, headings/code/lists/links) | ❌ | 💎 |
-| **PDF viewer / editor** (Pdfium native, text/image/erase/page ops) — replaces a standalone PDF editor | ❌ | 💎 |
 | **Standalone Markdown file editor** (multi-tab, Finder double-click / `verve file.md`) — replaces tools like MarkText | ❌ | 💎 |
 
 ### 🌍 Cloud Sharing (Pioneer-only)
@@ -195,7 +194,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 ### Which one should I pick?
 
 - **Community Edition** — you're an individual developer or student whose daily work is debugging APIs (including gRPC/WebSocket/SSE), working over SSH/SFTP (jump host, port forwarding, Zmodem), capturing traffic, formatting JSON, managing hosts, running local mocks, sharing docs locally, and keeping your workspace in sync across machines; you want a fast, open, free native toolbox that can fully replace an individual API client and an SSH terminal.
-- **Pioneer Edition** — you also need to tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit Markdown & PDF files, or share documents at a public cloud URL.
+- **Pioneer Edition** — you also need to tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit Markdown files, or share documents at a public cloud URL.
 
 ---
 
@@ -404,21 +403,15 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - **Variable extractors** — JsonPath (dot-path) · Header · StatusCode · ResponseTime · Body; extracted vars are visible to later steps and across iterations
 - **Script API** — `apt.variables` / `apt.environment` / `apt.setVariable` / `apt.assert` / `apt.echo` / `console.log`, with a `response` binding
 
-### 🗒️ Markdown Notes & PDF Editor
+### 🗒️ Markdown Notes Editor
 <div align="center">
   <img src="./assets/verve_demo/note.png" width="850" alt="Markdown Notes" />
   <br/>
   <em>Notes with live preview</em>
 </div>
-<div align="center">
-  <img src="./assets/verve_demo/pdf.png" width="850" alt="PDF Viewer / Export" />
-  <br/>
-  <em>PDF viewer & export</em>
-</div>
 
 - Note tree (folders, pin, tags) with **live preview canvas**
 - Export notes to **PDF** (built-in fonts, headings, code blocks, lists, links)
-- **PDF viewer / editor** — Pdfium native, text / image / erase / page operations (replaces a standalone PDF editor)
 - **Standalone Markdown file editor** — multi-tab, Finder double-click / `verve file.md` (replaces tools like MarkText)
 
 ### 📦 Self-hosted `verve-server` (Cloud Sharing)
@@ -555,13 +548,13 @@ The Pioneer Edition ships new work almost every day. This section is a transpare
 
 > ⚠️ **Limited-Time Launch Pricing — ends soon!**
 
-The **Pioneer Edition** unlocks everything beyond the Community Edition — Docker / Kubernetes pod triage, stress & automated testing, Markdown notes & file editor, PDF editor, and cloud document sharing via a self-hosted `verve-server`. It is obtained through a **sponsorship** model, and the entry price below is a **time-limited early-bird rate**.
+The **Pioneer Edition** unlocks everything beyond the Community Edition — Docker / Kubernetes pod triage, stress & automated testing, Markdown notes & file editor, and cloud document sharing via a self-hosted `verve-server`. It is obtained through a **sponsorship** model, and the entry price below is a **time-limited early-bird rate**.
 
 ### 🔥 Early-Bird Special — sponsor **¥99** (CNY)
 The current **¥99** early-bird price is a limited-time launch offer. **It will return to the regular ¥199 once the promotion ends.** Lock in the lowest price now:
 
 > **Sponsor ¥99+ today** to unlock the Pioneer Edition, including:
-> - ✅ All Pioneer capabilities (Docker / K8s pod triage / stress testing / automated testing / Markdown notes & editor / PDF editor / cloud document sharing)
+> - ✅ All Pioneer capabilities (Docker / K8s pod triage / stress testing / automated testing / Markdown notes & editor / cloud document sharing)
 > - ✅ All official version updates (every future release, free)
 > - ✅ Priority technical support
 > - ✅ Early access to new features

@@ -145,6 +145,12 @@ blog:
   title: "Changelog"
   subtitle: "Release history on GitHub."
 
+# ---- Donate -------------------------------------------------------------
+donate:
+  title: "Donate to Support"
+  subtitle: "Verve is free and open source under AGPL-3.0. If it saves you time every day, a donation is a great way to support this open-source project and keep development going — scan with WeChat."
+  qr_alt: "WeChat donation QR code"
+
 # ---- Footer -------------------------------------------------------------
 footer:
   tagline: "A native, GPU-accelerated developer workbench built with Rust."

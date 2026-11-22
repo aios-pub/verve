@@ -5,6 +5,7 @@ use crate::i18n::{t, t_string, use_i18n};
 
 use crate::components::fx::SpotlightCard;
 use crate::components::{DownloadButtons, FeatureCard, Hero, Reveal};
+use crate::utils::asset;
 
 #[component]
 pub fn Home() -> impl IntoView {
@@ -83,6 +84,30 @@ pub fn Home() -> impl IntoView {
             <div class="mx-auto max-w-4xl px-4 py-20 sm:px-6 lg:py-28">
                 <Reveal>
                     <DownloadButtons />
+                </Reveal>
+            </div>
+        </section>
+
+        // Donate
+        <section class="border-t border-white/[0.06] bg-ink-900/40">
+            <div class="mx-auto max-w-4xl px-4 py-20 sm:px-6 lg:py-28">
+                <Reveal>
+                    <SectionTitle eyebrow="Donate">
+                        {move || t!(i18n, donate.title)}
+                    </SectionTitle>
+                </Reveal>
+                <Reveal>
+                    <div class="mx-auto mt-12 flex max-w-md flex-col items-center gap-5 rounded-2xl border border-ink-700 bg-ink-900 p-8 text-center">
+                        <img
+                            src=asset("wechat.jpg")
+                            alt="WeChat donation QR"
+                            loading="lazy"
+                            class="h-48 w-auto rounded-lg ring-1 ring-white/10"
+                        />
+                        <p class="text-sm leading-relaxed text-ink-400">
+                            {move || t!(i18n, donate.subtitle)}
+                        </p>
+                    </div>
                 </Reveal>
             </div>
         </section>

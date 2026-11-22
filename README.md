@@ -330,6 +330,18 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 ---
 
+## ❤️ Donate
+
+Verve is **free and open source** under AGPL-3.0 — and it stays that way. If it saves you time every day, consider donating to support the ongoing development of this open-source project. Every contribution helps!
+
+<div align="center">
+  <img src="./assets/wechat.jpg" width="220" alt="WeChat Donation QR" />
+  <br/>
+  <em>Scan with WeChat to donate</em>
+</div>
+
+---
+
 ## 📄 License
 
 Verve is released under the **AGPL-3.0** open-source license — the whole app, all features, one license. Source code is public; you may use, study, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**

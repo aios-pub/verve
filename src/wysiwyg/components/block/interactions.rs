@@ -1018,8 +1018,12 @@ impl Block {
     }
 
     /// Returns the selected range serialized as Markdown (preserving bold /
-    /// italic / code / link markers). Raw/code blocks fall back to the literal
-    /// display text since they have no inline formatting to preserve.
+    /// italic / code / link markers) so pasting back into the editor keeps the
+    /// styling. A selection that carries no inline formatting at all is
+    /// returned as bare visible text without Markdown escapes, so copying
+    /// literal text (a password, a URL) never grows backslashes. Raw/code
+    /// blocks fall back to the literal display text since they have no inline
+    /// formatting to preserve.
     pub(crate) fn selected_markdown(&self) -> String {
         if self.selected_range.is_empty() {
             return String::new();

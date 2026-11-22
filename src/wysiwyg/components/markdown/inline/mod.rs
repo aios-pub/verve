@@ -121,6 +121,16 @@ pub struct InlineFragment {
     pub math: Option<InlineMath>,
 }
 
+/// Whether the fragment is bare text: no style flags, no HTML inline style,
+/// no link, footnote, or math attachment.
+fn fragment_is_plain(fragment: &InlineFragment) -> bool {
+    fragment.style == InlineStyle::default()
+        && fragment.html_style.is_none()
+        && fragment.link.is_none()
+        && fragment.footnote.is_none()
+        && fragment.math.is_none()
+}
+
 /// Source-preserving inline LaTeX math metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InlineMath {
@@ -520,6 +530,28 @@ impl InlineTextTree {
             .sum()
     }
 
+    /// Whether no fragment carries any inline formatting (style flags, HTML
+    /// inline style, link, footnote, math), i.e. the tree is bare text.
+    pub(crate) fn is_unformatted(&self) -> bool {
+        self.fragments.iter().all(fragment_is_plain)
+    }
+
+    /// Whether every fragment overlapping the visible-text `range` is bare
+    /// text (see [`Self::is_unformatted`]). Copy paths use this to decide
+    /// between plain visible text and Markdown serialization.
+    pub(crate) fn range_is_plain(&self, range: std::ops::Range<usize>) -> bool {
+        let mut consumed = 0usize;
+        for fragment in &self.fragments {
+            let fragment_end = consumed + fragment.text.len();
+            let overlaps = fragment_end > range.start && consumed < range.end;
+            if overlaps && !fragment.text.is_empty() && !fragment_is_plain(fragment) {
+                return false;
+            }
+            consumed = fragment_end;
+        }
+        true
+    }
+
     pub(crate) fn has_source_preserving_links(&self) -> bool {
         self.fragments.iter().any(|fragment| {
             fragment
@@ -591,10 +623,20 @@ impl InlineTextTree {
     /// any formatting markers (bold/italic/code/links/...) that fall inside the
     /// range. Used by copy/cut so that pasting the result round-trips with
     /// styling intact (the plain `visible_text()` slice would drop all markers).
+    ///
+    /// A range that carries no formatting at all is returned as bare visible
+    /// text without Markdown escapes: the escapes only exist to protect markers
+    /// across a Markdown round-trip, and emitting them for plain selections
+    /// corrupts what lands on the clipboard (`6yUek^x` would copy as
+    /// `6yUek\^x`).
     pub fn serialize_markdown_range(&self, range: std::ops::Range<usize>) -> String {
         let (_, tail) = self.split_at(range.start);
         let (middle, _) = tail.split_at(range.end.saturating_sub(range.start));
-        middle.serialize_markdown()
+        if middle.is_unformatted() {
+            middle.visible_text()
+        } else {
+            middle.serialize_markdown()
+        }
     }
 
     pub(crate) fn markdown_offset_map(&self) -> InlineMarkdownOffsetMap {

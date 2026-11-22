@@ -36,6 +36,40 @@ fn emphasis_delimiters_surrounded_by_spaces_stay_literal() {
 }
 
 #[test]
+fn serialize_markdown_range_copies_plain_text_without_escapes() {
+    // A password containing a literal caret: the escape exists only for the
+    // Markdown round-trip, and must not corrupt what copy puts on the
+    // clipboard (`6yUek\^...`).
+    let tree = InlineTextTree::from_markdown("6yUek\\^%#tYbk!eh8");
+
+    assert_eq!(tree.visible_text(), "6yUek^%#tYbk!eh8");
+    let len = tree.visible_len();
+    assert_eq!(tree.serialize_markdown_range(0..len), "6yUek^%#tYbk!eh8");
+}
+
+#[test]
+fn serialize_markdown_range_preserves_formatting_markers() {
+    let tree = InlineTextTree::from_markdown("**bold** and \\*literal");
+
+    assert_eq!(tree.visible_text(), "bold and *literal");
+    let len = tree.visible_len();
+    assert_eq!(
+        tree.serialize_markdown_range(0..len),
+        "**bold** and \\*literal"
+    );
+}
+
+#[test]
+fn serialize_markdown_range_plain_slice_of_styled_tree() {
+    // Only the unformatted tail is selected: it must copy as bare text even
+    // though the tree as a whole carries formatting.
+    let tree = InlineTextTree::from_markdown("*em* plain");
+
+    assert_eq!(tree.visible_text(), "em plain");
+    assert_eq!(tree.serialize_markdown_range(3..8), "plain");
+}
+
+#[test]
 fn preserves_unclosed_markers_as_literal_text() {
     let tree = InlineTextTree::from_markdown("1**234");
 

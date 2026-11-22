@@ -605,8 +605,19 @@ impl BlockRecord {
     /// indentation for nested blocks and list ordinal for numbered items.
     /// Raw-preserved blocks produce their fallback text when at depth 0.
     pub fn markdown_line(&self, depth: usize, list_ordinal: Option<usize>) -> String {
+        self.markdown_line_with_title(self.title_markdown_for_output(), depth, list_ordinal)
+    }
+
+    /// [`Self::markdown_line`] with the title Markdown supplied by the caller.
+    /// Copy paths pass `title.visible_text()` so bare-text blocks are copied
+    /// verbatim instead of with literal-marker escapes (`\^`, `\*`, ...).
+    pub(crate) fn markdown_line_with_title(
+        &self,
+        title_markdown: String,
+        depth: usize,
+        list_ordinal: Option<usize>,
+    ) -> String {
         let indentation = "  ".repeat(depth);
-        let title_markdown = self.title_markdown_for_output();
         match self.kind {
             BlockKind::Paragraph => indent_multiline(&title_markdown, &indentation),
             BlockKind::Separator => "---".to_string(),

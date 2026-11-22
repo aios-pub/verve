@@ -947,6 +947,29 @@ impl Editor {
         mappings: &HashMap<EntityId, SourceTargetMapping>,
         cx: &App,
     ) -> String {
+        // Plain-text fast path for copy/cut: a selection that carries no inline
+        // formatting must not travel through the escaped Markdown source, where
+        // literal markers grow backslashes (`6yUek^x` copies as `6yUek\^x`).
+        // Whole text blocks keep their structure markers (`- `, `> `, `#`) via
+        // markdown_line_with_title; code/raw blocks stay on the verbatim source
+        // slices below, which preserve fences and literal content as typed.
+        let block = entity.read(cx);
+        if block.visible_len() > 0
+            && !block.uses_raw_text_editing()
+            && block.record.title.range_is_plain(range.clone())
+        {
+            if full_block {
+                return block.record.markdown_line_with_title(
+                    block.record.title.visible_text(),
+                    block.render_depth,
+                    block.list_ordinal,
+                );
+            }
+            let (_, tail) = block.record.title.split_at(range.start);
+            let (middle, _) = tail.split_at(range.end.saturating_sub(range.start));
+            return middle.visible_text();
+        }
+
         if let Some(mapping) = mappings.get(&entity.entity_id()) {
             if full_block {
                 return safe_slice(
@@ -1249,6 +1272,73 @@ mod tests {
                 let block = visible.entity.read(cx);
                 assert_eq!(block.editor_selection_range, Some(0..block.visible_len()));
             }
+        });
+        cx.quit();
+    }
+
+    #[test]
+    fn cross_block_copy_of_plain_blocks_yields_visible_text_without_escapes() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        // The document source escapes literal markers (`6yUek\^...`); copy
+        // must surface the visible text instead of the escaped source.
+        let editor = cx.new(|cx| {
+            Editor::from_markdown(
+                cx,
+                "6yUek\\^%#tYbk!eh8\n\nplain * line".to_string(),
+                None,
+            )
+        });
+
+        editor.update(&mut cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 2);
+
+            // Whole-document (Cmd+A style) selection over both blocks.
+            let len0 = visible[0].entity.read(cx).visible_len();
+            let len1 = visible[1].entity.read(cx).visible_len();
+            set_selection(editor, 0, 0, 1, len1, cx);
+            assert_eq!(
+                editor.cross_block_selected_markdown(cx).as_deref(),
+                Some("6yUek^%#tYbk!eh8\n\nplain * line")
+            );
+
+            // Single plain paragraph (full_block fast path).
+            set_selection(editor, 0, 0, 0, len0, cx);
+            assert_eq!(
+                editor.cross_block_selected_markdown(cx).as_deref(),
+                Some("6yUek^%#tYbk!eh8")
+            );
+
+            // Partial plain range keeps bare text too.
+            set_selection(editor, 0, 2, 0, 6, cx);
+            assert_eq!(
+                editor.cross_block_selected_markdown(cx).as_deref(),
+                Some("Uek^")
+            );
+        });
+        cx.quit();
+    }
+
+    #[test]
+    fn cross_block_copy_of_formatted_blocks_keeps_markdown() {
+        let mut cx = TestAppContext::single();
+        init_editor_test_app(&mut cx);
+        let editor = cx.new(|cx| {
+            Editor::from_markdown(cx, "a **bold** b\n\n\\*literal star".to_string(), None)
+        });
+
+        editor.update(&mut cx, |editor, cx| {
+            let visible = editor.document.visible_blocks().to_vec();
+            assert_eq!(visible.len(), 2);
+            let len1 = visible[1].entity.read(cx).visible_len();
+            set_selection(editor, 0, 0, 1, len1, cx);
+            // The formatted block keeps its Markdown markers; the plain block
+            // is copied as bare visible text (its literal `*` is unescaped).
+            assert_eq!(
+                editor.cross_block_selected_markdown(cx).as_deref(),
+                Some("a **bold** b\n\n*literal star")
+            );
         });
         cx.quit();
     }

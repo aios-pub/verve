@@ -63,9 +63,6 @@ pub fn Nav() -> impl IntoView {
                     <A href=route("/download") attr:class=move || link_class("/download")>
                         {move || t!(i18n, nav.download)}
                     </A>
-                    <A href=route("/pricing") attr:class=move || link_class("/pricing")>
-                        {move || t!(i18n, nav.pricing)}
-                    </A>
                     <A href=route("/docs") attr:class=move || link_class("/docs")>
                         {move || t!(i18n, nav.docs)}
                     </A>

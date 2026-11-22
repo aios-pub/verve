@@ -1,10 +1,10 @@
-//! Home page: hero, why-Rust table, capability pillars, editions CTA, download.
+//! Home page: hero, why-Rust table, capability pillars, download.
 
 use leptos::prelude::*;
 use crate::i18n::{t, t_string, use_i18n};
 
 use crate::components::fx::SpotlightCard;
-use crate::components::{ComparisonTable, DownloadButtons, FeatureCard, Hero, PricingCards, Reveal};
+use crate::components::{DownloadButtons, FeatureCard, Hero, Reveal};
 
 #[component]
 pub fn Home() -> impl IntoView {
@@ -66,45 +66,15 @@ pub fn Home() -> impl IntoView {
                     <div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                         <FeatureCard icon="" title=t_string!(i18n, pillars.api)       description=t_string!(i18n, pillars.api_d)       screenshot=Some("api.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.terminal)   description=t_string!(i18n, pillars.terminal_d)   screenshot=Some("ssh-terminal.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.testing)    description=t_string!(i18n, pillars.testing_d)    screenshot=Some("stress.png") pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.testing)    description=t_string!(i18n, pillars.testing_d)    screenshot=Some("stress.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.mock)       description=t_string!(i18n, pillars.mock_d)       screenshot=Some("mock.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.docs)       description=t_string!(i18n, pillars.docs_d)       screenshot=Some("doc.png") />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.notes)      description=t_string!(i18n, pillars.notes_d)      screenshot=Some("note.png") pro=true />
-                        <FeatureCard icon="" title=t_string!(i18n, pillars.mdeditor)   description=t_string!(i18n, pillars.mdeditor_d)   screenshot=None pro=true />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.notes)      description=t_string!(i18n, pillars.notes_d)      screenshot=Some("note.png") />
+                        <FeatureCard icon="" title=t_string!(i18n, pillars.mdeditor)   description=t_string!(i18n, pillars.mdeditor_d)   screenshot=None />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.hosts)      description=t_string!(i18n, pillars.hosts_d)      screenshot=Some("hosts.png") />
                         <FeatureCard icon="" title=t_string!(i18n, pillars.json)       description=t_string!(i18n, pillars.json_d)       screenshot=Some("json-format.png") />
                     </div>
                 </Reveal>
-            </div>
-        </section>
-
-        // Editions / pricing teaser
-        <section class="mx-auto max-w-5xl px-4 py-20 sm:px-6 lg:py-28">
-            <Reveal>
-                <SectionTitle eyebrow="Editions">
-                    {move || t!(i18n, editions.title)}
-                </SectionTitle>
-            </Reveal>
-            <div class="mt-12">
-                <Reveal>
-                    <PricingCards />
-                </Reveal>
-            </div>
-        </section>
-
-        // Comparison
-        <section class="border-t border-white/[0.06] bg-ink-900/40">
-            <div class="mx-auto max-w-4xl px-4 py-20 sm:px-6 lg:py-28">
-                <Reveal>
-                    <SectionTitle eyebrow="Compare">
-                        {move || t!(i18n, compare.title)}
-                    </SectionTitle>
-                </Reveal>
-                <div class="mt-12">
-                    <Reveal>
-                        <ComparisonTable />
-                    </Reveal>
-                </div>
             </div>
         </section>
 

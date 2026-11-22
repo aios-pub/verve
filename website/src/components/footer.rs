@@ -41,11 +41,6 @@ pub fn Footer() -> impl IntoView {
                                     {move || t!(i18n, nav.download)}
                                 </a>
                             </li>
-                            <li>
-                                <a class="hover:text-bolt-300 transition" href=route("/pricing")>
-                                    {move || t!(i18n, nav.pricing)}
-                                </a>
-                            </li>
                         </ul>
                     </div>
 

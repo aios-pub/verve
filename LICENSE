@@ -1,6 +1,6 @@
 Verve — an offline-first, one-stop developer workbench built with Rust.
-Community Edition source code is licensed under the GNU Affero General Public
-License v3.0 (AGPL-3.0).
+Verve is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0);
+the entire application and all of its features are covered by this license.
 
 Copyright (C) 2026 Verve <https://github.com/lijingrs/verve>
 

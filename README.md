@@ -19,7 +19,7 @@ Verve is built on **Rust + [GPUI](https://github.com/zed-industries/zed)** (the 
   <img src="https://img.shields.io/github/v/release/aios-pub/verve?style=flat-square&label=latest%20release&labelColor=0a0c10&color=d4e317" alt="Latest release" />
 </a>
 <a href="https://github.com/aios-pub/verve">
-  <img src="https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Pioneer-d4e317?style=flat-square&labelColor=0a0c10" alt="License" />
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-d4e317?style=flat-square&labelColor=0a0c10" alt="License" />
 </a>
 
 <br/>
@@ -41,7 +41,7 @@ Verve is built on **Rust + [GPUI](https://github.com/zed-industries/zed)** (the 
 
 <br/>
 
-[Features](#-features) · [Community vs Pioneer](#-community-vs-pioneer) · [Getting Started](#-getting-started) · [Pioneer Edition](#-pioneer-edition--sponsor-to-unlock)
+[Features](#-features) · [Getting Started](#-getting-started) · [License](#-license)
 
 </div>
 
@@ -62,143 +62,14 @@ What this means for you: instant responses when debugging APIs, fluid terminals 
 
 ---
 
-## 🆍 Two Editions
+## 🆍 100% Free & Open-Source
 
-Verve comes in two editions, with the same native app and the same daily API workflow — the Pioneer Edition adds container & cluster inspection (Docker / Kubernetes), testing, knowledge tooling, and cloud sharing on top.
-
-### 🆍 Community Edition — Free & Open-Source
-
-The **Community Edition** is free and released under the **AGPL-3.0** license. It covers everything an individual developer needs for daily work: full HTTP debugging (incl. multi-protocol clients), traffic capture, JSON formatting, hosts management, local mock server, local document sharing, **an SSH/SFTP terminal (jump host / port forwarding / Zmodem)**, **and Git-based cross-machine sync** — in a fast, lightweight native app. It is intentionally strong enough to stand on its own against any individual API client or SSH terminal tool.
-
-### 💎 Pioneer Edition — Sponsor to Unlock
-
-The **Pioneer Edition** is obtained via **sponsorship** (early-bird **¥99**, regular **¥199**). It layers on the advanced capabilities a single-purpose tool doesn't cover: container & cluster inspection (**Docker / Kubernetes pods**), **stress testing** and **automated test suites**, a **Markdown notes & file editor** (replaces tools like MarkText), and **cloud document sharing** (push to a self-hosted `verve-server` for a public URL).
-
-→ Full feature comparison: [Community vs Pioneer](#-community-vs-pioneer)
-→ How to get it: [Pioneer Edition](#-pioneer-edition--sponsor-to-unlock)
+Verve is **fully open source under AGPL-3.0** — every feature ships in a single free edition, with no paid tier and no feature gates. That includes everything from daily API debugging to the professional toolset: container & cluster inspection (**Docker / Kubernetes**), **stress testing** and **automated test suites**, the **Markdown notes & file editor**, and **cloud document sharing** via a self-hosted `verve-server`. Download a release or build from source — both give you the complete tool.
 
 ---
 
-## 🆚 Community vs Pioneer
-
-**Edition principle**: the Community Edition covers everything an individual developer needs for daily, standalone API and server-terminal work (strong enough to compete head-on with Postman or Termius). The Pioneer Edition layers on professional capabilities beyond individual API debugging — container & cluster inspection, testing, knowledge tooling, and cloud deployment.
-
-> ✅ Included in both · ❌ Not in this edition · 💎 Pioneer-only feature
-
-### Overview
-
-| | 🆍 Community Edition | 💎 Pioneer Edition |
-|---|---|---|
-| **Positioning** | Individual developer's daily API + SSH terminal toolbox | Toolbox + containers/clusters + testing + knowledge + cloud |
-| **License** | AGPL-3.0 (open-source) | Proprietary (Verve Pioneer License) |
-| **Source code** | Open & auditable | Closed |
-| **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
-| **Audience** | Individual devs, students, OSS community | Pro devs, ops engineers, small teams |
-| **Platforms** | macOS · Linux · Windows | macOS · Linux · Windows |
-
-### 🧪 API & Testing
-
-| Feature | Community | Pioneer |
-|---|:---:|:---:|
-| HTTP API debugging (GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS) | ✅ | ✅ |
-| Request body (none / form-data / x-www-form-urlencoded / raw JSON·XML·Text·HTML·JS) | ✅ | ✅ |
-| `{{variable}}` placeholder (request > folder > env > global priority) | ✅ | ✅ |
-| Pre-request & Tests scripts (JavaScript, boa_engine) | ✅ | ✅ |
-| Multi-protocol clients — **HTTP / gRPC(gRPC-Web) / TCP / SSE / WebSocket / Socket.IO** | ✅ | ✅ |
-| Response panel (status / time / size / headers / body, JSON pretty) | ✅ | ✅ |
-| Project tree (folders, multi-level nesting, drag-reorder) | ✅ | ✅ |
-| Multi-environment variable management (4-scope priority) | ✅ | ✅ |
-| Request/response history | ✅ | ✅ |
-| Local Mock server (Exact → Prefix → Regex matching, priority, template vars) | ✅ | ✅ |
-| **HTTP capture proxy** — plaintext HTTP only on `127.0.0.1:<port>` (no HTTPS MITM) | ✅ | ✅ |
-| **Git cross-machine sync** — per-workspace branch, auto commit + sync, HTTPS + token auth | ✅ | ✅ |
-| **Stress testing** — native engine, concurrency/duration/QPS, live latency chart (p50/p90/p95/p99) | ❌ | 💎 |
-| Stress scenario mode — multi-step test cases looped across workers | ❌ | 💎 |
-| **Automated test suites** — suite/case/step, Request/If/Loop/Wait/Script steps, `apt.assert` + JsonPath/Header/Status extractors | ❌ | 💎 |
-
-### 🛠️ Dev Utilities
-
-| Feature | Community | Pioneer |
-|---|:---:|:---:|
-| JSON formatter (collapsible tree) | ✅ | ✅ |
-| Hosts manager (read `/etc/hosts`, profiles, env binding) | ✅ | ✅ |
-| 22 built-in themes (Catppuccin / Gruvbox / Tokyo Night / Solarized …) | ✅ | ✅ |
-| i18n (Simplified Chinese default / English) | ✅ | ✅ |
-| Import (Postman v2.1 / OpenAPI 3 / Swagger 2.0 / Postman 7+) | ✅ | ✅ |
-| Export (Markdown / JSON / Postman, round-trip) | ✅ | ✅ |
-
-### 🖥️ Server Triage (SSH open-source · Docker/K8s Pioneer-only)
-
-The server-triage features are scoped to the daily triage workflow — inspecting, logging, and exec-ing into running targets. They are **not** full cluster lifecycle managers (no resource creation, no deployment management). The **SSH / SFTP terminal capabilities are fully open-source** and ship free with the Community Edition.
-
-| Feature | Community | Pioneer |
-|---|:---:|:---:|
-| **SSH terminal** — password / private-key auth, multi-tab sessions | ✅ | ✅ |
-| Terminal emulation — full ANSI / xterm-256color (16-color + 256-color + true color) | ✅ | ✅ |
-| Paste (Cmd/Ctrl+V) · terminal text copy · host card management | ✅ | ✅ |
-| Jump host / bastion (ProxyJump, chained `direct-tcpip` tunnels) | ✅ | ✅ |
-| **SFTP** — list / mkdir / rename / upload / download, recursive `rm -rf`, transfer progress | ✅ | ✅ |
-| **Zmodem** — in-terminal `rz` / `sz` file transfer | ✅ | ✅ |
-| **SSH local port forwarding** (`-L`, one-click expose an internal service) | ✅ | ✅ |
-| TOFU `known_hosts` verification (refuses host-key mismatch) | ✅ | ✅ |
-| **Secure credential storage** — device-key encrypted vault (AES-256-GCM), no keychain prompts | ✅ | ✅ |
-| **Docker** — list / start / stop / restart / remove containers, list & prune images | ❌ | 💎 |
-| Docker — `docker logs -f` log streaming, `docker exec -it` (real PTY, multi-tab) | ❌ | 💎 |
-| Docker — remote daemon via `DOCKER_HOST` or **SSH tunnel** (`docker system dial-stdio`) | ❌ | 💎 |
-| **Kubernetes** — parse `~/.kube/config`, switch context, list **pods & namespaces** | ❌ | 💎 |
-| K8s — `kubectl logs -f`, `kubectl exec -it` (PTY), `kubectl port-forward` | ❌ | 💎 |
-| K8s — Direct (API server) or **SSH-tunnel** connection mode | ❌ | 💎 |
-
-> **Not implemented (by design)**: SSH Agent auth & remote `-R` forwarding; Docker image build/pull/push, network/volume/compose/swarm, container inspect & resource stats; Kubernetes resources other than pods/namespaces (no service/deployment/configmap/…), no apply/create/delete, no helm/kustomize. The Docker/K8s panels focus on **log inspection and shell exec** — they do not replace a full Docker Desktop or cluster manager.
-
-### 📝 Docs & Knowledge (split)
-
-| Feature | Community | Pioneer |
-|---|:---:|:---:|
-| **Document sharing — local generation** (self-contained HTML from project/folder/request) | ✅ | ✅ |
-| Document sharing — QR code + link + HTML export | ✅ | ✅ |
-| Document sharing — access control (expiration + password, enforced by local server) | ✅ | ✅ |
-| Document sharing — field-level display toggles (9 switches) | ✅ | ✅ |
-| **Markdown notes** — block editor, notes tree (folders/pin/tags), live preview canvas | ❌ | 💎 |
-| **Notes → PDF export** (built-in fonts, headings/code/lists/links) | ❌ | 💎 |
-| **Standalone Markdown file editor** (multi-tab, Finder double-click / `verve file.md`) — replaces tools like MarkText | ❌ | 💎 |
-
-### 🌍 Cloud Sharing (Pioneer-only)
-
-| Feature | Community | Pioneer |
-|---|:---:|:---:|
-| **Self-hosted `verve-server`** (standalone binary, binds `0.0.0.0`, file-backed store) | ❌ | 💎 |
-| **Cloud document sharing** — push a project to remote `verve-server`, get a public `/s/<id>` URL | ❌ | 💎 |
-| `verve-server` `/admin` Web UI — upload / create / browse / delete shares, multi-tenant | ❌ | 💎 |
-
-> ℹ️ Document sharing produces a **read-only snapshot** of the project at upload time. There is no real-time co-editing or live sync of an already-shared document. Note: Git-based workspace sync (cross-machine) is available in **both** editions — see the API & Testing table above.
-
-### 📄 Licensing & Usage Rights
-
-| | Community | Pioneer |
-|---|---|---|
-| **How to get** | Free download / build from source | Sponsor ¥99 early-bird / ¥199 regular |
-| **License type** | AGPL-3.0 | Proprietary (Verve Pioneer License) |
-| **Source visible** | ✅ Open | ❌ Closed |
-| **Personal use** | ✅ | ✅ |
-| **Commercial use** | ✅ | ✅ (after sponsorship) |
-| **Modify / fork** | ✅ (derivative works & network use must also be AGPL-3.0) | ❌ |
-| **Redistribute** | ✅ (under AGPL-3.0, source required) | ❌ |
-| **Hosted / SaaS use** | ✅ (must open-source under AGPL-3.0) | ❌ (contact author) |
-| **Reverse engineering** | ✅ | ❌ |
-| **Updates** | Community-maintained / self-build | Official pre-built binaries + continuous updates |
-| **Support** | Community issues | Priority support + early access to new features |
-
-### Which one should I pick?
-
-- **Community Edition** — you're an individual developer or student whose daily work is debugging APIs (including gRPC/WebSocket/SSE), capturing traffic, formatting JSON, managing hosts, running local mocks, sharing docs locally, keeping your workspace in sync across machines, and SSH-ing into servers for terminal work / SFTP transfers / port forwarding; you want a fast, open, free native toolbox that can fully replace an individual API client or SSH terminal tool.
-- **Pioneer Edition** — you also need to tail Docker/K8s logs, run stress and automated tests, take Markdown notes / edit Markdown files, or share documents at a public cloud URL.
-
----
 
 ## ✨ Features
-
-### 🆍 Community Edition Features
 
 ### 🔌 API Debugging
 <div align="center">
@@ -254,7 +125,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - QR code sharing + link sharing + HTML export
 - Strict access control: expiration + password protection (enforced by the local server)
 - Field-level display toggles (9 switches: description / params / headers / body / auth / cookies / path / examples / mock)
-- **Pushing to a remote `verve-server` for a public URL is a Pioneer-only feature** — see [Cloud Sharing](#-cloud-sharing-pioneer-only)
+- Push a project to a self-hosted `verve-server` for a public URL — see [Cloud Sharing](#-self-hosted-verve-server-cloud-sharing)
 
 ### 🌍 Git Cross-Machine Sync
 <div align="center">
@@ -330,8 +201,6 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 - Configurable home view · Auto-update check · Cross-platform packaging (macOS / Linux / Windows)
 
 ---
-
-### 💎 Pioneer Edition Features
 
 ### 🐳 Docker
 <div align="center">
@@ -414,7 +283,7 @@ The server-triage features are scoped to the daily triage workflow — inspectin
 
 ### 📦 Self-hosted `verve-server` (Cloud Sharing)
 
-The Pioneer Edition ships a standalone server binary for hosting shared documents in the cloud, with an admin Web UI for uploading projects and managing share links.
+Verve ships a standalone server binary for hosting shared documents in the cloud, with an admin Web UI for uploading projects and managing share links.
 
 - Binds `0.0.0.0`, file-backed store under `<data>/cloud/`
 - **Cloud document sharing** — push a project JSON to the remote server and get a public `/s/<id>` URL (Bearer-token authenticated upload)
@@ -427,9 +296,7 @@ See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment gui
 
 ## 🚀 Getting Started
 
-### 🆍 Community Edition
-
-- **Pre-built binaries**: download the latest Community build for your platform (macOS / Linux / Windows) from [Releases](../../releases).
+- **Pre-built binaries**: download the latest build for your platform (macOS / Linux / Windows) from [Releases](../../releases).
 - **Build from source**: `git clone` this repo, then `cargo build --release`.
   - **Linux prerequisite**: the GPUI text stack pulls in `freetype-sys` + `fontconfig-sys`, which link the system FreeType/fontconfig via pkg-config, so install their development headers first:
     ```bash
@@ -442,10 +309,6 @@ See [`docs/verve-server.md`](./docs/verve-server.md) for the full deployment gui
     ```
     (Or run `./scripts/install-deps.sh`, which picks the right package manager.)
 - On first launch, Verve auto-creates its data directory with a demo project so you can explore right away.
-
-### 💎 Pioneer Edition
-
-The Pioneer Edition (pre-compiled binaries + continuous updates + priority support) is obtained via sponsorship. See the [Pioneer Edition](#-pioneer-edition--sponsor-to-unlock) section below.
 
 ---
 
@@ -461,46 +324,6 @@ The Pioneer Edition (pre-compiled binaries + continuous updates + priority suppo
 
 ---
 
-## 💎 Pioneer Edition — Sponsor to Unlock
-
-> ⚠️ **Limited-Time Launch Pricing — ends soon!**
-
-The **Pioneer Edition** unlocks everything beyond the Community Edition — Docker / Kubernetes pod inspection, stress & automated testing, Markdown notes & file editor, and cloud document sharing via a self-hosted `verve-server` (the SSH / SFTP terminal is open-source and ships free with the Community Edition). It is obtained through a **sponsorship** model, and the entry price below is a **time-limited early-bird rate**.
-
-### 🔥 Early-Bird Special — sponsor **¥99** (CNY)
-The current **¥99** early-bird price is a limited-time launch offer. **It will return to the regular ¥199 once the promotion ends.** Lock in the lowest price now:
-
-> **Sponsor ¥99+ today** to unlock the Pioneer Edition, including:
-> - ✅ All Pioneer capabilities (Docker / K8s pod inspection / stress testing / automated testing / Markdown notes & editor / cloud document sharing)
-> - ✅ All official version updates (every future release, free)
-> - ✅ Priority technical support
-> - ✅ Early access to new features
-> - ✅ Pre-compiled binaries for macOS / Linux / Windows — zero build hassle
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="./assets/wechat_official.jpg" width="200" alt="WeChat Official Account (Sponsor)" />
-      <br />
-      <b>① Sponsor — scan to open the official-account article</b>
-    </td>
-    <td align="center">
-      <img src="./assets/wechat.jpg" width="200" alt="Author's Personal WeChat" />
-      <br />
-      <b>② Add my personal WeChat</b>
-    </td>
-  </tr>
-</table>
-
-> 📩 **How to get the Pioneer Edition:**
-> 1. **Sponsor** — scan the left QR code to open the WeChat official-account article and complete your sponsorship (¥99+).
-> 2. **Add me** — scan the right QR code to add my **personal WeChat** as a contact.
-> 3. Send a screenshot of your sponsorship, and I'll send you the latest Pioneer Edition download link and activation instructions.
-
-⏰ **Don't miss out — the price goes up after the launch window.**
-
----
-
 ## 💬 Feedback & Issues
 
 Found a bug or have a feature request? Please [open an issue](../../issues/new).
@@ -509,10 +332,7 @@ Found a bug or have a feature request? Please [open an issue](../../issues/new).
 
 ## 📄 License
 
-Verve is available in two editions under different licenses:
-
-- **Community Edition** — released under the **AGPL-3.0** open-source license. Source code is public; you may use, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**
-- **Pioneer Edition** — proprietary software under the **Verve Pioneer License**. Source code is **not open**. Without the author's written permission, the following are **prohibited**: reverse engineering / decompiling / disassembling; copying / modifying / redistributing the software or derivatives; using it for commercial resale or hosted services. The Pioneer Edition is obtained via sponsorship. For commercial licensing or team plans, contact the author via WeChat above.
+Verve is released under the **AGPL-3.0** open-source license — the whole app, all features, one license. Source code is public; you may use, study, modify, and redistribute it under the terms of AGPL-3.0. Note that AGPL-3.0 is a strong copyleft license: derivative works must be released under AGPL-3.0, and **network use (offering the software as a service over a network) also triggers the source-disclosure obligation.**
 
 The full text of the AGPL-3.0 is in the [`LICENSE`](LICENSE) file at the repository root.
 
@@ -532,4 +352,4 @@ See [`docs/security.md`](docs/security.md) for the full security model, threat b
 
 ## ⚠️ Disclaimer
 
-Verve is an ongoing project under active development. **There is no guarantee that every feature described in this document is available, complete, or stable.** Some features may be unimplemented, experimental, or subject to change without notice. **The actual capabilities of the trial build shall prevail.** Please refer to the latest preview/Pioneer build for the real state of the software.
+Verve is an ongoing project under active development. **There is no guarantee that every feature described in this document is available, complete, or stable.** Some features may be unimplemented, experimental, or subject to change without notice. **The actual capabilities of the trial build shall prevail.** Please refer to the latest build for the real state of the software.

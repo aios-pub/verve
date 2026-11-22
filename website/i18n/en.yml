@@ -6,7 +6,6 @@ nav:
   home: "Home"
   features: "Features"
   download: "Download"
-  pricing: "Pricing"
   docs: "Docs"
   blog: "Changelog"
   get_app: "Get Verve"
@@ -92,39 +91,6 @@ features:
   sftp_d: "Browse and transfer files over your authenticated SSH session, with Zmodem in the terminal."
   md_d: "Write notes and edit Markdown files — a block editor, a notes tree, and PDF export in one place."
 
-# ---- Editions -----------------------------------------------------------
-editions:
-  title: "Two editions"
-  community: "Community"
-  community_tag: "Free • AGPL-3.0"
-  community_d: "Open source. Covers everything an individual developer needs day to day: full HTTP debugging, capture, JSON, hosts, local mock, local document sharing, an SSH/SFTP terminal, and Git cross-machine sync."
-  pro: "Pioneer"
-  pro_tag: "Sponsored • Proprietary"
-  pro_d: "Stacks container & cluster inspection (Docker / Kubernetes), testing, knowledge tools and cloud sharing on top of the Community edition."
-
-# ---- Comparison ---------------------------------------------------------
-compare:
-  title: "Community vs Pioneer"
-  col_feature: "Capability"
-  has: "✓"
-  opensource: "Open source (AGPL-3.0)"
-  r_api: "API & Testing"
-  r_capture: "HTTP Capture Proxy"
-  r_mock: "Local Mock Server"
-  r_git: "Git Cross-Machine Sync"
-  r_json: "JSON Formatter"
-  r_hosts: "Hosts Manager"
-  r_doc_share: "Document Sharing (local)"
-  r_ssh: "SSH Terminal + SFTP"
-  r_zmodem: "Zmodem / Port Forwarding"
-  r_docker: "Docker triage"
-  r_k8s: "Kubernetes triage"
-  r_stress: "Stress Testing"
-  r_autotest: "Automated Testing"
-  r_notes: "Markdown notes (block editor + PDF export)"
-  r_mdeditor: "Standalone Markdown file editor"
-  r_server: "Self-hosted verve-server"
-
 # ---- Download -----------------------------------------------------------
 download:
   title: "Download Verve"
@@ -135,19 +101,6 @@ download:
   build_title: "Or build from source"
   build_d: "Clone the repo and build with Cargo. See the README for prerequisites."
 
-# ---- Pricing ------------------------------------------------------------
-pricing:
-  title: "Pricing & sponsorship"
-  subtitle: "Community is free and open source. Pioneer is obtained via sponsorship."
-  most_popular: "Most popular"
-  per_once: "one-time"
-  cta_community: "Download Community"
-  cta_pro: "Sponsor for Pioneer"
-  early_bird: "Early-bird"
-  regular: "Regular"
-  sponsor_qr_alt: "WeChat Official Account QR code"
-  sponsor_note: "Sponsor via the WeChat Official Account to unlock the Pioneer edition."
-
 # ---- Docs ---------------------------------------------------------------
 docs:
   title: "Documentation"
@@ -155,7 +108,7 @@ docs:
   verve_server: "Self-host verve-server"
   cloud: "Cloud docs & collaboration"
 
-# ---- Cloud docs (Pioneer) -------------------------------------------------
+# ---- Cloud docs -----------------------------------------------------------
 clouddocs:
   crumb: "Cloud docs & collaboration"
   title: "Cloud docs & collaboration"
@@ -182,7 +135,7 @@ clouddocs:
   s4_b2: "Create a share: pick project, title, public/password"
   s4_b3: "Browse / delete share links, multi-tenant management"
   note_label: "Note:"
-  note: "Document sharing produces a read-only snapshot of the project at upload time — real-time collaborative editing or live sync of shared docs is not supported. Git-based cross-machine workspace sync is available in both editions."
+  note: "Document sharing produces a read-only snapshot of the project at upload time — real-time collaborative editing or live sync of shared docs is not supported. Git-based cross-machine workspace sync is also available."
   deploy_cta: "Need the full deployment steps (Docker / binary / config)?"
   deploy_link: "View the verve-server deployment guide"
   source: "View source on GitHub"

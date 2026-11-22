@@ -6,7 +6,6 @@ nav:
   home: "首页"
   features: "功能"
   download: "下载"
-  pricing: "定价"
   docs: "文档"
   blog: "更新日志"
   get_app: "获取 Verve"
@@ -92,39 +91,6 @@ features:
   sftp_d: "基于已认证的 SSH 会话浏览与传输文件，终端内支持 Zmodem。"
   md_d: "写笔记、编辑 Markdown 文件——块编辑器、笔记树与 PDF 导出，一站式。"
 
-# ---- 版本 ---------------------------------------------------------------
-editions:
-  title: "两个版本"
-  community: "社区版"
-  community_tag: "免费 • AGPL-3.0"
-  community_d: "开源。覆盖个人开发者日常所需：完整 HTTP 调试、抓包、JSON、Hosts、本地 Mock、本地文档分享、SSH/SFTP 终端，以及 Git 跨机器同步。"
-  pro: "先锋版"
-  pro_tag: "赞助获取 • 专有"
-  pro_d: "在社区版基础上叠加容器与集群观测（Docker / Kubernetes）、测试、知识工具与云端分享。"
-
-# ---- 对比 ---------------------------------------------------------------
-compare:
-  title: "社区版 vs 先锋版"
-  col_feature: "能力"
-  has: "✓"
-  opensource: "开源（AGPL-3.0）"
-  r_api: "接口与测试"
-  r_capture: "HTTP 抓包代理"
-  r_mock: "本地 Mock 服务"
-  r_git: "Git 跨机器同步"
-  r_json: "JSON 格式化"
-  r_hosts: "Hosts 管理"
-  r_doc_share: "文档分享（本地）"
-  r_ssh: "SSH 终端 + SFTP"
-  r_zmodem: "Zmodem / 端口转发"
-  r_docker: "Docker 排障"
-  r_k8s: "Kubernetes 排障"
-  r_stress: "压力测试"
-  r_autotest: "自动化测试"
-  r_notes: "Markdown 笔记（块编辑器 + PDF 导出）"
-  r_mdeditor: "独立 Markdown 文件编辑器"
-  r_server: "自托管 verve-server"
-
 # ---- 下载 ---------------------------------------------------------------
 download:
   title: "下载 Verve"
@@ -135,19 +101,6 @@ download:
   build_title: "或从源码构建"
   build_d: "克隆仓库后用 Cargo 构建。前置依赖详见 README。"
 
-# ---- 定价 ---------------------------------------------------------------
-pricing:
-  title: "定价与赞助"
-  subtitle: "社区版免费开源，先锋版通过赞助获取。"
-  most_popular: "最受欢迎"
-  per_once: "一次性"
-  cta_community: "下载社区版"
-  cta_pro: "赞助获取先锋版"
-  early_bird: "早鸟特惠"
-  regular: "常规价"
-  sponsor_qr_alt: "微信公众号二维码"
-  sponsor_note: "通过微信公众号赞助99元即可解锁先锋版。"
-
 # ---- 文档 ---------------------------------------------------------------
 docs:
   title: "文档"
@@ -155,7 +108,7 @@ docs:
   verve_server: "自托管 verve-server"
   cloud: "云端文档与协同"
 
-# ---- 云端文档（先锋版）----------------------------------------------------
+# ---- 云端文档--------------------------------------------------------------
 clouddocs:
   crumb: "云端文档与协同"
   title: "云端文档与协同"
@@ -182,7 +135,7 @@ clouddocs:
   s4_b2: "创建分享：选择项目、标题、公开/密码"
   s4_b3: "浏览 / 删除分享链接，多租户管理"
   note_label: "说明："
-  note: "文档分享生成的是上传时刻项目的只读快照，不支持已分享文档的实时协同编辑或实时同步。基于 Git 的工作区跨机器同步在两个版本均支持。"
+  note: "文档分享生成的是上传时刻项目的只读快照，不支持已分享文档的实时协同编辑或实时同步。基于 Git 的工作区跨机器同步同样支持。"
   deploy_cta: "需要完整的部署步骤（Docker / 二进制 / 配置）？"
   deploy_link: "查看 verve-server 部署指南"
   source: "在 GitHub 查看源码"

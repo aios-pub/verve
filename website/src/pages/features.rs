@@ -5,7 +5,6 @@ use crate::i18n::{t, t_string, use_i18n};
 
 use crate::components::{FeatureCard, FeatureGroup};
 use crate::consts::RELEASES_LATEST;
-use crate::utils::route;
 
 #[component]
 pub fn Features() -> impl IntoView {
@@ -17,10 +16,7 @@ pub fn Features() -> impl IntoView {
         </PageHeader>
 
         <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
-            // ── Community features ────────────────────────────────────────
-            <h3 class="mb-6 flex items-center gap-2 text-xl font-bold">
-                <span class="text-bolt-300">{move || t!(i18n, editions.community)}</span>
-            </h3>
+            // ── Core features ─────────────────────────────────────────────
             <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 <FeatureCard icon="" title="API Debugging"       description="HTTP / gRPC-Web / TCP / SSE / WebSocket / Socket.IO, {{variable}} substitution across 4 scopes, pre-request & test scripts in JS." screenshot=Some("api.png") />
                 <FeatureCard icon="" title="Project Tree"         description="Multi-level nesting with drag-and-drop reordering. Multi-environment variable management." screenshot=Some("project.png") />
@@ -33,11 +29,9 @@ pub fn Features() -> impl IntoView {
                 <FeatureCard icon="" title="Themes & i18n"        description="22 built-in themes, zh-CN / English UI." screenshot=Some("theme.png") />
             </div>
 
-            // ── Community: SSH terminal & file transfer ──────────────────
+            // ── SSH terminal & file transfer ─────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-bolt-300">{move || t!(i18n, editions.community)}</span>
-                    <span class="text-ink-300">"·"</span>
                     <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, pillars.terminal)}</span>
                 </h3>
                 <p class="mt-2 max-w-2xl text-sm text-ink-400">
@@ -75,17 +69,15 @@ pub fn Features() -> impl IntoView {
                 />
             </div>
 
-            // ── Pioneer: Containers & clusters ──────────────────────────
+            // ── Containers & clusters ────────────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
-                    <span class="text-ink-300">"·"</span>
                     <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, features.cluster_title)}</span>
                 </h3>
             </div>
 
             <div class="mt-6 grid gap-5 lg:grid-cols-2">
-                <FeatureGroup pro=true
+                <FeatureGroup
                     title="Docker"
                     description=t_string!(i18n, features.docker_d)
                     screenshot=Some("docker.png")
@@ -98,7 +90,7 @@ pub fn Features() -> impl IntoView {
                         "Remote daemon via SSH tunnel (dial-stdio)",
                     ]}
                 />
-                <FeatureGroup pro=true
+                <FeatureGroup
                     title="Kubernetes Shell"
                     description=t_string!(i18n, features.k8s_d)
                     screenshot=Some("k8s.png")
@@ -113,17 +105,15 @@ pub fn Features() -> impl IntoView {
                 />
             </div>
 
-            // ── Pioneer: Knowledge tools ─────────────────────────────────
+            // ── Knowledge tools ──────────────────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
-                    <span class="text-ink-300">"·"</span>
                     <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, features.knowledge_title)}</span>
                 </h3>
             </div>
 
             <div class="mt-6">
-                <FeatureGroup pro=true
+                <FeatureGroup
                     title="Markdown Editor"
                     description=t_string!(i18n, features.md_d)
                     screenshot=Some("note.png")
@@ -138,23 +128,21 @@ pub fn Features() -> impl IntoView {
                 />
             </div>
 
-            // ── Pioneer: Testing & cloud ─────────────────────────────────
+            // ── Testing & cloud ──────────────────────────────────────────
             <div class="mt-20">
                 <h3 class="flex items-center gap-2 text-xl font-bold">
-                    <span class="text-pro-400">{move || t!(i18n, editions.pro)}</span>
-                    <span class="text-ink-300">"·"</span>
                     <span class="text-lg font-semibold text-ink-200">{move || t!(i18n, features.testing_title)}</span>
                 </h3>
             </div>
 
             <div class="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                <FeatureCard pro=true icon="" title="Stress Testing"
+                <FeatureCard icon="" title="Stress Testing"
                     description="Native engine, concurrency/duration/QPS, live p50/p90/p95/p99 chart, scenario mode."
                     screenshot=Some("stress.png") />
-                <FeatureCard pro=true icon="" title="Automated Testing"
+                <FeatureCard icon="" title="Automated Testing"
                     description="Suite→Case→Step; Request/If/Loop/Wait/Script; apt.assert; JsonPath/Header/Status extractors."
                     screenshot=Some("auto_test.png") />
-                <FeatureCard pro=true icon="" title="verve-server"
+                <FeatureCard icon="" title="verve-server"
                     description="Self-host cloud sharing: push a project → public /s/<id> URL, /admin Web UI."
                     screenshot=None />
             </div>
@@ -163,9 +151,6 @@ pub fn Features() -> impl IntoView {
             <div class="mt-16 flex flex-col items-center justify-center gap-4 rounded-2xl border border-ink-700 bg-ink-900 p-10 text-center sm:flex-row">
                 <a href=RELEASES_LATEST class="btn-bolt rounded-lg px-6 py-3 font-semibold">
                     {move || t!(i18n, nav.get_app)}
-                </a>
-                <a href=route("/pricing") class="rounded-lg border border-ink-600 px-6 py-3 font-semibold text-ink-100 transition hover:border-bolt-500/50 hover:text-bolt-300">
-                    {move || t!(i18n, editions.pro)}
                 </a>
             </div>
         </div>

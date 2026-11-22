@@ -26,7 +26,7 @@ use leptos_router::{
 // Bring the generated i18n items into scope.
 use crate::i18n::{use_i18n, I18nContextProvider, Locale};
 
-use pages::{Blog, Download, Features, Home, Pricing};
+use pages::{Blog, Download, Features, Home};
 use pages::docs::{CloudDocs, DocsIndex, VerveServer};
 
 /// Stylesheet link, prefixed with the GitHub Pages base path.
@@ -62,7 +62,6 @@ pub fn App() -> impl IntoView {
                         <Route path=StaticSegment("") view=Home />
                         <Route path=StaticSegment("features") view=Features />
                         <Route path=StaticSegment("download") view=Download />
-                        <Route path=StaticSegment("pricing") view=Pricing />
                         <Route path=StaticSegment("blog") view=Blog />
                         <Route path=StaticSegment("docs") view=DocsIndex />
                         <Route path=path!("docs/verve-server") view=VerveServer />

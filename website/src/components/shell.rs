@@ -1,9 +1,7 @@
-//! Page shell: sticky top nav + content slot + footer + global fx (grain,
-//! telemetry HUD).
+//! Page shell: sticky top nav + content slot + footer + global fx (grain).
 
 use leptos::prelude::*;
 
-use super::fx::Telemetry;
 use super::{Footer, Nav};
 
 /// Wrap page content with the site chrome (nav + footer).
@@ -17,9 +15,6 @@ pub fn Shell(children: Children) -> impl IntoView {
             <Nav />
             <main class="relative z-10 flex-1">{children()}</main>
             <Footer />
-
-            // Floating live telemetry HUD (self-positions bottom-right).
-            <Telemetry />
         </div>
     }
 }
